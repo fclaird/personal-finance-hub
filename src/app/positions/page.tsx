@@ -11,7 +11,7 @@ import {
   type ViewMode,
 } from "@/app/components/PositionsGroupedTable";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
-import { useEquityMarketPolling } from "@/hooks/useEquityMarketPolling";
+import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator";
 import { bucketFromDisplayName } from "@/lib/accountBuckets";
 
 export default function PositionsPage() {
@@ -87,24 +87,9 @@ export default function PositionsPage() {
     })().catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
 
-  useEquityMarketPolling(
-    () => {
-      void (async () => {
-        await fetch("/api/schwab/quotes", { method: "POST" });
-        const key = "fh_last_greeks_refresh_ms";
-        const now = Date.now();
-        const last = Number(sessionStorage.getItem(key) ?? "0");
-        const FIVE_MIN = 5 * 60_000;
-        if (!Number.isFinite(last) || now - last > FIVE_MIN) {
-          sessionStorage.setItem(key, String(now));
-          await fetch("/api/schwab/refresh-greeks", { method: "POST" }).catch(() => null);
-        }
-        await load();
-      })();
-    },
-    60_000,
-    [],
-  );
+  useSchwabRefreshCoordinator({
+    onTick: () => load().catch((e) => setError(e instanceof Error ? e.message : String(e))),
+  });
 
   useEffect(() => {
     const t = setTimeout(() => {

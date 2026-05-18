@@ -3,12 +3,20 @@ import { NextResponse } from "next/server";
 import { logError } from "@/lib/log";
 import { schwabQuoteDisplayPrice } from "@/lib/market/schwabQuoteDisplay";
 import { normalizeSchwabQuoteSymbol } from "@/lib/market/schwabSymbol";
-import { schwabMarketFetch } from "@/lib/schwab/client";
+import { schwabCompanyNameFromQuoteEntry } from "@/lib/schwab/quoteCompanyName";
+import { fetchSchwabQuotesResponse } from "@/lib/schwab/quotesFetch";
 import { schwabQuoteObjectFromEntry } from "@/lib/schwab/quoteEntry";
 
 function asNumber(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
+  return null;
+}
+
+function pickPositive(...vals: Array<number | null | undefined>): number | null {
+  for (const v of vals) {
+    if (v != null && Number.isFinite(v) && v > 0) return v;
+  }
   return null;
 }
 
@@ -29,6 +37,9 @@ export type NormalizedQuote = {
   volume: number | null;
   change: number | null;
   changePercent: number | null;
+  week52High: number | null;
+  week52Low: number | null;
+  companyName?: string | null;
   updatedAt: string;
 };
 
@@ -38,19 +49,13 @@ export async function POST(req: Request) {
     const symbols = Array.from(new Set((body?.symbols ?? []).map(normSym).filter(Boolean)));
     if (symbols.length === 0) return NextResponse.json({ ok: true, quotes: [], n: 0 });
 
-    // Schwab /quotes supports multi-symbol; keep conservative batching.
-    const BATCH = 100;
     const out: NormalizedQuote[] = [];
     const nowIso = new Date().toISOString();
+    const resp = await fetchSchwabQuotesResponse(symbols);
 
-    for (let i = 0; i < symbols.length; i += BATCH) {
-      const batch = symbols.slice(i, i + BATCH);
-      const resp = await schwabMarketFetch<Record<string, unknown>>(
-        `/quotes?symbols=${encodeURIComponent(batch.join(","))}`,
-      );
-
-      for (const sym of batch) {
+    for (const sym of symbols) {
         const entry = resp[sym] ?? resp[sym.toUpperCase()];
+        const companyName = schwabCompanyNameFromQuoteEntry(entry);
         const q = schwabQuoteObjectFromEntry(entry);
         if (!q) {
           out.push({
@@ -66,6 +71,9 @@ export async function POST(req: Request) {
             volume: null,
             change: null,
             changePercent: null,
+            week52High: null,
+            week52Low: null,
+            companyName,
             updatedAt: nowIso,
           });
           continue;
@@ -76,10 +84,20 @@ export async function POST(req: Request) {
         const ask = asNumber(q.askPrice ?? q.ask) ?? null;
         const mark = asNumber(q.mark) ?? null;
         const close = asNumber(q.closePrice) ?? null;
-        const open = asNumber(q.openPrice) ?? null;
-        const high = asNumber(q.highPrice) ?? null;
-        const low = asNumber(q.lowPrice) ?? null;
-        const volume = asNumber(q.totalVolume ?? q.volume) ?? null;
+        const open = pickPositive(asNumber(q.openPrice));
+        const high = pickPositive(asNumber(q.highPrice), asNumber(q.high));
+        const low = pickPositive(asNumber(q.lowPrice), asNumber(q.low));
+        const week52High = pickPositive(
+          asNumber(q["52WeekHigh"]),
+          asNumber(q.fiftyTwoWeekHigh),
+          asNumber(q.week52High),
+        );
+        const week52Low = pickPositive(
+          asNumber(q["52WeekLow"]),
+          asNumber(q.fiftyTwoWeekLow),
+          asNumber(q.week52Low),
+        );
+        const volume = pickPositive(asNumber(q.totalVolume), asNumber(q.volume));
         const last = schwabQuoteDisplayPrice(rawLast, mark, close);
         const change =
           asNumber(q.netChange ?? q.change) ?? (last != null && close != null ? last - close : null);
@@ -100,12 +118,17 @@ export async function POST(req: Request) {
           volume,
           change,
           changePercent: changePercent == null ? null : changePercent,
+          week52High,
+          week52Low,
+          companyName,
           updatedAt: nowIso,
         });
-      }
     }
 
-    return NextResponse.json({ ok: true, quotes: out, n: out.length });
+    return NextResponse.json(
+      { ok: true, quotes: out, n: out.length },
+      { headers: { "Cache-Control": "no-store, max-age=0" } },
+    );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     logError("api_quotes_post", e);

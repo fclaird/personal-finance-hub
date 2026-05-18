@@ -51,8 +51,8 @@ export function DividendModelsDashboard({ dashboard, masked }: Props) {
   if (!dashboard || dashboard.totalPositions === 0) {
     return (
       <div className="rounded-xl border border-dashed border-zinc-500/60 bg-zinc-950/40 px-6 py-12 text-center text-[15px] leading-relaxed text-zinc-300">
-        Add symbols to this portfolio to populate the overview dashboard (income, sectors, and treemap use your synced
-        cashflows when symbols match).
+        Add symbols to this portfolio, set share counts, and build history to populate the overview (income and cumulative
+        dividends use simulated monthly payouts from your holdings).
       </div>
     );
   }
@@ -61,68 +61,6 @@ export function DividendModelsDashboard({ dashboard, masked }: Props) {
 
   return (
     <div className="grid gap-6">
-      {d.slice ? (
-        <div className="grid gap-5 rounded-xl border border-teal-600/35 bg-teal-950/45 p-5 shadow-lg sm:grid-cols-2 sm:p-6 lg:grid-cols-4">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-widest text-teal-200/95">Schwab slice</div>
-            <div className="mt-3 grid gap-0">
-              <div className="flex min-h-10 items-center justify-between gap-4 border-b border-teal-500/15 py-2 last:border-b-0">
-                <span className="text-sm text-teal-300/90">Account</span>
-                <span className="max-w-[55%] truncate text-right text-sm font-medium tabular-nums text-teal-50" title={d.slice.accountId}>
-                  {d.slice.accountId.replace(/^schwab_/, "")}
-                </span>
-              </div>
-              <div className="flex min-h-10 items-center justify-between gap-4 border-b border-teal-500/15 py-2 last:border-b-0">
-                <span className="text-sm text-teal-300/90">Snapshot</span>
-                <span className="text-sm font-medium tabular-nums text-teal-50">{d.slice.snapshotAsOf ? d.slice.snapshotAsOf.slice(0, 10) : "—"}</span>
-              </div>
-              <div className="flex min-h-10 items-start justify-between gap-4 py-2">
-                <span className="pt-0.5 text-sm text-teal-300/90">Matched tickers</span>
-                <span className="max-w-[58%] text-right text-sm font-medium leading-snug text-teal-50">
-                  {d.slice.matchedPositions}
-                  {d.slice.missingSymbols.length > 0 ? ` · missing ${d.slice.missingSymbols.join(", ")}` : ""}
-                </span>
-              </div>
-            </div>
-          </div>
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-widest text-teal-200/95">Marks</div>
-            <div className="mt-3 grid gap-0">
-              <div className="flex min-h-10 items-center justify-between gap-4 border-b border-teal-500/15 py-2 last:border-b-0">
-                <span className="text-sm text-teal-300/90">Market value</span>
-                <span className="text-sm font-medium tabular-nums text-teal-50">{usd(d.slice.schwabMarketValue, masked)}</span>
-              </div>
-              <div className="flex min-h-10 items-center justify-between gap-4 border-b border-teal-500/15 py-2 last:border-b-0">
-                <span className="text-sm text-teal-300/90">Cost basis</span>
-                <span className="text-sm font-medium tabular-nums text-teal-50">{usd(d.slice.schwabCostBasis, masked)}</span>
-              </div>
-              <div className="flex min-h-10 items-center justify-between gap-4 py-2">
-                <span className="text-sm text-teal-300/90">Unrealized P/L</span>
-                <span className="text-sm font-medium tabular-nums text-teal-50">{usd(d.slice.unrealizedPl, masked)}</span>
-              </div>
-            </div>
-          </div>
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-widest text-teal-200/95">Income (slice)</div>
-            <div className="mt-3 grid gap-0">
-              <div className="flex min-h-10 items-center justify-between gap-4 border-b border-teal-500/15 py-2 last:border-b-0">
-                <span className="text-sm text-teal-300/90">TTM dividends</span>
-                <span className="text-sm font-medium tabular-nums text-teal-50">{usd(d.slice.trailingTwelveMonthsDividends, masked)}</span>
-              </div>
-              <div className="flex min-h-10 items-center justify-between gap-4 py-2">
-                <span className="text-sm text-teal-300/90">Forward ~12m</span>
-                <span className="text-sm font-medium tabular-nums text-teal-50">{usd(d.slice.forwardYearProjectedDividends, masked)}</span>
-              </div>
-            </div>
-          </div>
-          <div className="flex items-end sm:col-span-2 lg:col-span-1">
-            <p className="text-sm leading-relaxed text-teal-100/90">
-              Hub metrics are scoped to this account and your portfolio tickers. Use Sync from Schwab in the sidebar to align model
-              shares with the latest snapshot.
-            </p>
-          </div>
-        </div>
-      ) : null}
 
       <div className="grid gap-5 rounded-xl border border-zinc-600/80 bg-zinc-950 p-5 shadow-lg sm:grid-cols-2 sm:p-6 lg:grid-cols-4">
         <div>
@@ -231,8 +169,7 @@ export function DividendModelsDashboard({ dashboard, masked }: Props) {
         <div className="rounded-xl border border-zinc-600/80 bg-zinc-950 p-5 shadow-lg sm:p-6">
           <div className="text-sm font-semibold uppercase tracking-wide text-cyan-200/95">Cumulative dividends</div>
           <p className="mt-2 text-sm leading-relaxed text-zinc-400">
-            From synced Schwab cashflows for symbols in this list
-            {d.slice ? " (scoped to the linked slice account when set)." : "."}
+            From simulated monthly payouts (Yahoo dividend history × your share counts) after you build history.
           </p>
           <div className="mt-5 h-56 w-full min-w-0">
             {cumData.length === 0 ? (

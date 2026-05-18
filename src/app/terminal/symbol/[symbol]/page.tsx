@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { useEquityMarketPolling } from "@/hooks/useEquityMarketPolling";
+import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator";
 import {
   CartesianGrid,
   Line,
@@ -36,6 +36,8 @@ type NormalizedQuote = {
   volume: number | null;
   change: number | null;
   changePercent: number | null;
+  week52High: number | null;
+  week52Low: number | null;
   updatedAt: string;
 };
 
@@ -101,6 +103,7 @@ export default function TerminalSymbolPage() {
         fetch("/api/quotes", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          cache: "no-store",
           body: JSON.stringify({ symbols: [sym] }),
         }),
         fetch(`/api/performance/benchmarks?symbols=${encodeURIComponent([sym, "SPY", "QQQ"].join(","))}`, { cache: "no-store" }),
@@ -184,13 +187,10 @@ export default function TerminalSymbolPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sym]);
 
-  useEquityMarketPolling(
-    () => {
-      void loadAll();
-    },
-    60_000,
-    [sym, windowKey],
-  );
+  useSchwabRefreshCoordinator({
+    onTick: () => void loadAll(),
+    resetKey: `${sym}|${windowKey}`,
+  });
 
   useEffect(() => {
     const t = setTimeout(() => setNowMs(Date.now()), 0);
@@ -379,10 +379,16 @@ export default function TerminalSymbolPage() {
                   Ask: {quote?.ask == null ? "—" : quote.ask.toFixed(2)}
                 </div>
                 <div className={priceDirClass(quote?.high, quote?.close)}>
-                  High: {quote?.high == null ? "—" : quote.high.toFixed(2)}
+                  Day high: {quote?.high == null ? "—" : quote.high.toFixed(2)}
                 </div>
                 <div className={priceDirClass(quote?.low, quote?.close)}>
-                  Low: {quote?.low == null ? "—" : quote.low.toFixed(2)}
+                  Day low: {quote?.low == null ? "—" : quote.low.toFixed(2)}
+                </div>
+                <div className={priceDirClass(quote?.week52High, quote?.close)}>
+                  52w high: {quote?.week52High == null ? "—" : quote.week52High.toFixed(2)}
+                </div>
+                <div className={priceDirClass(quote?.week52Low, quote?.close)}>
+                  52w low: {quote?.week52Low == null ? "—" : quote.week52Low.toFixed(2)}
                 </div>
               </div>
             </div>

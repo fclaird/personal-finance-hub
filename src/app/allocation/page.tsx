@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { AccountPositionsForAllocation } from "@/app/components/AccountPositionsForAllocation";
 import { DraggableControlColumn } from "@/app/components/DraggableControlColumn";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { AllocationWeightingChart } from "@/app/components/allocation/AllocationWeightingChart";
 import { FinancePiePanel } from "@/app/components/FinancePiePanel";
-import { useEquityMarketPolling } from "@/hooks/useEquityMarketPolling";
+import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { assignEarthToneColorsBySymbols } from "@/lib/charts/pieEarthTones";
 import { formatUsd2 } from "@/lib/format";
@@ -259,41 +259,24 @@ export default function AllocationPage() {
 
   async function load() {
     setError(null);
-    const [expResp, allocResp] = await Promise.all([fetch("/api/exposure"), fetch(`/api/allocation?synthetic=1`)]);
-    const acctResp = await fetch(`/api/allocation/accounts?synthetic=1`);
-    const exposureBucketResp = await fetch(`/api/exposure/buckets`);
+    const pageDataResp = await fetch(`/api/allocation/page-data?synthetic=1`);
 
-      async function safeJson(resp: Response) {
-        const text = await resp.text();
-        try {
-          return JSON.parse(text) as unknown;
-        } catch {
-          const url = resp.url || "(unknown url)";
-          throw new Error(
-            `Non-JSON response (${resp.status}) from ${url}: ${text ? text.slice(0, 300) : "(empty body)"}`,
-          );
-        }
+    async function safeJson(resp: Response) {
+      const text = await resp.text();
+      try {
+        return JSON.parse(text) as unknown;
+      } catch {
+        const url = resp.url || "(unknown url)";
+        throw new Error(
+          `Non-JSON response (${resp.status}) from ${url}: ${text ? text.slice(0, 300) : "(empty body)"}`,
+        );
       }
+    }
 
-    const expJson = (await safeJson(expResp)) as { ok: boolean; exposure?: ExposureRow[]; error?: string };
-    if (!expJson.ok) throw new Error(expJson.error ?? "Failed to load exposure");
-    setRows(
-      (expJson.exposure ?? []).map((r) => ({
-        ...r,
-        optionsMarkMarketValue: typeof r.optionsMarkMarketValue === "number" ? r.optionsMarkMarketValue : 0,
-      })),
-    );
-
-    const allocJson = (await safeJson(allocResp)) as {
+    const pageDataJson = (await safeJson(pageDataResp)) as {
       ok: boolean;
+      exposure?: ExposureRow[];
       byAssetClass?: Array<{ key: string; marketValue: number; weight: number }>;
-      error?: string;
-    };
-    if (!allocJson.ok) throw new Error(allocJson.error ?? "Failed to load allocation");
-    setAssetClass(allocJson.byAssetClass ?? []);
-
-    const acctJson = (await safeJson(acctResp)) as {
-      ok: boolean;
       accounts?: Array<{
         accountId: string;
         accountName: string;
@@ -302,55 +285,40 @@ export default function AllocationPage() {
       }>;
       error?: string;
     };
-    if (!acctJson.ok) throw new Error(acctJson.error ?? "Failed to load account allocation");
-    setAccounts(acctJson.accounts ?? []);
-
-    const expBucketJson = (await safeJson(exposureBucketResp)) as {
-      ok: boolean;
-      buckets?: Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>;
-      error?: string;
-    };
-    if (!expBucketJson.ok) throw new Error(expBucketJson.error ?? "Failed to load exposure buckets");
-    setExposureBuckets(
-      (expBucketJson.buckets ?? []).map((b) => ({
-        ...b,
-        exposure: (b.exposure ?? []).map((r) => ({
-          ...r,
-          optionsMarkMarketValue: typeof r.optionsMarkMarketValue === "number" ? r.optionsMarkMarketValue : 0,
-        })),
+    if (!pageDataJson.ok) throw new Error(pageDataJson.error ?? "Failed to load allocation page data");
+    setRows(
+      (pageDataJson.exposure ?? []).map((r) => ({
+        ...r,
+        optionsMarkMarketValue: typeof r.optionsMarkMarketValue === "number" ? r.optionsMarkMarketValue : 0,
       })),
     );
+
+    setAssetClass(pageDataJson.byAssetClass ?? []);
+    setAccounts(pageDataJson.accounts ?? []);
+
+    void (async () => {
+      const exposureBucketResp = await fetch(`/api/exposure/buckets`);
+      const expBucketJson = (await safeJson(exposureBucketResp)) as {
+        ok: boolean;
+        buckets?: Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>;
+        error?: string;
+      };
+      if (!expBucketJson.ok) throw new Error(expBucketJson.error ?? "Failed to load exposure buckets");
+      setExposureBuckets(
+        (expBucketJson.buckets ?? []).map((b) => ({
+          ...b,
+          exposure: (b.exposure ?? []).map((r) => ({
+            ...r,
+            optionsMarkMarketValue: typeof r.optionsMarkMarketValue === "number" ? r.optionsMarkMarketValue : 0,
+          })),
+        })),
+      );
+    })().catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }
 
-  useEffect(() => {
-    const t = setTimeout(() => {
-      void (async () => {
-        await fetch("/api/schwab/quotes", { method: "POST" }).catch(() => null);
-        await fetch("/api/schwab/refresh-greeks", { method: "POST" }).catch(() => null);
-        await load().catch((e) => setError(e instanceof Error ? e.message : String(e)));
-      })();
-    }, 0);
-    return () => clearTimeout(t);
-  }, []);
-
-  useEquityMarketPolling(
-    () => {
-      void (async () => {
-        await fetch("/api/schwab/quotes", { method: "POST" });
-        const key = "fh_last_greeks_refresh_ms";
-        const now = Date.now();
-        const last = Number(sessionStorage.getItem(key) ?? "0");
-        const FIVE_MIN = 5 * 60_000;
-        if (!Number.isFinite(last) || now - last > FIVE_MIN) {
-          sessionStorage.setItem(key, String(now));
-          await fetch("/api/schwab/refresh-greeks", { method: "POST" }).catch(() => null);
-        }
-        await load();
-      })();
-    },
-    60_000,
-    [],
-  );
+  useSchwabRefreshCoordinator({
+    onTick: () => load().catch((e) => setError(e instanceof Error ? e.message : String(e))),
+  });
 
   function toggleSort(col: SortColumn) {
     if (sortColumn === col) setSortAsc(!sortAsc);

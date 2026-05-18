@@ -20,7 +20,8 @@
     "rebuild:sqlite": "npm rebuild better-sqlite3",
     "digest:pdf": "npx tsx scripts/pdf-allocation-report.ts",
     "digest:notify": "npx tsx scripts/trigger-digest-notify.ts",
-    "backfill:portfolio-snapshots": "npx tsx scripts/backfill-portfolio-snapshots.ts"
+    "backfill:portfolio-snapshots": "npx tsx scripts/backfill-portfolio-snapshots.ts",
+    "test:dividend-models": "npx tsx --test src/lib/dividendModels/symbolMonthlyMarket.test.ts src/lib/dividendModels/portfolioSimulation.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.9.0",

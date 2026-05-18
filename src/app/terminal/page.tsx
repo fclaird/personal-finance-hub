@@ -5,32 +5,20 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { Line, LineChart, ResponsiveContainer } from "recharts";
 
 import { usePrivacy } from "@/app/components/PrivacyProvider";
-import { useEquityMarketPolling } from "@/hooks/useEquityMarketPolling";
+import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator";
 import { isUsEquityPreOpenFuturesPollWindow, isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
+import type { NormalizedQuote as ApiNormalizedQuote } from "@/app/api/quotes/route";
 import { HeatmapGrid, type HeatmapItem } from "@/app/components/HeatmapGrid";
 import { TerminalPositionTreemap } from "@/app/components/terminal/TerminalPositionTreemap";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatUsd2 } from "@/lib/format";
 import { heatmapCellStyle } from "@/lib/terminal/dailyPerfColor";
 import { posNegClass, priceDirClass } from "@/lib/terminal/colors";
+import { computeMovers } from "@/lib/terminal/movers";
 
 type WatchlistRow = { id: string; name: string; createdAt: string; itemCount: number };
 
-type NormalizedQuote = {
-  symbol: string;
-  last: number | null;
-  bid: number | null;
-  ask: number | null;
-  mark: number | null;
-  close: number | null;
-  open: number | null;
-  high: number | null;
-  low: number | null;
-  volume: number | null;
-  change: number | null;
-  changePercent: number | null;
-  updatedAt: string;
-};
+type NormalizedQuote = ApiNormalizedQuote;
 
 type MoversPayload = {
   ok: boolean;
@@ -105,6 +93,16 @@ function volRatioLabel(ratio: number | null) {
   return ratio >= 10 ? `${ratio.toFixed(0)}×` : `${ratio.toFixed(1)}×`;
 }
 
+function isAbortError(e: unknown): boolean {
+  if (e instanceof DOMException && e.name === "AbortError") return true;
+  if (e instanceof Error) {
+    if (e.name === "AbortError") return true;
+    const m = e.message.toLowerCase();
+    if (m.includes("abort")) return true;
+  }
+  return false;
+}
+
 async function terminalFetchJson<T>(resp: Response, context: string): Promise<T> {
   const raw = await resp.text();
   if (!raw.trim()) {
@@ -176,9 +174,27 @@ export default function TerminalPage() {
   >([]);
   const [clockTick, setClockTick] = useState(() => Date.now());
 
-  const heatInit = useRef(false);
-  const volInit = useRef(false);
   const heatViewPrimed = useRef(false);
+  const bootstrapInflightRef = useRef<Promise<void> | null>(null);
+  const bootstrapInflightKeyRef = useRef("");
+  const lastPrimaryLoadAtRef = useRef(0);
+  const symbolsRef = useRef(symbols);
+  symbolsRef.current = symbols;
+
+  const symbolsKey = useMemo(
+    () =>
+      symbols
+        .map((s) => s.trim().toUpperCase())
+        .filter(Boolean)
+        .sort()
+        .join(","),
+    [symbols],
+  );
+
+  const marketPollResetKey = useMemo(
+    () => `${watchlistId ?? ""}|${heatView}`,
+    [watchlistId, heatView],
+  );
 
   async function loadWatchlists() {
     const resp = await fetch("/api/watchlists", { cache: "no-store" });
@@ -198,28 +214,37 @@ export default function TerminalPage() {
     setSymbols(json.symbols ?? []);
   }
 
-  async function loadCompanyNames(symList: string[]) {
-    if (symList.length === 0) {
-      setCompanyBySymbol(new Map());
+  async function loadCompanyNames(symList: string[], opts?: { merge?: boolean }) {
+    const unique = [...new Set(symList.map((s) => s.trim().toUpperCase()).filter(Boolean))];
+    if (unique.length === 0) {
+      if (!opts?.merge) setCompanyBySymbol(new Map());
       return;
     }
+    const BATCH = 120;
     try {
-      const resp = await fetch("/api/terminal/company-batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbols: symList }),
-      });
-      const json = await terminalFetchJson<{ ok?: boolean; names?: Record<string, string | null> }>(
-        resp,
-        "company names",
-      );
-      if (!json.ok || !json.names) return;
-      const m = new Map<string, string>();
-      for (const [k, v] of Object.entries(json.names)) {
-        const name = (v ?? "").trim();
-        if (name) m.set(k.toUpperCase(), name);
+      const resolved: Record<string, string> = {};
+      for (let i = 0; i < unique.length; i += BATCH) {
+        const chunk = unique.slice(i, i + BATCH);
+        const resp = await fetch("/api/terminal/company-batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbols: chunk }),
+        });
+        const json = await terminalFetchJson<{ ok?: boolean; names?: Record<string, string | null> }>(
+          resp,
+          "company names",
+        );
+        if (!json.ok || !json.names) continue;
+        for (const [k, v] of Object.entries(json.names)) {
+          const name = (v ?? "").trim();
+          if (name) resolved[k.toUpperCase()] = name;
+        }
       }
-      setCompanyBySymbol(m);
+      setCompanyBySymbol((prev) => {
+        const m = opts?.merge ? new Map(prev) : new Map<string, string>();
+        for (const [k, v] of Object.entries(resolved)) m.set(k, v);
+        return m;
+      });
     } catch {
       // ignore
     }
@@ -241,8 +266,19 @@ export default function TerminalPage() {
       "quotes",
     );
     if (!json.ok) throw new Error(json.error ?? "Failed to load quotes");
-    setQuotes(json.quotes ?? []);
+    const rows = json.quotes ?? [];
+    setQuotes(rows);
     setLastUpdatedAt(new Date().toISOString());
+    const fromQuotes = rows
+      .map((q) => [q.symbol.toUpperCase(), q.companyName?.trim()] as const)
+      .filter(([, n]) => !!n) as [string, string][];
+    if (fromQuotes.length > 0) {
+      setCompanyBySymbol((prev) => {
+        const m = new Map(prev);
+        for (const [sym, name] of fromQuotes) m.set(sym, name);
+        return m;
+      });
+    }
   }
 
   async function loadVolumeAnomalies(symList: string[]) {
@@ -266,21 +302,6 @@ export default function TerminalPage() {
     setVolumeInfo(m);
   }
 
-  async function loadHeatmap(nextWatchlistId: string | null) {
-    const wl = nextWatchlistId ? `&watchlistId=${encodeURIComponent(nextWatchlistId)}` : "";
-    const resp = await fetch(`/api/terminal/heatmap?view=${encodeURIComponent(heatView)}${wl}`, { cache: "no-store" });
-    const json = await terminalFetchJson<{ ok: boolean; items?: HeatmapItem[]; error?: string }>(resp, "heatmap");
-    if (!json.ok) throw new Error(json.error ?? "Failed to load heatmap");
-    setHeatItems(json.items ?? []);
-  }
-
-  async function loadMovers(nextWatchlistId: string | null) {
-    const wl = nextWatchlistId ? `&watchlistId=${encodeURIComponent(nextWatchlistId)}` : "";
-    const resp = await fetch(`/api/terminal/movers?scope=combined&top=50${wl}`, { cache: "no-store" });
-    const json = await terminalFetchJson<MoversPayload>(resp, "movers");
-    setMovers(json);
-  }
-
   async function loadOptionFlow(nextWatchlistId: string | null) {
     try {
       const qs = new URLSearchParams();
@@ -301,15 +322,91 @@ export default function TerminalPage() {
   async function refreshAll(nextWatchlistId: string | null) {
     setError(null);
     try {
-      await Promise.all([
-        loadWatchlists().catch(() => null),
-        loadUniverse(nextWatchlistId),
-        loadMovers(nextWatchlistId),
-        loadOptionFlow(nextWatchlistId),
-      ]);
+      await loadWatchlists().catch(() => null);
+      await loadUniverse(nextWatchlistId);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  function deferTerminalSecondaryLoads(nextWatchlistId: string | null, symList: string[]) {
+    window.setTimeout(() => void loadOptionFlow(nextWatchlistId).catch(() => null), 1500);
+    window.setTimeout(() => void loadVolumeAnomalies(symList).catch(() => null), 2500);
+  }
+
+  function applyBootstrapPayload(
+    json: { quotes?: NormalizedQuote[]; heatItems?: HeatmapItem[] },
+    symList: string[],
+  ) {
+    setError(null);
+    const rows = json.quotes ?? [];
+    const items = json.heatItems ?? [];
+    setQuotes(rows);
+    setLastUpdatedAt(new Date().toISOString());
+    setHeatItems(items);
+
+    const portfolioSet = new Set(symList.map((s) => s.toUpperCase()));
+    const portfolioQuotes = rows.filter((q) => portfolioSet.has(q.symbol.toUpperCase()));
+    const computed = computeMovers("portfolio", portfolioQuotes, 50);
+    setMovers({ ok: true, scope: "myUniverse", gainers: computed.gainers, losers: computed.losers });
+
+    setCompanyBySymbol((prev) => {
+      const m = new Map(prev);
+      for (const q of rows) {
+        const n = q.companyName?.trim();
+        if (n) m.set(q.symbol.toUpperCase(), n);
+      }
+      for (const it of items) {
+        const n = it.companyName?.trim();
+        if (n) m.set(it.symbol.toUpperCase(), n);
+      }
+      return m;
+    });
+  }
+
+  function bootstrapRequestKey(symList: string[], nextWatchlistId: string | null): string {
+    const syms = symList
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean)
+      .sort()
+      .join(",");
+    return `${heatView}|${nextWatchlistId ?? ""}|${syms}`;
+  }
+
+  async function runTerminalPrimaryLoad(symList: string[], nextWatchlistId: string | null) {
+    const key = bootstrapRequestKey(symList, nextWatchlistId);
+    if (bootstrapInflightRef.current && bootstrapInflightKeyRef.current === key) {
+      return bootstrapInflightRef.current;
+    }
+    bootstrapInflightKeyRef.current = key;
+    const promise = (async () => {
+      const resp = await fetch("/api/terminal/bootstrap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          view: heatView,
+          watchlistId: nextWatchlistId,
+          indexSymbols: ["SPY", "QQQ"],
+        }),
+        cache: "no-store",
+      });
+      const json = await terminalFetchJson<{
+        ok: boolean;
+        quotes?: NormalizedQuote[];
+        heatItems?: HeatmapItem[];
+        error?: string;
+      }>(resp, "bootstrap");
+      if (!json.ok) throw new Error(json.error ?? "Failed to load terminal market data");
+      applyBootstrapPayload(json, symList);
+      lastPrimaryLoadAtRef.current = Date.now();
+      deferTerminalSecondaryLoads(nextWatchlistId, symList);
+    })().finally(() => {
+      if (bootstrapInflightKeyRef.current === key) {
+        bootstrapInflightRef.current = null;
+      }
+    });
+    bootstrapInflightRef.current = promise;
+    return promise;
   }
 
   async function loadFutures() {
@@ -326,7 +423,9 @@ export default function TerminalPage() {
   }
 
   useEffect(() => {
-    const t = setTimeout(() => void refreshAll(watchlistId), 0);
+    const t = setTimeout(() => {
+      void refreshAll(watchlistId);
+    }, 0);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -345,21 +444,15 @@ export default function TerminalPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [heatView, watchlistId]);
 
-  useEquityMarketPolling(
-    () => {
-      void (async () => {
-        try {
-          await loadUniverse(watchlistId);
-          await loadMovers(watchlistId);
-          await loadOptionFlow(watchlistId);
-        } catch {
-          // ignore
-        }
-      })();
+  useSchwabRefreshCoordinator({
+    onTick: () => {
+      const sym = symbolsRef.current;
+      if (sym.length === 0) return;
+      if (Date.now() - lastPrimaryLoadAtRef.current < 55_000) return;
+      void runTerminalPrimaryLoad(sym, watchlistId).catch(() => null);
     },
-    60_000,
-    [watchlistId, heatView],
-  );
+    resetKey: marketPollResetKey,
+  });
 
   useEffect(() => {
     const allowed = new Set<TerminalCol>(["symbol", "company", "last", "chg", "chgPct", "volume", "volX"]);
@@ -416,36 +509,18 @@ export default function TerminalPage() {
   }, [watchlistId, lastUpdatedAt]);
 
   useEffect(() => {
-    if (symbols.length === 0) return;
-    const t = setTimeout(() => void loadCompanyNames(symbols), 0);
-    return () => clearTimeout(t);
-  }, [symbols]);
-
-  useEffect(() => {
-    if (symbols.length === 0) return;
-    const open = isUsEquityRegularSessionOpen(new Date());
-    if (!open) return;
+    if (!symbolsKey) return;
     const t = setTimeout(() => {
-      void loadQuotes(symbols).catch((e) => setError(e instanceof Error ? e.message : String(e)));
-    }, 0);
+      void runTerminalPrimaryLoad(symbolsRef.current, watchlistId).catch((e) => {
+        if (isAbortError(e)) return;
+        setError(e instanceof Error ? e.message : String(e));
+      });
+    }, 150);
     return () => clearTimeout(t);
-  }, [symbols]);
-
-  const lastQuotesKeyClosed = useRef<string>("");
-  useEffect(() => {
-    if (symbols.length === 0) return;
-    const open = isUsEquityRegularSessionOpen(new Date());
-    if (open) return;
-    const key = symbols.join(",");
-    if (key === lastQuotesKeyClosed.current) return;
-    lastQuotesKeyClosed.current = key;
-    const t = setTimeout(() => {
-      void loadQuotes(symbols).catch((e) => setError(e instanceof Error ? e.message : String(e)));
-    }, 0);
-    return () => clearTimeout(t);
-  }, [symbols]);
+  }, [symbolsKey, watchlistId]);
 
   useEffect(() => {
+    if (quotes.length === 0) return;
     const t = setTimeout(() => {
       void (async () => {
         try {
@@ -472,14 +547,6 @@ export default function TerminalPage() {
           const qMap = new Map<string, NormalizedQuote>();
           for (const q of quotes) qMap.set(q.symbol.toUpperCase(), q);
 
-          const idxResp = await fetch("/api/quotes", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ symbols: ["SPY", "QQQ"] }),
-          });
-          const idxJson = await terminalFetchJson<{ ok: boolean; quotes?: NormalizedQuote[] }>(idxResp, "index quotes");
-          for (const q of idxJson.quotes ?? []) qMap.set(q.symbol.toUpperCase(), q);
-
           let cur = 0;
           let prev = 0;
           for (const [sym, mv] of mvBySym.entries()) {
@@ -487,7 +554,6 @@ export default function TerminalPage() {
             const pct = q?.changePercent ?? null;
             if (pct == null || !Number.isFinite(pct)) continue;
             cur += mv;
-            // NormalizedQuote.changePercent is a fraction (e.g. 0.0123), not percent points.
             prev += mv / (1 + pct);
           }
 
@@ -499,32 +565,10 @@ export default function TerminalPage() {
           // ignore
         }
       })();
-    }, 0);
+    }, 5000);
     return () => clearTimeout(t);
   }, [quotes, lastUpdatedAt]);
 
-  useEffect(() => {
-    if (symbols.length === 0) return;
-    const open = isUsEquityRegularSessionOpen(new Date());
-    if (!open && heatInit.current) return;
-    heatInit.current = true;
-    const t = setTimeout(() => {
-      void loadHeatmap(watchlistId).catch(() => null);
-    }, 0);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watchlistId, heatView, symbols]);
-
-  useEffect(() => {
-    if (symbols.length === 0) return;
-    const open = isUsEquityRegularSessionOpen(new Date());
-    if (!open && volInit.current) return;
-    volInit.current = true;
-    const t = setTimeout(() => {
-      void loadVolumeAnomalies(symbols).catch(() => null);
-    }, 0);
-    return () => clearTimeout(t);
-  }, [symbols]);
 
   useEffect(() => {
     let five: ReturnType<typeof setInterval> | null = null;
@@ -557,8 +601,10 @@ export default function TerminalPage() {
     }
   }
 
+  const portfolioSymbolSet = useMemo(() => new Set(symbols.map((s) => s.toUpperCase())), [symbols]);
+
   const sortedQuotes = useMemo(() => {
-    const a = [...quotes];
+    const a = quotes.filter((q) => portfolioSymbolSet.has(q.symbol.toUpperCase()));
     a.sort((x, y) => {
       let cmp = 0;
       switch (sortCol) {
@@ -594,7 +640,7 @@ export default function TerminalPage() {
       return sortAsc ? cmp : -cmp;
     });
     return a;
-  }, [quotes, sortCol, sortAsc, volumeInfo, companyBySymbol]);
+  }, [quotes, portfolioSymbolSet, sortCol, sortAsc, volumeInfo, companyBySymbol]);
 
   const volumeLeaders = useMemo(() => {
     const rows = quotes
@@ -805,7 +851,7 @@ export default function TerminalPage() {
             </div>
           </summary>
           <div className="mt-3 min-w-0">
-            <HeatmapGrid items={heatItems.slice(0, 220)} />
+            <HeatmapGrid items={heatItems.slice(0, 220)} companyNamesBySymbol={companyBySymbol} />
             {heatItems.length === 0 ? <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">No heatmap data yet.</div> : null}
           </div>
           <div className="mt-6 min-w-0 border-t border-zinc-200 pt-4 dark:border-white/10">
@@ -814,7 +860,12 @@ export default function TerminalPage() {
               Same daily % scale as the heatmap; mid-range moves are stretched so small differences read more clearly.
             </p>
             <div className="mt-3">
-              <TerminalPositionTreemap items={heatItems} mvBySymbol={positionMvBySym} heatView={heatView} />
+              <TerminalPositionTreemap
+                items={heatItems}
+                mvBySymbol={positionMvBySym}
+                heatView={heatView}
+                companyNamesBySymbol={companyBySymbol}
+              />
             </div>
           </div>
         </details>

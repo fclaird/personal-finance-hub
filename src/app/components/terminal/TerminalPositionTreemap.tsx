@@ -13,6 +13,7 @@ type TreemapRow = {
   symbol: string;
   pctFrac: number | null;
   fill: string;
+  companyName: string | null;
 };
 
 type TreemapPayload = TreemapRow & { children?: TreemapRow[] };
@@ -40,6 +41,7 @@ function TreemapCell(props: Record<string, unknown>) {
   const pctF = p.pctFrac;
   const pctStr =
     pctF == null || !Number.isFinite(pctF) ? "—" : `${pctF * 100 >= 0 ? "+" : ""}${(pctF * 100).toFixed(1)}%`;
+  const tip = (p.companyName ?? "").trim() || undefined;
   const tc = "#ffffff";
 
   const minDim = Math.min(w, h);
@@ -72,7 +74,7 @@ function TreemapCell(props: Record<string, unknown>) {
     return (
       <g>
         <a href={href}>
-          <title>{`${sym} ${pctStr}`}</title>
+          {tip ? <title>{tip}</title> : null}
           <rect x={x0} y={y0} width={w} height={h} style={{ fill }} stroke="#09090b" strokeWidth={1} />
         </a>
       </g>
@@ -91,7 +93,7 @@ function TreemapCell(props: Record<string, unknown>) {
           </clipPath>
         </defs>
         <a href={href}>
-          <title>{`${sym} ${pctStr}`}</title>
+          {tip ? <title>{tip}</title> : null}
           <rect x={x0} y={y0} width={w} height={h} style={{ fill }} stroke="#09090b" strokeWidth={1} />
           <g clipPath={`url(#${clipId})`}>
             <text
@@ -126,7 +128,7 @@ function TreemapCell(props: Record<string, unknown>) {
         </clipPath>
       </defs>
       <a href={href}>
-        <title>{`${sym} ${pctStr}`}</title>
+        {tip ? <title>{tip}</title> : null}
         <rect x={x0} y={y0} width={w} height={h} style={{ fill }} stroke="#09090b" strokeWidth={1} />
         <g clipPath={`url(#${clipId})`}>
           <text x={cx} y={ySym} textAnchor="middle" fill={tc} fontSize={fsSym} fontWeight={800} style={textStyleSym}>
@@ -145,12 +147,17 @@ export function TerminalPositionTreemap({
   items,
   mvBySymbol,
   heatView,
+  companyNamesBySymbol,
 }: {
   items: HeatmapItem[];
   mvBySymbol: Map<string, number>;
   heatView: "portfolio" | "spy" | "qqq";
+  companyNamesBySymbol?: Map<string, string>;
 }) {
   const { rows, caption } = useMemo(() => {
+    function companyNameFor(it: HeatmapItem): string | null {
+      return it.companyName?.trim() || companyNamesBySymbol?.get(it.symbol.toUpperCase())?.trim() || null;
+    }
     const list = items.slice(0, 200);
 
     function capWeight(it: HeatmapItem): number {
@@ -177,6 +184,7 @@ export function TerminalPositionTreemap({
         symbol: sym,
         pctFrac,
         fill: treemapFillForChange(pctFrac),
+        companyName: companyNameFor(it),
       });
     }
 
@@ -201,6 +209,7 @@ export function TerminalPositionTreemap({
           symbol: sym,
           pctFrac,
           fill: treemapFillForChange(pctFrac),
+          companyName: companyNameFor(it),
         });
       }
       return {
@@ -213,7 +222,7 @@ export function TerminalPositionTreemap({
     }
 
     return { rows: [], caption: "" };
-  }, [items, mvBySymbol, heatView]);
+  }, [items, mvBySymbol, heatView, companyNamesBySymbol]);
 
   if (rows.length === 0) {
     return (

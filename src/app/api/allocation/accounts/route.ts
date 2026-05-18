@@ -9,6 +9,7 @@ export async function GET(req: Request) {
   const includeSynthetic = url.searchParams.get("synthetic") !== "0";
   const jar = await cookies();
   const mode = parseDataMode(jar.get(DATA_MODE_COOKIE)?.value);
-  return NextResponse.json({ ok: true, mode, includeSynthetic, accounts: getAllocationByAccount(includeSynthetic, mode) });
+  const accounts = getAllocationByAccount(includeSynthetic, mode);
+  return NextResponse.json({ ok: true, mode, includeSynthetic, accounts });
 }
 

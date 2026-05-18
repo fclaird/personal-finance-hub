@@ -13,9 +13,10 @@ export function portfolioImpliedEquityPrice(
   mode: DataMode,
   underlying: string,
 ): number | null {
-  const sym = (underlying ?? "").trim().toUpperCase();
-  if (!sym || sym === "CASH") return null;
+  return portfolioImpliedEquityPriceMap(db, mode).get((underlying ?? "").trim().toUpperCase()) ?? null;
+}
 
+export function portfolioImpliedEquityPriceMap(db: ReturnType<typeof getDb>, mode: DataMode): Map<string, number> {
   const where =
     mode === "schwab"
       ? `a.id LIKE 'schwab_%' AND ${notPosterityWhereSql("a")}`
@@ -35,24 +36,30 @@ export function portfolioImpliedEquityPrice(
     )
     .all() as Array<{ snapshot_id: string }>;
   const snapshotIds = snaps.map((r) => r.snapshot_id);
-  if (snapshotIds.length === 0) return null;
+  if (snapshotIds.length === 0) return new Map();
 
-  const spot = db
+  const rows = db
     .prepare(
       `
-      SELECT SUM(p.quantity) AS qty, SUM(COALESCE(p.market_value, 0)) AS mv
+      SELECT UPPER(COALESCE(s.symbol, '')) AS symbol, SUM(p.quantity) AS qty, SUM(COALESCE(p.market_value, 0)) AS mv
       FROM positions p
       JOIN securities s ON s.id = p.security_id
       WHERE p.snapshot_id IN (SELECT value FROM json_each(@snaps))
         AND s.security_type != 'option'
-        AND UPPER(COALESCE(s.symbol, '')) = @sym
+        AND s.security_type != 'cash'
+      GROUP BY UPPER(COALESCE(s.symbol, ''))
     `,
     )
-    .get({ snaps: JSON.stringify(snapshotIds), sym }) as { qty: number | null; mv: number | null } | undefined;
+    .all({ snaps: JSON.stringify(snapshotIds) }) as Array<{ symbol: string; qty: number | null; mv: number | null }>;
 
-  const qty = spot?.qty ?? 0;
-  const mv = spot?.mv ?? 0;
-  return qty ? mv / qty : null;
+  const out = new Map<string, number>();
+  for (const row of rows) {
+    const sym = (row.symbol ?? "").trim().toUpperCase();
+    const qty = row.qty ?? 0;
+    const mv = row.mv ?? 0;
+    if (sym && sym !== "CASH" && qty) out.set(sym, mv / qty);
+  }
+  return out;
 }
 
 export type ExposureRow = {
@@ -118,6 +125,7 @@ export function syntheticEquityMvForSnapshot(
   db: ReturnType<typeof getDb>,
   snapshotId: string,
   mode: DataMode = "auto",
+  priceByUnderlying = portfolioImpliedEquityPriceMap(db, mode),
 ): number {
   const rows = db
     .prepare(
@@ -145,7 +153,7 @@ export function syntheticEquityMvForSnapshot(
     const key = normalizeOptionUnderlying(row.us_symbol, row.option_symbol);
     if (key === "CASH") continue;
     const sh = row.synthetic_shares ?? 0;
-    const px = portfolioImpliedEquityPrice(db, mode, key);
+    const px = priceByUnderlying.get(key);
     sum += sh * (px ?? 0);
   }
   return sum;
@@ -202,6 +210,7 @@ export function getUnderlyingExposureByBucket(mode: DataMode = "auto"): BucketEx
     .all() as Array<{ account_name: string; account_nickname: string | null; snapshot_id: string }>;
 
   const byBucket = new Map<"brokerage" | "retirement", Map<string, ExposureRow>>();
+  const priceByUnderlying = portfolioImpliedEquityPriceMap(db, mode);
 
   for (const s of snapshots) {
     const bucket = bucketFromAccount(s.account_name, s.account_nickname);
@@ -316,7 +325,7 @@ export function getUnderlyingExposureByBucket(mode: DataMode = "auto"): BucketEx
 
   for (const m of byBucket.values()) {
     for (const row of m.values()) {
-      const px = portfolioImpliedEquityPrice(db, mode, row.underlyingSymbol);
+      const px = priceByUnderlying.get(row.underlyingSymbol);
       row.syntheticMarketValue = row.syntheticShares * (px ?? 0);
     }
   }

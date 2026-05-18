@@ -1,5 +1,9 @@
 import { getDb } from "@/lib/db";
-import { getUnderlyingExposureRollup, syntheticEquityMvForSnapshot } from "@/lib/analytics/optionsExposure";
+import {
+  getUnderlyingExposureRollup,
+  portfolioImpliedEquityPriceMap,
+  syntheticEquityMvForSnapshot,
+} from "@/lib/analytics/optionsExposure";
 import { latestSnapshotId } from "@/lib/snapshots";
 import type { DataMode } from "@/lib/dataMode";
 import { bucketFromAccount } from "@/lib/accountBuckets";
@@ -108,6 +112,7 @@ export function getConsolidatedAllocation(includeSynthetic: boolean, mode: DataM
 
 export function getAllocationByAccount(includeSynthetic: boolean, mode: DataMode = "auto"): AllocationByAccountRow[] {
   const db = getDb();
+  const priceByUnderlying = includeSynthetic ? portfolioImpliedEquityPriceMap(db, mode) : undefined;
 
   // Latest snapshot per account
   const snapshots = db
@@ -159,7 +164,10 @@ export function getAllocationByAccount(includeSynthetic: boolean, mode: DataMode
     // Per-account synthetic exposure: compute synthetic MV using the same method as consolidated,
     // but scoped to the account's latest snapshot.
     if (includeSynthetic) {
-      buckets.set("equity", (buckets.get("equity") ?? 0) + syntheticEquityMvForSnapshot(db, s.snapshot_id, mode));
+      buckets.set(
+        "equity",
+        (buckets.get("equity") ?? 0) + syntheticEquityMvForSnapshot(db, s.snapshot_id, mode, priceByUnderlying),
+      );
     }
 
     const total = Array.from(buckets.values()).reduce((a, b) => a + b, 0);
@@ -184,6 +192,7 @@ export function getAllocationByAccount(includeSynthetic: boolean, mode: DataMode
 
 export function getAllocationByBucket(includeSynthetic: boolean, mode: DataMode = "auto"): AllocationBucketedResult {
   const db = getDb();
+  const priceByUnderlying = includeSynthetic ? portfolioImpliedEquityPriceMap(db, mode) : undefined;
 
   const snapshots = db
     .prepare(
@@ -229,7 +238,10 @@ export function getAllocationByBucket(includeSynthetic: boolean, mode: DataMode 
     }
 
     if (includeSynthetic) {
-      buckets.set("equity", (buckets.get("equity") ?? 0) + syntheticEquityMvForSnapshot(db, s.snapshot_id, mode));
+      buckets.set(
+        "equity",
+        (buckets.get("equity") ?? 0) + syntheticEquityMvForSnapshot(db, s.snapshot_id, mode, priceByUnderlying),
+      );
     }
   }
 

@@ -1,4 +1,5 @@
 import { getSecretsPassphrase } from "@/lib/env";
+import { marketDataQueueForPath, withMarketDataRateLimit } from "@/lib/schwab/marketDataRateLimit";
 import { SCHWAB_MARKETDATA_API_BASE, SCHWAB_TRADER_API_BASE } from "@/lib/schwab/config";
 import { isSchwabRefreshTokenRejectedMessage, refreshToken } from "@/lib/schwab/oauth";
 import { clearSchwabToken, getSchwabToken, setSchwabToken, type SchwabToken } from "@/lib/schwab/token";
@@ -107,20 +108,23 @@ export async function schwabFetch<T>(
 }
 
 export async function schwabMarketFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = await getValidToken();
-  const url = joinBaseAndPath(SCHWAB_MARKETDATA_API_BASE, path);
-  const resp = await fetch(url, {
-    ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      Authorization: `Bearer ${token.access_token}`,
-      Accept: "application/json",
-    },
+  const queue = marketDataQueueForPath(path);
+  return withMarketDataRateLimit(queue, async () => {
+    const token = await getValidToken();
+    const url = joinBaseAndPath(SCHWAB_MARKETDATA_API_BASE, path);
+    const resp = await fetch(url, {
+      ...init,
+      headers: {
+        ...(init?.headers ?? {}),
+        Authorization: `Bearer ${token.access_token}`,
+        Accept: "application/json",
+      },
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      throw new Error(`Schwab Market Data API error (${url.toString()}): ${resp.status} ${resp.statusText} ${text}`);
+    }
+    return (await resp.json()) as T;
   });
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`Schwab Market Data API error (${url.toString()}): ${resp.status} ${resp.statusText} ${text}`);
-  }
-  return (await resp.json()) as T;
 }
 

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { resolveCompanyNamesOpenFigi } from "@/lib/openData/openFigiNames";
 import { getSecCompanyTickerMap, lookupSecCompanyTitle } from "@/lib/openData/secCompanyTickers";
-import { fetchSchwabInstrumentFundamental, type SchwabCompanyPayload } from "@/lib/schwab/instrumentFundamental";
+import { fetchEnrichedCompanyProfile } from "@/lib/schwab/companyProfile";
 
 function normSym(s: string) {
   return (s ?? "").trim().toUpperCase();
@@ -23,6 +23,8 @@ function emptyPayload(symbol: string, companyName: string | null, companyNameSou
     week52High: null,
     week52Low: null,
     avgVol: null,
+    sessionHigh: null,
+    sessionLow: null,
     raw: {},
   };
 }
@@ -32,9 +34,9 @@ export async function GET(req: Request) {
   const symbol = normSym(url.searchParams.get("symbol") ?? "");
   if (!symbol) return NextResponse.json({ ok: false, error: "Missing symbol" }, { status: 400 });
 
-  let r: SchwabCompanyPayload;
+  let r: Awaited<ReturnType<typeof fetchEnrichedCompanyProfile>>;
   try {
-    r = await fetchSchwabInstrumentFundamental(symbol);
+    r = await fetchEnrichedCompanyProfile(symbol);
   } catch (e) {
     let companyName: string | null = null;
     let companyNameSource: "openfigi" | "sec" | null = null;
@@ -78,7 +80,8 @@ export async function GET(req: Request) {
     }
   }
 
-  return NextResponse.json({
+  return NextResponse.json(
+    {
     ok: true,
     symbol: r.symbol,
     companyName,
@@ -92,6 +95,10 @@ export async function GET(req: Request) {
     week52High: r.week52High,
     week52Low: r.week52Low,
     avgVol: r.avgVol,
+    sessionHigh: r.sessionHigh,
+    sessionLow: r.sessionLow,
     raw: r.raw,
-  });
+  },
+    { headers: { "Cache-Control": "no-store, max-age=0" } },
+  );
 }

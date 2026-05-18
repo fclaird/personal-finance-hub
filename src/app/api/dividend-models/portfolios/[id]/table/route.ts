@@ -27,7 +27,10 @@ export async function GET(req: Request, ctx: Ctx) {
     marketValue: r.marketValue,
     nextExDate: r.nextExDate,
     sector: r.sector,
+    industry: r.industry,
     avgUnitCost: r.avgUnitCost,
+    category: r.category,
+    cost: r.cost,
   }));
 
   const footer = computeFooterTotals(enriched);

@@ -49,6 +49,14 @@ function normalizeSchwabTransactionWindow(
   return { start, end };
 }
 
+/** Schwab rejects bare YYYY-MM-DD; use UTC ISO-8601 with start/end-of-day bounds. */
+export function schwabTransactionDateParam(calendarIso: string, bound: "start" | "end"): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(calendarIso)) {
+    throw new Error(`Invalid calendar date for Schwab transactions: ${calendarIso}`);
+  }
+  return bound === "start" ? `${calendarIso}T00:00:00.000Z` : `${calendarIso}T23:59:59.000Z`;
+}
+
 export type SchwabAccountNumberRow = { accountNumber?: string; hashValue?: string };
 
 /**
@@ -66,8 +74,8 @@ export async function fetchSchwabTransactionsWindow(
 
   const qs = new URLSearchParams({
     types: "TRADE",
-    startDate: start,
-    endDate: end,
+    startDate: schwabTransactionDateParam(start, "start"),
+    endDate: schwabTransactionDateParam(end, "end"),
   });
   const path = `accounts/${encodeURIComponent(accountHash)}/transactions?${qs.toString()}`;
   const data = await schwabFetch<unknown>(path);

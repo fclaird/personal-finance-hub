@@ -81,6 +81,18 @@ function migrate(db: Database.Database) {
   if (hasDmFundSnap) {
     ensureColumn(db, "dividend_model_symbol_fundamentals_snap", "next_ex_date", "next_ex_date TEXT");
   }
+  const hasDmMonthlySym = db
+    .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='dividend_model_portfolio_monthly_symbol' LIMIT 1`)
+    .get();
+  if (hasDmMonthlySym) {
+    ensureColumn(db, "dividend_model_portfolio_monthly_symbol", "annualized_yield_pct", "annualized_yield_pct REAL");
+  }
+  const hasDmSimMonthly = db
+    .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='dividend_model_portfolio_sim_monthly' LIMIT 1`)
+    .get();
+  if (hasDmSimMonthly) {
+    ensureColumn(db, "dividend_model_portfolio_sim_monthly", "price_only_rebased_pct", "price_only_rebased_pct REAL");
+  }
   // In Phase 1 we keep migrations as a single schema file; we can add proper migration files later.
   const name = "0001_init";
   const exists = db

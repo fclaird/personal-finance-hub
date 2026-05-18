@@ -10,6 +10,7 @@ export type HeatmapItem = {
   symbol: string;
   changePercent: number | null; // fraction (0.01 = 1%)
   marketCap: number | null; // USD
+  companyName?: string | null;
 };
 
 function clamp(n: number, lo: number, hi: number) {
@@ -33,9 +34,11 @@ function changeSortKey(frac: number | null): number {
 export function HeatmapGrid({
   items,
   title,
+  companyNamesBySymbol,
 }: {
   items: HeatmapItem[];
   title?: string;
+  companyNamesBySymbol?: Map<string, string>;
 }) {
   const caps = useMemo(() => {
     const v = items
@@ -71,10 +74,9 @@ export function HeatmapGrid({
           const spans = spanForCap(it.marketCap, caps);
           const style = heatmapCellStyle(it.changePercent);
           const pct = it.changePercent == null ? null : it.changePercent * 100;
-          const tip =
-            it.symbol +
-            (pct == null ? "" : ` • ${pct.toFixed(2)}%`) +
-            (it.marketCap == null ? "" : ` • mcap $${(it.marketCap / 1e9).toFixed(1)}B`);
+          const companyName =
+            it.companyName?.trim() || companyNamesBySymbol?.get(it.symbol.toUpperCase())?.trim() || undefined;
+          const tip = companyName;
           const href = symbolPageHref(it.symbol);
           const labelColor = treemapLabelColor(it.changePercent);
           return (

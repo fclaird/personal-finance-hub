@@ -1,6 +1,6 @@
 import { normalizeSchwabQuoteSymbol } from "@/lib/market/schwabSymbol";
 import { schwabQuoteDisplayPrice } from "@/lib/market/schwabQuoteDisplay";
-import { schwabMarketFetch } from "@/lib/schwab/client";
+import { fetchSchwabQuotesResponse } from "@/lib/schwab/quotesFetch";
 import { schwabQuoteObjectFromEntry } from "@/lib/schwab/quoteEntry";
 
 function asNumber(v: unknown): number | null {
@@ -19,23 +19,19 @@ export type DividendModelQuote = {
 export async function fetchSchwabQuotesNormalized(symbols: string[]): Promise<Map<string, DividendModelQuote>> {
   const uniq = Array.from(new Set(symbols.map((s) => normalizeSchwabQuoteSymbol(s)).filter(Boolean)));
   const out = new Map<string, DividendModelQuote>();
-  const BATCH = 100;
-  for (let i = 0; i < uniq.length; i += BATCH) {
-    const batch = uniq.slice(i, i + BATCH);
-    const resp = await schwabMarketFetch<Record<string, unknown>>(`/quotes?symbols=${encodeURIComponent(batch.join(","))}`);
-    for (const sym of batch) {
-      const entry = resp[sym] ?? resp[sym.toUpperCase()];
-      const q = schwabQuoteObjectFromEntry(entry);
-      if (!q) {
-        out.set(sym, { symbol: sym, last: null, mark: null, close: null });
-        continue;
-      }
-      const rawLast = asNumber(q.lastPrice) ?? null;
-      const mark = asNumber(q.mark) ?? null;
-      const close = asNumber(q.closePrice) ?? null;
-      const last = schwabQuoteDisplayPrice(rawLast, mark, close);
-      out.set(sym, { symbol: sym, last, mark, close });
+  const resp = await fetchSchwabQuotesResponse(uniq);
+  for (const sym of uniq) {
+    const entry = resp[sym] ?? resp[sym.toUpperCase()];
+    const q = schwabQuoteObjectFromEntry(entry);
+    if (!q) {
+      out.set(sym, { symbol: sym, last: null, mark: null, close: null });
+      continue;
     }
+    const rawLast = asNumber(q.lastPrice) ?? null;
+    const mark = asNumber(q.mark) ?? null;
+    const close = asNumber(q.closePrice) ?? null;
+    const last = schwabQuoteDisplayPrice(rawLast, mark, close);
+    out.set(sym, { symbol: sym, last, mark, close });
   }
   return out;
 }

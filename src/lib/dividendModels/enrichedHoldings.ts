@@ -2,8 +2,10 @@ import type Database from "better-sqlite3";
 
 import { logError } from "@/lib/log";
 import { ensureFundamentalsSnapshotsFresh } from "@/lib/dividendModels/ensureFundamentals";
+import { inferHoldingCategory } from "@/lib/dividendModels/holdingCategory";
 import { fetchSchwabQuotesNormalized } from "@/lib/dividendModels/quotes";
 import { nextDividendCalendarDate } from "@/lib/dividendModels/cashflows";
+import { readLatestSymbolMonthlyYield } from "@/lib/dividendModels/symbolMonthlyMarket";
 
 export type LoadEnrichedHoldingsOptions = {
   /** Re-run Schwab/Yahoo fundamentals for every holding symbol (use after fixing Connections or bad snapshots). */
@@ -24,6 +26,8 @@ export type EnrichedHoldingRow = {
   sector: string | null;
   industry: string | null;
   avgUnitCost: number | null;
+  category: string;
+  cost: number | null;
 };
 
 export async function loadEnrichedHoldings(
@@ -142,9 +146,28 @@ export async function loadEnrichedHoldings(
     }
 
     const tax = db.prepare(`SELECT sector FROM security_taxonomy WHERE symbol = ?`).get(sym) as { sector: string | null } | undefined;
+    const sector = tax?.sector ?? null;
+
+    if ((divYield == null || annualDivEst == null) && px != null && px > 0) {
+      const ttmYieldPct = readLatestSymbolMonthlyYield(db, sym);
+      if (ttmYieldPct != null) {
+        if (divYield == null) divYield = ttmYieldPct / 100;
+        if (annualDivEst == null) annualDivEst = (ttmYieldPct / 100) * px;
+      }
+    }
 
     const mv =
       h.shares != null && px != null && Number.isFinite(h.shares) && Number.isFinite(px) ? h.shares * px : null;
+
+    const cost =
+      h.shares != null &&
+      h.avgUnitCost != null &&
+      Number.isFinite(h.shares) &&
+      Number.isFinite(h.avgUnitCost) &&
+      h.shares > 0 &&
+      h.avgUnitCost > 0
+        ? h.shares * h.avgUnitCost
+        : null;
 
     return {
       holdingId: h.id,
@@ -157,9 +180,11 @@ export async function loadEnrichedHoldings(
       annualDivEst,
       marketValue: mv,
       nextExDate: nextDividendCalendarDate(db, sym, today) ?? snap?.nextExFromSnap ?? null,
-      sector: tax?.sector ?? null,
+      sector,
       industry,
       avgUnitCost: h.avgUnitCost,
+      category: inferHoldingCategory(sym, sector, industry),
+      cost,
     };
   });
 }

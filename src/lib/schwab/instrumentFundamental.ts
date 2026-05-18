@@ -20,6 +20,31 @@ function getString(o: Record<string, unknown> | null, key: string): string | nul
   return typeof v === "string" ? v : null;
 }
 
+function pickString(o: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const s = getString(o, key)?.trim();
+    if (!s) continue;
+    const low = s.toLowerCase();
+    if (low === "n/a" || low === "na" || low === "unknown" || low === "other") continue;
+    return s;
+  }
+  return null;
+}
+
+function pickNumber(o: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const v = asNumber(o[key]);
+    if (v != null && Number.isFinite(v) && v > 0) return v;
+  }
+  return null;
+}
+
+function normalizeDivYield(v: number | null): number | null {
+  if (v == null || !Number.isFinite(v)) return null;
+  if (v > 1 && v <= 100) return v / 100;
+  return v >= 0 ? v : null;
+}
+
 export type SchwabCompanyPayload = {
   symbol: string;
   companyName: string | null;
@@ -54,21 +79,17 @@ export function parseSchwabInstrumentFundamental(resp: unknown, symbol: string):
 
   return {
     companyName,
-    sector: getString(fundamental, "sector"),
-    industry: getString(fundamental, "industry"),
-    marketCap: asNumber(fundamental["marketCap"]),
-    pe: asNumber(fundamental["peRatio"]),
-    divYield: (() => {
-      const v = asNumber(fundamental["divYield"]);
-      if (v == null || !Number.isFinite(v)) return null;
-      // Schwab sometimes reports percent points (e.g. 3.2) instead of decimal yield.
-      if (v > 1 && v <= 100) return v / 100;
-      return v;
-    })(),
-    beta: asNumber(fundamental["beta"]),
-    week52High: asNumber(fundamental["high52"]),
-    week52Low: asNumber(fundamental["low52"]),
-    avgVol: asNumber(fundamental["volAvg"]),
+    sector: pickString(fundamental, ["sector", "Sector"]),
+    industry: pickString(fundamental, ["industry", "Industry"]),
+    marketCap: pickNumber(fundamental, ["marketCap", "marketCapitalization", "market_cap"]),
+    pe: pickNumber(fundamental, ["peRatio", "pe", "trailingPE", "forwardPE"]),
+    divYield: normalizeDivYield(
+      pickNumber(fundamental, ["divYield", "dividendYield", "divYieldTTM", "yield"]),
+    ),
+    beta: pickNumber(fundamental, ["beta", "Beta"]),
+    week52High: pickNumber(fundamental, ["high52", "fiftyTwoWeekHigh", "52WeekHigh", "week52High"]),
+    week52Low: pickNumber(fundamental, ["low52", "fiftyTwoWeekLow", "52WeekLow", "week52Low"]),
+    avgVol: pickNumber(fundamental, ["volAvg", "averageVolume", "avgVolume", "averageDailyVolume3Month"]),
     raw: fundamental,
   };
 }

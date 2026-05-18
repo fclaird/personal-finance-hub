@@ -2,14 +2,14 @@ import { NextResponse } from "next/server";
 
 import { getSecCompanyTickerMap, lookupSecCompanyTitle } from "@/lib/openData/secCompanyTickers";
 import { resolveCompanyNamesOpenFigi } from "@/lib/openData/openFigiNames";
-import { fetchSchwabInstrumentFundamental } from "@/lib/schwab/instrumentFundamental";
+import { schwabCompanyNameFromQuoteEntry } from "@/lib/schwab/quoteCompanyName";
+import { fetchSchwabQuotesResponse } from "@/lib/schwab/quotesFetch";
 
 function normSym(s: string) {
   return (s ?? "").trim().toUpperCase();
 }
 
 const MAX_SYMBOLS = 120;
-const CHUNK = 5;
 
 export async function POST(req: Request) {
   let body: { symbols?: unknown };
@@ -24,24 +24,16 @@ export async function POST(req: Request) {
 
   const names: Record<string, string | null> = {};
 
-  for (let i = 0; i < symbols.length; i += CHUNK) {
-    const chunk = symbols.slice(i, i + CHUNK);
-    await Promise.all(
-      chunk.map(async (sym) => {
-        try {
-          const r = await fetchSchwabInstrumentFundamental(sym);
-          names[sym] = r.companyName?.trim() || null;
-        } catch {
-          names[sym] = null;
-        }
-      }),
-    );
+  const quoteResp = await fetchSchwabQuotesResponse(symbols);
+  for (const sym of symbols) {
+    const entry = quoteResp[sym] ?? quoteResp[sym.toUpperCase()];
+    names[sym] = schwabCompanyNameFromQuoteEntry(entry);
   }
 
-  const missingAfterSchwab = symbols.filter((s) => !names[s]);
-  if (missingAfterSchwab.length > 0) {
-    const openFigi = await resolveCompanyNamesOpenFigi(missingAfterSchwab);
-    for (const s of missingAfterSchwab) {
+  const missingAfterQuotes = symbols.filter((s) => !names[s]);
+  if (missingAfterQuotes.length > 0) {
+    const openFigi = await resolveCompanyNamesOpenFigi(missingAfterQuotes);
+    for (const s of missingAfterQuotes) {
       const hit = openFigi[s]?.trim();
       if (hit) names[s] = hit;
     }

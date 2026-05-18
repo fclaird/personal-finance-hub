@@ -7,6 +7,19 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS schwab_refresh_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mode TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  ok INTEGER NOT NULL DEFAULT 0,
+  steps_json TEXT,
+  quotes_symbols INTEGER,
+  holdings_as_of TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_schwab_refresh_runs_finished ON schwab_refresh_runs(finished_at DESC);
+
 -- Institution connections (Schwab, Plaid, file import, etc.)
 CREATE TABLE IF NOT EXISTS institution_connections (
   id TEXT PRIMARY KEY,
@@ -262,9 +275,41 @@ CREATE TABLE IF NOT EXISTS dividend_model_portfolio_monthly_symbol (
   market_value_eom REAL,
   close_eom REAL,
   shares_used REAL,
+  annualized_yield_pct REAL,
   PRIMARY KEY (portfolio_id, symbol, month_end),
   FOREIGN KEY (portfolio_id) REFERENCES dividend_model_portfolios(id) ON DELETE CASCADE
 );
+
+-- Symbol-level monthly facts (5y); shared across simulated portfolios.
+CREATE TABLE IF NOT EXISTS symbol_monthly_market (
+  symbol TEXT NOT NULL COLLATE NOCASE,
+  month_end TEXT NOT NULL,
+  close_eom REAL,
+  dividend_per_share REAL NOT NULL DEFAULT 0,
+  annualized_yield_pct REAL,
+  price_source TEXT NOT NULL,
+  dividend_source TEXT NOT NULL,
+  computed_at TEXT NOT NULL,
+  PRIMARY KEY (symbol, month_end)
+);
+
+CREATE INDEX IF NOT EXISTS idx_symbol_monthly_market_symbol_end ON symbol_monthly_market(symbol, month_end);
+
+-- Hypothetical portfolio path: reinvest vs withdraw (manual shares + symbol_monthly_market).
+CREATE TABLE IF NOT EXISTS dividend_model_portfolio_sim_monthly (
+  portfolio_id TEXT NOT NULL REFERENCES dividend_model_portfolios(id) ON DELETE CASCADE,
+  month_end TEXT NOT NULL,
+  simulation_mode TEXT NOT NULL,
+  nav_total REAL,
+  total_dividends REAL NOT NULL DEFAULT 0,
+  portfolio_rebased_pct REAL,
+  price_only_rebased_pct REAL,
+  status TEXT NOT NULL,
+  computed_at TEXT NOT NULL,
+  PRIMARY KEY (portfolio_id, month_end, simulation_mode)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dividend_model_sim_monthly ON dividend_model_portfolio_sim_monthly(portfolio_id, simulation_mode, month_end);
 
 -- Mode B chart: forward-only weekly (Friday week key) snapshots; no historical forward rows before live_started_at.
 CREATE TABLE IF NOT EXISTS dividend_model_portfolio_forward_snap (

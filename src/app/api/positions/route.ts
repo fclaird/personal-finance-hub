@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { logError } from "@/lib/log";
-import { fetchSchwabQuotesNormalized } from "@/lib/dividendModels/quotes";
 import { getDb } from "@/lib/db";
+import { logError } from "@/lib/log";
 import { isPosterityAccountId, notPosterityWhereSql } from "@/lib/posterity";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
 import { latestSnapshotId } from "@/lib/snapshots";
@@ -49,11 +48,6 @@ function daysToExpiration(expirationIso: string, asOfIso: string): number | null
   const asOf = new Date(asOfIso).getTime();
   if (!Number.isFinite(exp) || !Number.isFinite(asOf)) return null;
   return Math.max(0, Math.ceil((exp - asOf) / (24 * 3600 * 1000)));
-}
-
-function livePxFromQuote(q: { last: number | null; mark: number | null; close: number | null }): number | null {
-  const v = q.last ?? q.mark ?? q.close;
-  return v != null && Number.isFinite(v) && v > 0 ? v : null;
 }
 
 async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: string[]) {
@@ -120,24 +114,6 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
     theta: number | null;
   }>;
 
-  const equitySyms = Array.from(
-    new Set(
-      rows
-        .filter((r) => r.securityType !== "option" && r.symbol)
-        .map((r) => (r.symbol ?? "").trim().toUpperCase())
-        .filter(Boolean),
-    ),
-  );
-
-  let liveBySym = new Map<string, { last: number | null; mark: number | null; close: number | null }>();
-  if (equitySyms.length > 0) {
-    try {
-      liveBySym = await fetchSchwabQuotesNormalized(equitySyms);
-    } catch (e) {
-      logError("api_positions_live_quotes", e);
-    }
-  }
-
   const underRows = db
     .prepare(
       `
@@ -165,9 +141,7 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
     if (r.securityType !== "option") {
       const sym = (r.symbol ?? "").toUpperCase();
       const qpx = sym ? px.get(sym) ?? null : null;
-      const qLive = sym ? liveBySym.get(sym) : undefined;
-      const livePx = qLive ? livePxFromQuote(qLive) : null;
-      const price = livePx ?? qpx ?? r.price;
+      const price = qpx ?? r.price;
       const marketValue =
         price != null && Number.isFinite(price) ? price * (r.quantity ?? 0) : r.marketValue;
       return {

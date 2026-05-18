@@ -9,7 +9,7 @@ export const NAV: SidebarNavItem[] = [
   { href: "/earnings", label: "Earnings" },
   { href: "/performance", label: "Performance" },
   { href: "/dividends", label: "Dividends" },
-  { href: "/dividend-models", label: "Dividend models" },
+  { href: "/dividend-models", label: "Sim Dividend Portfolio" },
   { href: "/rebalancing", label: "Rebalancing" },
   { href: "/alerts", label: "Alerts" },
   { href: "/posterity", label: "Posterity" },
