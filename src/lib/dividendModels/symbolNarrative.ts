@@ -1,215 +1,116 @@
+import { cleanIssuerSearchName, toConciseBusinessSummary } from "@/lib/dividendModels/conciseSummary";
+import { readSymbolNarrativeOverrideForSymbol } from "@/lib/dividendModels/symbolNarrativeOverride";
 import { logError } from "@/lib/log";
+import { fetchYahooLongBusinessSummary } from "@/lib/market/yahooAssetProfile";
+import { resolveIssuerIdentity } from "@/lib/openData/resolveIssuerIdentity";
+import {
+  fetchOpenSourceDescriptions,
+  openSourceSearchQueries,
+} from "@/lib/dividendModels/openSourceNarrativeLookup";
+import { fetchSecBusinessExcerpt } from "@/lib/sec/secBusinessExcerpt";
 import { fetchSchwabInstrumentFundamental } from "@/lib/schwab/instrumentFundamental";
 
-const WD_UA = "FinanceHubSymbolNarrative/1.0 (local; opensource data)";
-
-/** English Wikidata description for best entity match, or null. */
-async function wikidataEnglishDescription(search: string): Promise<{ text: string; label: string; id: string } | null> {
-  const q = (search ?? "").trim();
-  if (q.length < 2) return null;
-  const searchUrl = new URL("https://www.wikidata.org/w/api.php");
-  searchUrl.searchParams.set("action", "wbsearchentities");
-  searchUrl.searchParams.set("search", q);
-  searchUrl.searchParams.set("language", "en");
-  searchUrl.searchParams.set("format", "json");
-  searchUrl.searchParams.set("limit", "3");
-
-  try {
-    const resp = await fetch(searchUrl.toString(), { headers: { "User-Agent": WD_UA } });
-    if (!resp.ok) return null;
-    const json = (await resp.json()) as {
-      search?: Array<{ id: string; label?: string; description?: string }>;
-    };
-    const hit = json.search?.[0];
-    if (!hit?.id) return null;
-
-    let text = (hit.description ?? "").trim();
-    if (!text) {
-      const entUrl = new URL("https://www.wikidata.org/w/api.php");
-      entUrl.searchParams.set("action", "wbgetentities");
-      entUrl.searchParams.set("ids", hit.id);
-      entUrl.searchParams.set("props", "descriptions");
-      entUrl.searchParams.set("languages", "en");
-      entUrl.searchParams.set("format", "json");
-      const entResp = await fetch(entUrl.toString(), { headers: { "User-Agent": WD_UA } });
-      if (entResp.ok) {
-        const ent = (await entResp.json()) as {
-          entities?: Record<string, { descriptions?: { en?: { value?: string } } }>;
-        };
-        text = (ent.entities?.[hit.id]?.descriptions?.en?.value ?? "").trim();
-      }
-    }
-    if (!text) return null;
-    const label = (hit.label ?? "").trim() || hit.id;
-    return { text, label, id: hit.id };
-  } catch (e) {
-    logError("wikidata_description_fetch", e);
-    return null;
-  }
+function inferPreferFundFiling(
+  sector: string | null,
+  industry: string | null,
+  companyName: string | null,
+): boolean {
+  const s = `${sector ?? ""} ${industry ?? ""} ${companyName ?? ""}`.toLowerCase();
+  return (
+    /\betf\b/.test(s) ||
+    s.includes("fund") ||
+    s.includes("closed-end") ||
+    s.includes("mutual") ||
+    /unit investment trust/.test(s) ||
+    (s.includes("trust") && (s.includes("spdr") || s.includes("ishares") || s.includes("etf")))
+  );
 }
 
-/**
- * Build a short plain-English summary: what the company does and how it earns money.
- * Combines Wikidata (entity description), Wikipedia lead/extract, and Schwab sector/industry.
- */
-function buildBusinessSummary(opts: {
+function splitIntoParagraphs(text: string, maxParas = 3, minLen = 60): string[] {
+  const sentences = text.split(/(?<=[.!?])\s+/).filter((s) => s.length > 30);
+  const chunks: string[] = [];
+  let buf = "";
+  for (const s of sentences) {
+    const next = buf ? `${buf} ${s}` : s;
+    if (next.length > 520 && buf) {
+      chunks.push(buf.trim());
+      buf = s;
+      if (chunks.length >= maxParas) break;
+    } else {
+      buf = next;
+    }
+  }
+  if (buf && chunks.length < maxParas) chunks.push(buf.trim());
+  if (chunks.length === 0 && text.length >= minLen) return [text.slice(0, 800)];
+  return chunks;
+}
+
+export type NarrativeContentSource =
+  | "override"
+  | "sec"
+  | "yahoo"
+  | "wikidata"
+  | "wiki"
+  | "fallback"
+  | "mixed";
+
+type NarrativePick = {
+  businessSummary: string;
+  contentSource: NarrativeContentSource;
+};
+
+function sectorFallbackSummary(
+  sym: string,
+  companyName: string | null,
+  sector: string | null,
+  industry: string | null,
+  preferFund?: boolean,
+): string | null {
+  const label = companyName && companyName !== sym ? companyName : sym;
+  if (preferFund) {
+    return `${label} (${sym}) is an exchange-traded fund or trust listed in the U.S. See the SEC filing section below for the fund’s stated investment objective.`;
+  }
+  if (!sector && !industry) return null;
+  return `${label} (${sym}) is classified in the ${sector ?? "reported"} sector${industry ? ` (${industry})` : ""} per market-data feeds.`;
+}
+
+/** Manual override → Yahoo → Wikidata → Wikipedia → Schwab sector/industry one-liner. */
+function pickOpenSourceNarrative(opts: {
   sym: string;
   companyName: string | null;
   sector: string | null;
   industry: string | null;
+  manualOverride: string | null;
+  yahooSummary: string | null;
+  wikidataDescription: string | null;
   wikiIntro: string | null;
-  wikidata: { text: string; label: string; id: string } | null;
-}): string {
-  const { sym, companyName, sector, industry, wikiIntro, wikidata } = opts;
-  const parts: string[] = [];
+  preferFund?: boolean;
+}): NarrativePick {
+  const { sym, companyName, sector, industry, manualOverride, yahooSummary, wikidataDescription, wikiIntro, preferFund } =
+    opts;
 
-  if (wikidata?.text) {
-    const d = wikidata.text.replace(/\s+/g, " ").trim();
-    if (d.length > 20) parts.push(d.endsWith(".") ? d : `${d}.`);
+  if (manualOverride && manualOverride.length >= 20) {
+    return { businessSummary: toConciseBusinessSummary(manualOverride), contentSource: "override" };
+  }
+  if (yahooSummary && yahooSummary.length >= 40) {
+    return { businessSummary: toConciseBusinessSummary(yahooSummary), contentSource: "yahoo" };
+  }
+  if (wikidataDescription && wikidataDescription.length >= 20) {
+    return { businessSummary: toConciseBusinessSummary(wikidataDescription), contentSource: "wikidata" };
+  }
+  if (wikiIntro && wikiIntro.length >= 40) {
+    return { businessSummary: toConciseBusinessSummary(wikiIntro), contentSource: "wiki" };
+  }
+  const sectorLine = sectorFallbackSummary(sym, companyName, sector, industry, preferFund);
+  if (sectorLine) {
+    return { businessSummary: sectorLine, contentSource: "fallback" };
   }
 
-  if (wikiIntro && wikiIntro.length > 40) {
-    const sentences = wikiIntro
-      .split(/(?<=[.!?])\s+/)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 30);
-    let wikiChunk = "";
-    for (const s of sentences.slice(0, 3)) {
-      const low = s.toLowerCase();
-      const dup =
-        wikidata?.text &&
-        (low.includes(wikidata.text.slice(0, 40).toLowerCase()) || wikidata.text.toLowerCase().includes(low.slice(0, 40)));
-      if (dup) continue;
-      wikiChunk = wikiChunk ? `${wikiChunk} ${s}` : s;
-      if (wikiChunk.length > 420) break;
-    }
-    if (wikiChunk.trim()) {
-      const w = wikiChunk.trim();
-      parts.push(w.endsWith(".") ? w : `${w}.`);
-    }
-  }
-
-  if (sector || industry) {
-    const label = companyName ?? sym;
-    parts.push(
-      `Market data classifies ${label} (${sym}) in the ${sector ?? "reported"} sector${industry ? `, ${industry}` : ""} — check the issuer’s latest 10-K for revenue mix and risks.`,
-    );
-  }
-
-  const joined = parts.join(" ").replace(/\s+/g, " ").trim();
-  if (joined.length > 1400) return joined.slice(0, 1397).trimEnd() + "…";
-  if (!joined) {
-    return `${companyName ?? sym} (${sym}): no Wikidata or Wikipedia summary matched. When fundamentals exist, Schwab lists sector ${sector ?? "n/a"} and industry ${industry ?? "n/a"} — read the issuer’s latest 10-K for how the business operates and earns revenue.`;
-  }
-  return joined;
-}
-
-function stripWikiNoise(text: string): string {
-  return text
-    .replace(/\s+/g, " ")
-    .replace(/\{\{[^}]*\}\}/g, "")
-    .trim();
-}
-
-/** Wikipedia extracts intro (plain text) for a page title, or null. */
-async function wikipediaIntroForTitle(title: string): Promise<string | null> {
-  const u = new URL("https://en.wikipedia.org/w/api.php");
-  u.searchParams.set("action", "query");
-  u.searchParams.set("format", "json");
-  u.searchParams.set("prop", "extracts");
-  u.searchParams.set("exintro", "true");
-  u.searchParams.set("explaintext", "true");
-  u.searchParams.set("titles", title);
-
-  try {
-    const resp = await fetch(u.toString(), { headers: { "User-Agent": "FinanceHubDividendModels/1.0 (contact: local)" } });
-    if (!resp.ok) return null;
-    const json = (await resp.json()) as {
-      query?: { pages?: Record<string, { extract?: string; missing?: boolean }> };
-    };
-    const pages = json.query?.pages;
-    if (!pages) return null;
-    const first = Object.values(pages)[0];
-    if (!first || first.missing || !first.extract) return null;
-    return stripWikiNoise(first.extract);
-  } catch (e) {
-    logError("wikipedia_intro_fetch", e);
-    return null;
-  }
-}
-
-/** Longer plain-text extract (not intro-only) for richer “what they do” copy. */
-async function wikipediaArticleExtract(title: string): Promise<string | null> {
-  const u = new URL("https://en.wikipedia.org/w/api.php");
-  u.searchParams.set("action", "query");
-  u.searchParams.set("format", "json");
-  u.searchParams.set("prop", "extracts");
-  u.searchParams.set("explaintext", "true");
-  u.searchParams.set("exintro", "false");
-  u.searchParams.set("exchars", "9000");
-  u.searchParams.set("titles", title);
-
-  try {
-    const resp = await fetch(u.toString(), { headers: { "User-Agent": "FinanceHubDividendModels/1.0 (contact: local)" } });
-    if (!resp.ok) return null;
-    const json = (await resp.json()) as {
-      query?: { pages?: Record<string, { extract?: string; missing?: boolean }> };
-    };
-    const pages = json.query?.pages;
-    if (!pages) return null;
-    const first = Object.values(pages)[0];
-    if (!first || first.missing || !first.extract) return null;
-    return stripWikiNoise(first.extract);
-  } catch (e) {
-    logError("wikipedia_article_fetch", e);
-    return null;
-  }
-}
-
-async function wikipediaSearchBestTitle(query: string): Promise<string | null> {
-  const u = new URL("https://en.wikipedia.org/w/api.php");
-  u.searchParams.set("action", "opensearch");
-  u.searchParams.set("search", query);
-  u.searchParams.set("limit", "3");
-  u.searchParams.set("namespace", "0");
-  u.searchParams.set("format", "json");
-
-  try {
-    const resp = await fetch(u.toString(), { headers: { "User-Agent": "FinanceHubDividendModels/1.0 (contact: local)" } });
-    if (!resp.ok) return null;
-    const json = (await resp.json()) as [string, string[], string[], string[]];
-    const titles = Array.isArray(json?.[1]) ? json[1] : [];
-    return typeof titles[0] === "string" ? titles[0] : null;
-  } catch (e) {
-    logError("wikipedia_opensearch", e);
-    return null;
-  }
-}
-
-function splitIntoParagraphs(text: string, maxParas = 5, minLen = 60): string[] {
-  let chunks = text
-    .split(/\n\n+/)
-    .map((p) => p.trim())
-    .filter((p) => p.length >= minLen);
-  if (chunks.length <= 1 && text.length > 400) {
-    const sentences = text.split(/(?<=[.!?])\s+/).filter((s) => s.length > 40);
-    chunks = [];
-    let buf = "";
-    for (const s of sentences) {
-      const next = buf ? `${buf} ${s}` : s;
-      if (next.length > 520 && buf) {
-        chunks.push(buf.trim());
-        buf = s;
-        if (chunks.length >= maxParas) break;
-      } else {
-        buf = next;
-      }
-    }
-    if (buf && chunks.length < maxParas) chunks.push(buf.trim());
-  }
-  const out = chunks.slice(0, maxParas);
-  if (out.length === 0 && text.length > minLen) return [text.slice(0, 2800)];
-  return out;
+  const label = companyName && companyName !== sym ? companyName : sym;
+  return {
+    businessSummary: `${label} (${sym}): business description not available from Schwab, Yahoo Finance, or other open sources.`,
+    contentSource: "fallback",
+  };
 }
 
 export type SymbolNarrativeResult = {
@@ -217,83 +118,125 @@ export type SymbolNarrativeResult = {
   companyName: string | null;
   sector: string | null;
   industry: string | null;
-  /** 2–4 sentences from Wikidata + Wikipedia + Schwab classification (what they do / revenue context). */
+  /** Short blurb for “What they do” (open sources only). */
   businessSummary: string;
   paragraphs: string[];
   sources: string[];
+  contentSource: NarrativeContentSource;
+  yahooProfileUrl: string | null;
+  /** Excerpt for the separate SEC filing tile. */
+  secFilingSummary: string | null;
+  secForm: string | null;
+  secFilingDate: string | null;
+  secDocumentUrl: string | null;
+  secCik: string | null;
+  secAccession: string | null;
 };
 
 export async function buildSymbolNarrative(symbol: string): Promise<SymbolNarrativeResult> {
   const sym = (symbol ?? "").trim().toUpperCase();
+  const manualOverride = readSymbolNarrativeOverrideForSymbol(sym);
+
   const f = await fetchSchwabInstrumentFundamental(sym);
-  const companyName = f.companyName;
-  const sector = f.sector;
-  const industry = f.industry;
+  const identity = await resolveIssuerIdentity(sym, { schwabCompanyName: f.companyName });
+  const companyName = identity.displayName ?? f.companyName;
+  let sector = f.sector;
+  let industry = f.industry;
   const sources: string[] = ["Schwab instrument fundamentals"];
+  if (identity.nameSource === "openfigi" && identity.displayName) {
+    sources.push(`OpenFIGI (${identity.displayName})`);
+  }
 
-  const paras: string[] = [];
+  if (manualOverride) {
+    sources.unshift("Manual narrative override");
+  }
 
-  const searchQ =
-    companyName && companyName.length > 2 && companyName.length < 140 ? companyName : `${sym} company stock`;
-  const wikiTitle = await wikipediaSearchBestTitle(searchQ);
+  let secExcerpt: string | null = null;
+  let secForm: string | null = null;
+  let secFilingDate: string | null = null;
+  let secDocumentUrl: string | null = null;
+  let secCik: string | null = null;
+  let secAccession: string | null = null;
+
+  let yahooSummary: string | null = null;
+  let yahooProfileUrl: string | null = `https://finance.yahoo.com/quote/${encodeURIComponent(sym)}/profile/`;
+
+  let preferFund = inferPreferFundFiling(sector, industry, companyName);
+  if (/etf|trust/i.test(companyName ?? "") || /etf|trust/i.test(identity.displayName ?? "")) {
+    preferFund = true;
+  }
+
+  if (!manualOverride) {
+    const [secResult, yahooResult] = await Promise.all([
+      fetchSecBusinessExcerpt(sym, { preferFund }).catch((e) => {
+        logError("symbol_narrative_sec", e);
+        return null;
+      }),
+      fetchYahooLongBusinessSummary(sym).catch((e) => {
+        logError("symbol_narrative_yahoo", e);
+        return null;
+      }),
+    ]);
+
+    if (secResult) {
+      secExcerpt = secResult.excerpt;
+      secForm = secResult.form;
+      secFilingDate = secResult.filingDate;
+      secDocumentUrl = secResult.documentUrl;
+      secAccession = secResult.accessionNumber;
+      secCik = String(secResult.cik);
+    }
+
+    if (yahooResult?.summary) {
+      yahooSummary = yahooResult.summary;
+      yahooProfileUrl = yahooResult.profileUrl;
+      if (!sector && yahooResult.sector) sector = yahooResult.sector;
+      if (!industry && yahooResult.industry) industry = yahooResult.industry;
+    }
+  }
+
+  let wikidataDescription: string | null = null;
   let wikiIntro: string | null = null;
-  let wikiBody: string | null = null;
-  if (wikiTitle) {
-    wikiIntro = await wikipediaIntroForTitle(wikiTitle);
-    wikiBody = await wikipediaArticleExtract(wikiTitle);
-    if (wikiIntro || wikiBody) sources.push(`Wikipedia (“${wikiTitle}”, article extract)`);
+  if (!manualOverride && !yahooSummary) {
+    const queries = openSourceSearchQueries(sym, identity, companyName, preferFund);
+    try {
+      const open = await fetchOpenSourceDescriptions(queries);
+      wikidataDescription = open.wikidataDescription;
+      wikiIntro = open.wikiIntro;
+      if (wikidataDescription) sources.push("Wikidata (entity description)");
+      if (wikiIntro) sources.push("Wikipedia (summary)");
+    } catch (e) {
+      logError("symbol_narrative_wiki", e);
+    }
   }
 
-  const wdQuery =
-    companyName && companyName.length > 2 && companyName.length < 140 ? companyName : `${sym} stock company`;
-  const wikidata = await wikidataEnglishDescription(wdQuery);
-  if (wikidata) sources.push(`Wikidata (${wikidata.label}, ${wikidata.id})`);
-
-  const introParas = wikiIntro && wikiIntro.length > 80 ? splitIntoParagraphs(wikiIntro, 2, 40) : [];
-  const bodyParas =
-    wikiBody && wikiBody.length > 200
-      ? splitIntoParagraphs(wikiBody.replace(wikiIntro ?? "", " ").trim(), 4, 80)
-      : [];
-
-  const merged: string[] = [];
-  for (const p of introParas) merged.push(p);
-  for (const p of bodyParas) {
-    if (merged.length >= 5) break;
-    if (!merged.some((x) => x.slice(0, 80) === p.slice(0, 80))) merged.push(p);
-  }
-  paras.push(...merged.slice(0, 5));
-
-  if (paras.length === 0) {
-    paras.push(
-      `${companyName ?? sym} (${sym}) is how this issue appears in your connected market-data feed. Schwab classifies it in the ${sector ?? "unknown"} sector and ${industry ?? "a broad industry"} category when those fields are present.`,
-    );
-    paras.push(
-      "For dividend models, cash flows and yields are only as good as the underlying distribution policy and the quotes used to estimate forward income. Review the issuer’s latest annual report, earnings materials, and exchange filings for how the business earns revenue, funds distributions, and manages leverage or commodity exposure.",
-    );
-    paras.push(
-      "This blurb is informational, not investment advice. Data can be delayed or incomplete; verify critical dates (ex-dividend, pay dates) against your broker and issuer announcements.",
-    );
-  } else if (paras.length <= 2) {
-    paras.push(
-      `From the same public fundamentals snapshot, ${sym} is associated with ${sector ?? "its reported sector"} and ${industry ?? "its reported industry"} when available. Distribution-heavy vehicles often combine fee income, interest spreads, royalties, midstream fees, or portfolio income depending on structure.`,
-    );
-    paras.push(
-      "Use SEC filings (10-K/10-Q), the issuer’s investor relations site, and major news sources for the most current description of operations and risks.",
-    );
-  } else if (paras.length === 3) {
-    paras.push(
-      "Cross-check any Wikipedia summary with primary filings and issuer disclosures; corporate actions and strategy can change meaningfully over time.",
-    );
-  }
-
-  const businessSummary = buildBusinessSummary({
+  const picked = pickOpenSourceNarrative({
     sym,
     companyName,
     sector,
     industry,
+    manualOverride,
+    yahooSummary,
+    wikidataDescription,
     wikiIntro,
-    wikidata,
+    preferFund,
   });
+  const businessSummary = picked.businessSummary;
+
+  if (picked.contentSource === "yahoo") {
+    sources.push("Yahoo Finance (issuer profile)");
+  }
+  if (picked.contentSource === "fallback" && (sector || industry)) {
+    sources.push("Schwab sector/industry classification");
+  }
+
+  const secFilingSummary =
+    secExcerpt && secExcerpt.length >= 60
+      ? toConciseBusinessSummary(secExcerpt, { maxChars: 720, maxSentences: 4 })
+      : null;
+
+  const paras = splitIntoParagraphs(businessSummary, 3, 40);
+  if (paras.length === 0) paras.push(businessSummary);
 
   return {
     symbol: sym,
@@ -301,7 +244,15 @@ export async function buildSymbolNarrative(symbol: string): Promise<SymbolNarrat
     sector,
     industry,
     businessSummary,
-    paragraphs: paras.slice(0, 5),
+    paragraphs: paras,
     sources,
+    contentSource: picked.contentSource,
+    yahooProfileUrl: picked.contentSource === "yahoo" ? yahooProfileUrl : null,
+    secFilingSummary,
+    secForm,
+    secFilingDate,
+    secDocumentUrl,
+    secCik,
+    secAccession,
   };
 }

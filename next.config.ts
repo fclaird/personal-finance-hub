@@ -5,6 +5,7 @@ const isElectronDev = process.env.FINANCE_HUB_ELECTRON_DEV === "1";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  serverExternalPackages: ["better-sqlite3"],
   ...(isElectronDev ? { distDir: ".next-desktop" } : {}),
   turbopack: {
     // Prevent Turbopack from walking up to ~ and selecting the wrong lockfile.

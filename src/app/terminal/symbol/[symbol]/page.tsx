@@ -18,7 +18,10 @@ import {
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import type { Row } from "@/app/components/PositionsGroupedTable";
 import { SymbolLink } from "@/app/components/SymbolLink";
+
+import { SymbolNotesSection } from "./SymbolNotesSection";
 import { formatInt, formatNum, formatOptionIntExtPerShare, formatUsd2 } from "@/lib/format";
+import { formatDisplayDate } from "@/lib/formatDate";
 import { formatOptionSymbolDisplay } from "@/lib/formatOptionDisplay";
 import { symbolPageTargetFromInstrument } from "@/lib/symbolPage";
 import { posNegClass, priceDirClass } from "@/lib/terminal/colors";
@@ -79,6 +82,70 @@ function normSym(s: string) {
   return (s ?? "").trim().toUpperCase();
 }
 
+type SymbolStoryPayload = {
+  ok: boolean;
+  businessSummary?: string;
+  sources?: string[];
+  secFilingSummary?: string | null;
+  secForm?: string | null;
+  secFilingDate?: string | null;
+  secDocumentUrl?: string | null;
+  yahooProfileUrl?: string | null;
+  error?: string;
+};
+
+function openSourceAttribution(sources: string[]): string[] {
+  return sources.filter((s) => !/\(EDGAR\)/i.test(s) && !/^SEC\s+\d/i.test(s));
+}
+
+type AboutState = {
+  text: string;
+  sources: string[];
+  yahooProfileUrl: string | null;
+  refreshing?: boolean;
+};
+
+type SecFilingState = {
+  summary: string;
+  form: string | null;
+  filingDate: string | null;
+  documentUrl: string | null;
+  refreshing?: boolean;
+};
+
+function applySymbolStory(
+  json: SymbolStoryPayload,
+  opts: { refreshing?: boolean },
+): { about: AboutState | null; sec: SecFilingState | null } {
+  const text = (json.businessSummary ?? "").trim();
+  const secSummary = (json.secFilingSummary ?? "").trim();
+  const sources = openSourceAttribution(Array.isArray(json.sources) ? json.sources : []);
+  const refreshing = opts.refreshing === true;
+
+  const aboutState =
+    text || refreshing
+      ? {
+          text,
+          sources,
+          yahooProfileUrl: json.yahooProfileUrl ?? null,
+          refreshing,
+        }
+      : null;
+
+  const secState =
+    secSummary || json.secDocumentUrl || refreshing
+      ? {
+          summary: secSummary,
+          form: json.secForm ?? null,
+          filingDate: json.secFilingDate ?? null,
+          documentUrl: json.secDocumentUrl ?? null,
+          refreshing,
+        }
+      : null;
+
+  return { about: aboutState, sec: secState };
+}
+
 type WindowKey = "1D" | "5D" | "1M" | "3M" | "6M" | "1Y" | "3Y" | "5Y";
 
 export default function TerminalSymbolPage() {
@@ -92,14 +159,17 @@ export default function TerminalSymbolPage() {
   const [windowKey, setWindowKey] = useState<WindowKey>("6M");
   const [nowMs, setNowMs] = useState<number>(0);
   const [positions, setPositions] = useState<Row[]>([]);
-  const [about, setAbout] = useState<{ text: string; sources: string[] } | null>(null);
+  const [about, setAbout] = useState<AboutState | null>(null);
+  const [secFiling, setSecFiling] = useState<SecFilingState | null>(null);
   const [aboutError, setAboutError] = useState<string | null>(null);
+  const [secFilingError, setSecFilingError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function loadAll() {
     setError(null);
     try {
-      const [qResp, bResp, pResp, companyResp, storyResp] = await Promise.all([
+      const storyCacheUrl = `/api/dividend-models/symbol-story?symbol=${encodeURIComponent(sym)}&mode=cache`;
+      const [qResp, bResp, pResp, companyResp, storyCacheResp] = await Promise.all([
         fetch("/api/quotes", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -109,7 +179,7 @@ export default function TerminalSymbolPage() {
         fetch(`/api/performance/benchmarks?symbols=${encodeURIComponent([sym, "SPY", "QQQ"].join(","))}`, { cache: "no-store" }),
         fetch("/api/positions", { cache: "no-store" }),
         fetch(`/api/terminal/company?symbol=${encodeURIComponent(sym)}`, { cache: "no-store" }),
-        fetch(`/api/dividend-models/symbol-story?symbol=${encodeURIComponent(sym)}`, { cache: "no-store" }),
+        fetch(storyCacheUrl, { cache: "no-store" }),
       ]);
 
       const qJson = (await qResp.json()) as { ok: boolean; quotes?: NormalizedQuote[]; error?: string };
@@ -155,26 +225,52 @@ export default function TerminalSymbolPage() {
       setCompany(companyPayload);
 
       setAboutError(null);
+      setSecFilingError(null);
       try {
-        const storyJson = (await storyResp.json()) as {
-          ok: boolean;
-          businessSummary?: string;
-          sources?: string[];
-          error?: string;
-        };
-        if (storyJson.ok) {
-          setAbout({
-            text: (storyJson.businessSummary ?? "").trim(),
-            sources: Array.isArray(storyJson.sources) ? storyJson.sources : [],
-          });
+        const storyCacheJson = (await storyCacheResp.json()) as SymbolStoryPayload & { hasCache?: boolean };
+        if (storyCacheJson.ok) {
+          const applied = applySymbolStory(storyCacheJson, { refreshing: false });
+          if (applied.about) setAbout(applied.about);
+          if (applied.sec) setSecFiling(applied.sec);
         } else {
-          setAbout(null);
-          setAboutError(storyJson.error ?? "Could not load company description.");
+          setAboutError(storyCacheJson.error ?? "Could not load company description.");
         }
       } catch {
-        setAbout(null);
         setAboutError("Could not load company description.");
       }
+
+      void (async () => {
+        try {
+          setAbout((prev) =>
+            prev?.text ? { ...prev, refreshing: true } : { text: "", sources: [], yahooProfileUrl: null, refreshing: true },
+          );
+          setSecFiling((prev) =>
+            prev?.summary ? { ...prev, refreshing: true } : { summary: "", form: null, filingDate: null, documentUrl: null, refreshing: true },
+          );
+          const revResp = await fetch(
+            `/api/dividend-models/symbol-story?symbol=${encodeURIComponent(sym)}&mode=revalidate`,
+            { cache: "no-store" },
+          );
+          const storyJson = (await revResp.json()) as SymbolStoryPayload;
+          if (storyJson.ok) {
+            const applied = applySymbolStory(storyJson, { refreshing: false });
+            setAbout((prev) => {
+              if (!applied.about?.text) return prev?.text ? { ...prev, refreshing: false } : null;
+              return applied.about;
+            });
+            setSecFiling(applied.sec);
+            setAboutError(null);
+            setSecFilingError(null);
+          } else {
+            setAbout((prev) => (prev?.text ? { ...prev, refreshing: false } : null));
+            setSecFiling((prev) => (prev?.summary ? { ...prev, refreshing: false } : null));
+            setAboutError(storyJson.error ?? "Could not load company description.");
+          }
+        } catch {
+          setAbout((prev) => (prev?.text ? { ...prev, refreshing: false } : prev));
+          setSecFiling((prev) => (prev?.summary ? { ...prev, refreshing: false } : prev));
+        }
+      })();
 
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -326,8 +422,8 @@ export default function TerminalSymbolPage() {
             <span>{nameForHeader == null ? "Loading…" : nameForHeader}</span>
           </h1>
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Quote, fundamentals, and your portfolio exposure for this symbol (read-only). Description below is merged from
-            public open-data sources (not investment advice).
+            Quote, fundamentals, and your portfolio exposure for this symbol (read-only). “What they do” uses Schwab,
+            Yahoo Finance, and other open sources; SEC filing text is shown separately below (not investment advice).
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -437,17 +533,74 @@ export default function TerminalSymbolPage() {
 
         <div className="mt-4 rounded-xl border border-zinc-300 bg-white/60 p-4 dark:border-white/20 dark:bg-black/20">
           <div className="text-sm font-semibold">What they do</div>
+          <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+            Short issuer summary from Wikidata, Wikipedia, Yahoo Finance, and Schwab classification.
+          </p>
           {aboutError ? (
             <div className="mt-2 text-sm text-amber-800 dark:text-amber-200/90">{aboutError}</div>
           ) : about?.text ? (
             <p className="mt-2 text-sm leading-7 text-zinc-700 dark:text-zinc-300">{about.text}</p>
           ) : (
-            <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Loading description…</div>
+            <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+              {about?.refreshing ? "Updating business description…" : "Loading business description…"}
+            </div>
           )}
+          {about?.refreshing && about?.text ? (
+            <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">
+              Refreshing from Wikidata, Wikipedia, and Yahoo Finance…
+            </p>
+          ) : null}
           {about?.sources?.length ? (
             <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-500">Sources: {about.sources.join(" · ")}</p>
           ) : null}
+          {about?.yahooProfileUrl ? (
+            <p className="mt-2 text-xs">
+              <a
+                href={about.yahooProfileUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-teal-700 underline underline-offset-2 hover:text-teal-600 dark:text-teal-300 dark:hover:text-teal-200"
+                >
+                  View on Yahoo Finance
+                </a>
+            </p>
+          ) : null}
         </div>
+
+        <div className="mt-4 rounded-xl border border-zinc-300 bg-white/60 p-4 dark:border-white/20 dark:bg-black/20">
+          <div className="text-sm font-semibold">SEC filing</div>
+          <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+            Excerpt from the latest relevant EDGAR filing (10-K, 10-Q, 497, etc.).
+          </p>
+          {secFilingError ? (
+            <div className="mt-2 text-sm text-amber-800 dark:text-amber-200/90">{secFilingError}</div>
+          ) : secFiling?.summary ? (
+            <p className="mt-2 text-sm leading-7 text-zinc-700 dark:text-zinc-300">{secFiling.summary}</p>
+          ) : (
+            <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+              {secFiling?.refreshing ? "Loading SEC filing excerpt…" : "No SEC filing excerpt available for this symbol."}
+            </div>
+          )}
+          {secFiling?.form && secFiling.filingDate ? (
+            <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-500">
+              SEC {secFiling.form} filed {formatDisplayDate(secFiling.filingDate)} (EDGAR)
+            </p>
+          ) : null}
+          {secFiling?.documentUrl ? (
+            <p className="mt-2 text-xs">
+              <a
+                href={secFiling.documentUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-teal-700 underline underline-offset-2 hover:text-teal-600 dark:text-teal-300 dark:hover:text-teal-200"
+              >
+                View filing on SEC EDGAR
+              </a>
+            </p>
+          ) : null}
+        </div>
+
+        <SymbolNotesSection symbol={sym} />
 
         <div className="mt-4 min-w-0 rounded-xl border border-zinc-300 bg-white/60 p-4 dark:border-white/20 dark:bg-black/20">
           <div className="flex flex-wrap items-center justify-between gap-3">

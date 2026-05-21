@@ -2,8 +2,12 @@ import type Database from "better-sqlite3";
 
 import { ensureBenchmarkHistory } from "@/lib/market/benchmarks";
 
-import { monthEndForDate } from "./dates";
+import { monthEndForDate, monthEndsBetweenInclusive } from "./dates";
 import { benchmarkCloseOnOrBefore } from "./prices";
+import { simulatePortfolioDrip } from "./portfolioDripSimulation";
+import { runPortfolioSimulation, type SimulationMonthPoint } from "./portfolioSimulation";
+import { loadSyntheticHoldings } from "./syntheticHoldings";
+import { anchorMonthEndForWindowYears } from "./symbolBacktestAnchor";
 import type { SimulationMode, TimelineYears } from "./types";
 
 export type ModeledTimelinePoint = {
@@ -20,7 +24,24 @@ export type ModeledTimelinePoint = {
 export type ModeledTimelineResult = {
   points: ModeledTimelinePoint[];
   totalDividendsReceived: number;
+  /** Set when synthetic holdings are missing for this window. */
+  missingSynthetic?: boolean;
 };
+
+function simulateModeledPoints(
+  db: Database.Database,
+  holdings: Array<{ symbol: string; shares: number }>,
+  monthEnds: string[],
+  mode: SimulationMode,
+  endMonth: string,
+): SimulationMonthPoint[] {
+  if (monthEnds.length === 0) return [];
+  const startMonthEnd = monthEnds[0]!;
+  if (mode === "reinvest") {
+    return simulatePortfolioDrip(db, holdings, monthEnds, startMonthEnd, endMonth).points;
+  }
+  return runPortfolioSimulation(db, holdings, monthEnds, "withdraw", endMonth);
+}
 
 export async function buildModeledMonthlyTimeline(
   db: Database.Database,
@@ -30,41 +51,32 @@ export async function buildModeledMonthlyTimeline(
   includeSpy: boolean,
   includeQqq: boolean,
 ): Promise<ModeledTimelineResult> {
+  const syntheticHoldings = loadSyntheticHoldings(db, portfolioId, years);
+  if (syntheticHoldings.length === 0) {
+    return { points: [], totalDividendsReceived: 0, missingSynthetic: true };
+  }
+
   const now = new Date();
-  const cutoff = new Date(Date.UTC(now.getUTCFullYear() - years, now.getUTCMonth(), now.getUTCDate()));
-  const cutoffMonthEnd = monthEndForDate(cutoff);
+  const endMonth = monthEndForDate(now);
+  const anchorMonthEnd = anchorMonthEndForWindowYears(now, years);
+  const monthEnds = monthEndsBetweenInclusive(anchorMonthEnd, endMonth);
+  if (monthEnds.length === 0) {
+    return { points: [], totalDividendsReceived: 0, missingSynthetic: true };
+  }
 
-  const rows = db
-    .prepare(
-      `
-      SELECT month_end, nav_total, total_dividends, portfolio_rebased_pct, price_only_rebased_pct, status
-      FROM dividend_model_portfolio_sim_monthly
-      WHERE portfolio_id = ? AND simulation_mode = ? AND month_end >= ?
-      ORDER BY month_end ASC
-    `,
-    )
-    .all(portfolioId, mode, cutoffMonthEnd) as Array<{
-    month_end: string;
-    nav_total: number | null;
-    total_dividends: number;
-    portfolio_rebased_pct: number | null;
-    price_only_rebased_pct: number | null;
-    status: string;
-  }>;
-
-  if (rows.length === 0) return { points: [], totalDividendsReceived: 0 };
+  const simPoints = simulateModeledPoints(db, syntheticHoldings, monthEnds, mode, endMonth);
 
   if (includeSpy) await ensureBenchmarkHistory("SPY");
   if (includeQqq) await ensureBenchmarkHistory("QQQ");
 
-  const firstMe = rows[0]!.month_end;
+  const firstMe = simPoints[0]?.month_end ?? anchorMonthEnd;
   let spyBase: number | null = null;
   let qqqBase: number | null = null;
   if (includeSpy) spyBase = benchmarkCloseOnOrBefore("SPY", firstMe);
   if (includeQqq) qqqBase = benchmarkCloseOnOrBefore("QQQ", firstMe);
 
   let totalDividendsReceived = 0;
-  const points = rows.map((r) => {
+  const points = simPoints.map((r) => {
     totalDividendsReceived += Math.max(0, Number(r.total_dividends) || 0);
 
     let spyPct: number | null = null;

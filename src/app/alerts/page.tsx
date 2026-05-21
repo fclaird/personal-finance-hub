@@ -7,6 +7,7 @@ import { DraggableColumnHeader, DRAGGABLE_COLUMN_HEADER_GRAB_CLASS } from "@/app
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatInt, formatNum, formatOptionIntExtPerShare, formatUsd2 } from "@/lib/format";
+import { formatDisplayDateTime } from "@/lib/formatDate";
 import { formatOptionSymbolDisplay } from "@/lib/formatOptionDisplay";
 import { posNegClass } from "@/lib/terminal/colors";
 import { symbolPageTargetFromInstrument } from "@/lib/symbolPage";
@@ -807,7 +808,7 @@ export default function AlertsPage() {
                       case "when":
                         return (
                           <td key={col} className="py-2 pr-4">
-                            {new Date(e.occurred_at).toLocaleString()}
+                            {formatDisplayDateTime(e.occurred_at)}
                           </td>
                         );
                       case "severity":

@@ -1,11 +1,16 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, Treemap, XAxis, YAxis } from "recharts";
 
 import type { PortfolioDashboard } from "@/lib/dividendModels/dashboardMetrics";
-import { assignEarthToneColorsBySymbols, distinctColorForIndex, EARTH_TONE_PIE_COLORS } from "@/lib/charts/pieEarthTones";
+import {
+  assignEarthToneColorsByLayoutOrder,
+  distinctColorForIndex,
+  EARTH_TONE_PIE_COLORS,
+} from "@/lib/charts/pieEarthTones";
 import { formatUsd2 } from "@/lib/format";
+import { formatDisplayDate, formatDisplayMonth } from "@/lib/formatDate";
 
 function usd(v: number | null, mask: boolean) {
   if (v == null || !Number.isFinite(v)) return "—";
@@ -22,30 +27,59 @@ function num(v: number | null, d = 2) {
   return v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
+type TreemapLabelMode = "dollars" | "percent";
+type CumulativeDividendsRange = "1y" | "lifetime";
+
+/** YYYY-MM for the first month included in a trailing-12-month window. */
+function trailingTwelveMonthCutoffYm(): string {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1));
+  return `${start.getUTCFullYear()}-${String(start.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function buildCumulativeDividendSeries(
+  rows: Array<{ month: string; amount: number; cumulative: number }>,
+  range: CumulativeDividendsRange,
+): Array<{ month: string; amount: number; cumulative: number }> {
+  const cutoff = range === "1y" ? trailingTwelveMonthCutoffYm() : null;
+  const filtered = cutoff ? rows.filter((r) => r.month >= cutoff) : rows;
+  let cum = 0;
+  return filtered.map((r) => {
+    cum += r.amount;
+    return { month: r.month, amount: r.amount, cumulative: cum };
+  });
+}
+
 type Props = {
   dashboard: PortfolioDashboard | null;
   masked: boolean;
 };
 
 export function DividendModelsDashboard({ dashboard, masked }: Props) {
+  const [treemapLabelMode, setTreemapLabelMode] = useState<TreemapLabelMode>("dollars");
+  const [cumRange, setCumRange] = useState<CumulativeDividendsRange>("lifetime");
+
   const treemapData = useMemo(() => {
-    const rows = [...(dashboard?.treemap ?? [])].sort((a, b) => a.symbol.localeCompare(b.symbol));
-    const colorBySym = assignEarthToneColorsBySymbols(rows.map((t) => t.symbol));
-    return rows.map((t) => ({
-      name: `${t.symbol}\n${usd(t.value, masked)}`,
-      size: t.value,
-      fill: colorBySym.get(t.symbol) ?? distinctColorForIndex(0),
-    }));
-  }, [dashboard?.treemap, masked]);
+    const rows = [...(dashboard?.treemap ?? [])].sort((a, b) => b.value - a.value);
+    const totalValue = dashboard?.totalValue ?? rows.reduce((sum, t) => sum + t.value, 0);
+    const colorBySym = assignEarthToneColorsByLayoutOrder(rows.map((t) => t.symbol));
+    return rows.map((t) => {
+      const sharePct = totalValue > 0 ? (t.value / totalValue) * 100 : null;
+      const label =
+        treemapLabelMode === "dollars"
+          ? `${t.symbol}\n${usd(t.value, masked)}`
+          : `${t.symbol}\n${pct(sharePct)}`;
+      return {
+        name: label,
+        size: t.value,
+        fill: colorBySym.get(t.symbol) ?? distinctColorForIndex(0),
+      };
+    });
+  }, [dashboard?.treemap, dashboard?.totalValue, masked, treemapLabelMode]);
 
   const cumData = useMemo(
-    () =>
-      (dashboard?.cumulativeDividends ?? []).map((r) => ({
-        month: r.month,
-        cumulative: r.cumulative,
-        amount: r.amount,
-      })),
-    [dashboard?.cumulativeDividends],
+    () => buildCumulativeDividendSeries(dashboard?.cumulativeDividends ?? [], cumRange),
+    [dashboard?.cumulativeDividends, cumRange],
   );
 
   if (!dashboard || dashboard.totalPositions === 0) {
@@ -155,7 +189,9 @@ export function DividendModelsDashboard({ dashboard, masked }: Props) {
             </div>
             <div className="flex min-h-10 items-center justify-between gap-4 border-b border-zinc-700/80 py-2">
               <span className="text-sm text-zinc-400">Next date</span>
-              <span className="text-sm font-medium tabular-nums text-zinc-100">{d.upcoming.nextDate ?? "—"}</span>
+              <span className="text-sm font-medium tabular-nums text-zinc-100">
+                {formatDisplayDate(d.upcoming.nextDate)}
+              </span>
             </div>
             <div className="flex min-h-10 items-center justify-between gap-4 py-2">
               <span className="text-sm text-zinc-400">Milestones hit</span>
@@ -167,10 +203,39 @@ export function DividendModelsDashboard({ dashboard, masked }: Props) {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="rounded-xl border border-zinc-600/80 bg-zinc-950 p-5 shadow-lg sm:p-6">
-          <div className="text-sm font-semibold uppercase tracking-wide text-cyan-200/95">Cumulative dividends</div>
-          <p className="mt-2 text-sm leading-relaxed text-zinc-400">
-            From simulated monthly payouts (Yahoo dividend history × your share counts) after you build history.
-          </p>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold uppercase tracking-wide text-cyan-200/95">Cumulative dividends</div>
+              <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+                Running total of simulated monthly payouts (Yahoo dividend history × your share counts).
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-zinc-500">Range</span>
+              <button
+                type="button"
+                onClick={() => setCumRange("1y")}
+                className={`rounded-md px-2 py-1 text-xs font-semibold transition-colors ${
+                  cumRange === "1y"
+                    ? "bg-cyan-500/25 text-cyan-100 ring-1 ring-cyan-400/50"
+                    : "border border-zinc-600 text-zinc-400 hover:text-zinc-200"
+                }`}
+              >
+                1 year
+              </button>
+              <button
+                type="button"
+                onClick={() => setCumRange("lifetime")}
+                className={`rounded-md px-2 py-1 text-xs font-semibold transition-colors ${
+                  cumRange === "lifetime"
+                    ? "bg-cyan-500/25 text-cyan-100 ring-1 ring-cyan-400/50"
+                    : "border border-zinc-600 text-zinc-400 hover:text-zinc-200"
+                }`}
+              >
+                Lifetime
+              </button>
+            </div>
+          </div>
           <div className="mt-5 h-56 w-full min-w-0">
             {cumData.length === 0 ? (
               <div className="flex h-full items-center justify-center px-4 text-center text-sm leading-relaxed text-zinc-400">
@@ -179,16 +244,33 @@ export function DividendModelsDashboard({ dashboard, masked }: Props) {
             ) : (
               <ResponsiveContainer width="100%" height="100%" minHeight={200}>
                 <LineChart data={cumData} margin={{ left: 4, right: 8, top: 8, bottom: 0 }}>
-                  <XAxis dataKey="month" tick={{ fill: "#a1a1aa", fontSize: 11 }} />
+                  <XAxis
+                    dataKey="month"
+                    tick={{ fill: "#a1a1aa", fontSize: 11 }}
+                    tickFormatter={(v: string) => formatDisplayMonth(v, v)}
+                  />
                   <YAxis tick={{ fill: "#a1a1aa", fontSize: 11 }} tickFormatter={(v: number) => usd(v, masked)} width={60} />
                   <Tooltip
-                    formatter={(v) => usd(typeof v === "number" ? v : Number(v), masked)}
-                    labelClassName="text-zinc-900"
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      const row = payload[0]?.payload as { amount?: number; cumulative?: number } | undefined;
+                      return (
+                        <div className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs shadow-md dark:border-white/20 dark:bg-zinc-900">
+                          <div className="font-semibold text-zinc-900 dark:text-zinc-100">
+                            {typeof label === "string" ? formatDisplayMonth(label, label) : String(label)}
+                          </div>
+                          <div className="mt-1 space-y-0.5 tabular-nums text-zinc-700 dark:text-zinc-300">
+                            <div>This month: {usd(row?.amount ?? null, masked)}</div>
+                            <div>Cumulative: {usd(row?.cumulative ?? null, masked)}</div>
+                          </div>
+                        </div>
+                      );
+                    }}
                   />
                   <Line
                     type="monotone"
                     dataKey="cumulative"
-                    name="Cumulative"
+                    name="Cumulative dividends"
                     stroke={EARTH_TONE_PIE_COLORS[0]}
                     strokeWidth={2}
                     dot={false}
@@ -237,8 +319,37 @@ export function DividendModelsDashboard({ dashboard, masked }: Props) {
       </div>
 
       <div className="rounded-xl border border-zinc-600/80 bg-zinc-950 p-5 shadow-lg sm:p-6">
-        <div className="text-sm font-semibold uppercase tracking-wide text-emerald-200/95">Ticker treemap — position size</div>
-        <p className="mt-2 text-sm leading-relaxed text-zinc-400">Area ∝ market value (latest quote × shares).</p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold uppercase tracking-wide text-emerald-200/95">Ticker treemap — position size</div>
+            <p className="mt-2 text-sm leading-relaxed text-zinc-400">Area ∝ market value (latest quote × shares).</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-zinc-500">Labels</span>
+            <button
+              type="button"
+              onClick={() => setTreemapLabelMode("dollars")}
+              className={`rounded-md px-2 py-1 text-xs font-semibold transition-colors ${
+                treemapLabelMode === "dollars"
+                  ? "bg-emerald-500/25 text-emerald-100 ring-1 ring-emerald-400/50"
+                  : "border border-zinc-600 text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              Dollars
+            </button>
+            <button
+              type="button"
+              onClick={() => setTreemapLabelMode("percent")}
+              className={`rounded-md px-2 py-1 text-xs font-semibold transition-colors ${
+                treemapLabelMode === "percent"
+                  ? "bg-emerald-500/25 text-emerald-100 ring-1 ring-emerald-400/50"
+                  : "border border-zinc-600 text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              % of total
+            </button>
+          </div>
+        </div>
         <div className="mt-5 h-72 w-full min-w-0">
           {treemapData.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-zinc-400">No market values to chart.</div>

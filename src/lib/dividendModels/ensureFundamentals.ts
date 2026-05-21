@@ -4,6 +4,7 @@ import { logError } from "@/lib/log";
 import { newId } from "@/lib/id";
 
 import { fetchMergedDividendFundamentals } from "./mergedFundamentals";
+import { readLatestStoredDisplayName } from "./symbolDisplayName";
 
 const DEFAULT_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 /** When a snapshot exists but has no yield data, re-fetch after this interval (avoid hammering APIs on every navigation). */
@@ -14,6 +15,7 @@ function shouldRefreshFundamental(db: Database.Database, symbol: string, maxAgeM
   if (age == null) return true;
   if (age >= maxAgeMs) return true;
   if (latestSnapMissingYield(db, symbol) && age >= RETRY_MISSING_MS) return true;
+  if (!readLatestStoredDisplayName(db, symbol) && age >= RETRY_MISSING_MS) return true;
   return false;
 }
 
@@ -56,8 +58,10 @@ async function upsertOneFundamental(db: Database.Database, sym: string): Promise
   const now = new Date().toISOString();
   const ins = db.prepare(
     `
-    INSERT INTO dividend_model_symbol_fundamentals_snap (id, symbol, captured_at, div_yield, annual_div_est, next_ex_date, raw_json, source)
-    VALUES (@id, @symbol, @captured_at, @div_yield, @annual_div_est, @next_ex_date, @raw_json, @source)
+    INSERT INTO dividend_model_symbol_fundamentals_snap
+      (id, symbol, captured_at, display_name, div_yield, annual_div_est, next_ex_date, raw_json, source)
+    VALUES
+      (@id, @symbol, @captured_at, @display_name, @div_yield, @annual_div_est, @next_ex_date, @raw_json, @source)
   `,
   );
   try {
@@ -66,6 +70,7 @@ async function upsertOneFundamental(db: Database.Database, sym: string): Promise
       id: newId("dmfs"),
       symbol: sym,
       captured_at: now,
+      display_name: m.displayName,
       div_yield: m.divYield,
       annual_div_est: m.annualDivEst,
       next_ex_date: m.nextExDate,

@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
+import { captureForwardSnapForPortfolio, defaultLiveStartedAtIso } from "@/lib/dividendModels/forwardSnap";
 import { parsePortfolioMeta, stringifyPortfolioMeta, type DividendPortfolioMeta } from "@/lib/dividendModels/portfolioMeta";
+import { parseTrackingMode, type TrackingMode } from "@/lib/dividendModels/types";
 import { notPosterityWhereSql } from "@/lib/posterity";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -12,12 +14,16 @@ export async function PATCH(req: Request, ctx: Ctx) {
     | {
         name?: string;
         sliceAccountId?: string | null;
+        trackingMode?: string;
+        liveStartedAt?: string | null;
       }
     | null;
 
   const db = getDb();
-  const row = db.prepare(`SELECT name, meta_json FROM dividend_model_portfolios WHERE id = ?`).get(id) as
-    | { name: string; meta_json: string | null }
+  const row = db
+    .prepare(`SELECT name, meta_json, live_started_at AS liveStartedAt, tracking_mode AS trackingMode FROM dividend_model_portfolios WHERE id = ?`)
+    .get(id) as
+    | { name: string; meta_json: string | null; liveStartedAt: string | null; trackingMode: string | null }
     | undefined;
   if (!row) return NextResponse.json({ ok: false, error: "Portfolio not found" }, { status: 404 });
 
@@ -56,14 +62,40 @@ export async function PATCH(req: Request, ctx: Ctx) {
     }
   }
 
+  let nextTracking: TrackingMode =
+    row.trackingMode === "live" ? "live" : "backtest";
+  if (body?.trackingMode != null) {
+    nextTracking = parseTrackingMode(body.trackingMode);
+  }
+
+  let nextLiveStarted = row.liveStartedAt;
+  if (body && "liveStartedAt" in body) {
+    nextLiveStarted = body.liveStartedAt?.trim() ? body.liveStartedAt.trim() : null;
+  }
+  if (nextTracking === "live" && !nextLiveStarted) {
+    nextLiveStarted = defaultLiveStartedAtIso();
+  }
+
   const metaStr = stringifyPortfolioMeta(nextMeta);
-  db.prepare(`UPDATE dividend_model_portfolios SET name = ?, meta_json = ? WHERE id = ?`).run(nextName, metaStr, id);
+  db.prepare(
+    `UPDATE dividend_model_portfolios SET name = ?, meta_json = ?, tracking_mode = ?, live_started_at = ? WHERE id = ?`,
+  ).run(nextName, metaStr, nextTracking, nextLiveStarted, id);
+
+  if (nextTracking === "live") {
+    try {
+      await captureForwardSnapForPortfolio(db, id);
+    } catch {
+      /* non-fatal: timeline load will retry capture */
+    }
+  }
 
   return NextResponse.json({
     ok: true,
     id,
     name: nextName,
     sliceAccountId: nextMeta.sliceAccountId ?? null,
+    trackingMode: nextTracking,
+    liveStartedAt: nextLiveStarted,
   });
 }
 

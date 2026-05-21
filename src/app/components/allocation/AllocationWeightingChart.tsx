@@ -71,6 +71,33 @@ function underlyingKeyFromBarId(id: string): string {
   return id;
 }
 
+function pctAxisStep(maxAbs: number): number {
+  if (maxAbs <= 12) return 2;
+  if (maxAbs <= 50) return 5;
+  if (maxAbs <= 100) return 10;
+  return 20;
+}
+
+/** Percent axis bounds from data min/max with padding and rounded tick-friendly limits. */
+function pctDomainFromMinMax(
+  minV: number,
+  maxV: number,
+  opts?: { tight?: boolean },
+): [number, number] {
+  const span = maxV - minV;
+  const pad = opts?.tight
+    ? Math.max(0.2, span * 0.05, Math.abs(maxV) * 0.02)
+    : Math.max(0.35, span * 0.08, Math.abs(maxV) * 0.04);
+  let lo = minV < 0 ? minV - pad : Math.max(0, minV - pad * 0.25);
+  let hi = maxV + pad;
+  const step = pctAxisStep(Math.max(Math.abs(lo), Math.abs(hi)));
+  hi = Math.ceil(hi / step) * step;
+  if (minV < 0) lo = Math.floor(lo / step) * step;
+  else lo = 0;
+  if (hi <= lo) return [Math.min(lo, 0), Math.max(hi, step)];
+  return [lo, hi];
+}
+
 function buildBarRows(
   scopedRows: AllocationChartExposureRow[],
   pieMetric: AllocationChartPieMetric,
@@ -265,13 +292,26 @@ export function AllocationWeightingChart({
       minV = Math.min(minV, p);
       maxV = Math.max(maxV, p);
     }
-    const span = maxV - minV;
-    const pad = Math.max(0.35, span * 0.08, Math.abs(maxV) * 0.04);
-    const lo = minV < 0 ? minV - pad : Math.max(0, minV - pad * 0.25);
-    const hi = maxV + pad;
-    if (hi <= lo) return [Math.min(lo, 0), Math.max(hi, 1)];
-    return [lo, hi];
+    return pctDomainFromMinMax(minV, maxV);
   }, [barDataSorted]);
+
+  /** Y-axis from visible history series, not fixed 0–100%. */
+  const linePctDomain = useMemo((): [number, number] => {
+    if (!lineChartData.length) return [0, 100];
+    let minV = Infinity;
+    let maxV = -Infinity;
+    for (const row of lineChartData) {
+      for (const [key, val] of Object.entries(row)) {
+        if (key === "date") continue;
+        const n = typeof val === "number" ? val : Number(val);
+        if (!Number.isFinite(n)) continue;
+        minV = Math.min(minV, n);
+        maxV = Math.max(maxV, n);
+      }
+    }
+    if (!Number.isFinite(minV) || !Number.isFinite(maxV)) return [0, 100];
+    return pctDomainFromMinMax(minV, maxV, { tight: true });
+  }, [lineChartData]);
 
   return (
     <div className={split ? "mt-0 flex h-full min-h-0 w-full min-w-0 flex-col" : "mt-4 w-full min-w-0"}>
@@ -338,7 +378,7 @@ export function AllocationWeightingChart({
                 <LineChart data={lineChartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" className="stroke-zinc-200 dark:stroke-zinc-700" />
                   <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={24} />
-                  <YAxis domain={[0, 100]} tickFormatter={(v) => `${v}%`} width={44} tick={{ fontSize: 11 }} />
+                  <YAxis domain={linePctDomain} tickFormatter={(v) => `${v}%`} width={44} tick={{ fontSize: 11 }} />
                   <Tooltip
                     content={({ active, payload, label }) => {
                       if (!active || !payload?.length) return null;

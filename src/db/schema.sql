@@ -224,6 +224,7 @@ CREATE TABLE IF NOT EXISTS dividend_model_portfolios (
   name TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   live_started_at TEXT,
+  tracking_mode TEXT NOT NULL DEFAULT 'backtest',
   meta_json TEXT
 );
 
@@ -244,6 +245,7 @@ CREATE TABLE IF NOT EXISTS dividend_model_symbol_fundamentals_snap (
   id TEXT PRIMARY KEY,
   symbol TEXT NOT NULL COLLATE NOCASE,
   captured_at TEXT NOT NULL,
+  display_name TEXT,
   div_yield REAL,
   annual_div_est REAL,
   next_ex_date TEXT,
@@ -295,6 +297,47 @@ CREATE TABLE IF NOT EXISTS symbol_monthly_market (
 
 CREATE INDEX IF NOT EXISTS idx_symbol_monthly_market_symbol_end ON symbol_monthly_market(symbol, month_end);
 
+-- Raw dividend payment events (5y Yahoo backfill; shared across portfolios).
+CREATE TABLE IF NOT EXISTS symbol_dividend_payments (
+  symbol TEXT NOT NULL COLLATE NOCASE,
+  pay_date TEXT NOT NULL,
+  amount REAL NOT NULL,
+  source TEXT NOT NULL DEFAULT 'yahoo_chart_div',
+  captured_at TEXT NOT NULL,
+  PRIMARY KEY (symbol, pay_date, amount)
+);
+
+CREATE INDEX IF NOT EXISTS idx_symbol_dividend_payments_symbol_date ON symbol_dividend_payments(symbol, pay_date);
+
+-- Explicit backtest window start prices (market close at window anchor; not purchase price).
+CREATE TABLE IF NOT EXISTS symbol_backtest_anchor (
+  symbol TEXT NOT NULL COLLATE NOCASE,
+  window_years INTEGER NOT NULL,
+  anchor_month_end TEXT NOT NULL,
+  close_eom REAL,
+  price_source TEXT NOT NULL,
+  computed_at TEXT NOT NULL,
+  PRIMARY KEY (symbol, window_years)
+);
+
+CREATE INDEX IF NOT EXISTS idx_symbol_backtest_anchor_symbol ON symbol_backtest_anchor(symbol);
+
+-- Backtest-only synthetic share counts (target NAV at window start; does not modify dividend_model_holdings).
+CREATE TABLE IF NOT EXISTS dividend_model_synthetic_holdings (
+  portfolio_id TEXT NOT NULL REFERENCES dividend_model_portfolios(id) ON DELETE CASCADE,
+  window_years INTEGER NOT NULL,
+  symbol TEXT NOT NULL COLLATE NOCASE,
+  synthetic_shares REAL NOT NULL,
+  anchor_month_end TEXT NOT NULL,
+  target_nav_usd REAL NOT NULL,
+  weight_pct REAL NOT NULL,
+  computed_at TEXT NOT NULL,
+  PRIMARY KEY (portfolio_id, window_years, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dividend_model_synthetic_holdings_portfolio
+  ON dividend_model_synthetic_holdings(portfolio_id, window_years);
+
 -- Hypothetical portfolio path: reinvest vs withdraw (manual shares + symbol_monthly_market).
 CREATE TABLE IF NOT EXISTS dividend_model_portfolio_sim_monthly (
   portfolio_id TEXT NOT NULL REFERENCES dividend_model_portfolios(id) ON DELETE CASCADE,
@@ -311,6 +354,22 @@ CREATE TABLE IF NOT EXISTS dividend_model_portfolio_sim_monthly (
 
 CREATE INDEX IF NOT EXISTS idx_dividend_model_sim_monthly ON dividend_model_portfolio_sim_monthly(portfolio_id, simulation_mode, month_end);
 
+-- DRIP ledger: one row per dividend payment, with the pay-date price and resulting share count.
+CREATE TABLE IF NOT EXISTS dividend_model_drip_ledger (
+  portfolio_id TEXT NOT NULL REFERENCES dividend_model_portfolios(id) ON DELETE CASCADE,
+  symbol TEXT NOT NULL COLLATE NOCASE,
+  pay_date TEXT NOT NULL,
+  amount_per_share REAL NOT NULL,
+  dividend_cash REAL NOT NULL,
+  reinvest_price REAL NOT NULL,
+  shares_added REAL NOT NULL,
+  shares_after REAL NOT NULL,
+  computed_at TEXT NOT NULL,
+  PRIMARY KEY (portfolio_id, symbol, pay_date, amount_per_share)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dividend_model_drip_ledger_portfolio ON dividend_model_drip_ledger(portfolio_id, pay_date);
+
 -- Mode B chart: forward-only weekly (Friday week key) snapshots; no historical forward rows before live_started_at.
 CREATE TABLE IF NOT EXISTS dividend_model_portfolio_forward_snap (
   portfolio_id TEXT NOT NULL REFERENCES dividend_model_portfolios(id) ON DELETE CASCADE,
@@ -325,6 +384,21 @@ CREATE TABLE IF NOT EXISTS dividend_model_portfolio_forward_snap (
 );
 
 CREATE INDEX IF NOT EXISTS idx_dividend_model_forward_portfolio_asof ON dividend_model_portfolio_forward_snap(portfolio_id, as_of);
+
+-- Live forward tracking for Schwab-aggregated Dividends tab (all accounts, dividend book).
+CREATE TABLE IF NOT EXISTS dividend_book_meta (
+  id TEXT PRIMARY KEY DEFAULT 'default',
+  live_started_at TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dividend_book_forward_snap (
+  as_of TEXT PRIMARY KEY,
+  nav_total REAL,
+  dividends_period REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  computed_at TEXT NOT NULL
+);
 
 -- Terminal X digest cache (server-side; populated by cron or manual refresh).
 CREATE TABLE IF NOT EXISTS x_digest_cache (
@@ -405,5 +479,43 @@ CREATE TABLE IF NOT EXISTS earnings_opp_metrics (
   opportunity_score REAL,
   metrics_source TEXT,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- User-authored notes per ticker (Terminal symbol page).
+CREATE TABLE IF NOT EXISTS symbol_notes (
+  symbol TEXT PRIMARY KEY COLLATE NOCASE,
+  body TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
+
+-- Cached issuer narrative: business_summary = open sources; sec_filing_summary = EDGAR excerpt.
+CREATE TABLE IF NOT EXISTS symbol_issuer_narrative (
+  symbol TEXT PRIMARY KEY COLLATE NOCASE,
+  business_summary TEXT NOT NULL,
+  sources_json TEXT NOT NULL,
+  content_source TEXT NOT NULL,
+  yahoo_profile_url TEXT,
+  sec_filing_summary TEXT,
+  sec_cik TEXT,
+  sec_form TEXT,
+  sec_filing_date TEXT,
+  sec_accession TEXT,
+  sec_document_url TEXT,
+  fetched_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Curated “what they do” copy (wins over automated sources when set).
+CREATE TABLE IF NOT EXISTS symbol_narrative_override (
+  symbol TEXT PRIMARY KEY COLLATE NOCASE,
+  summary TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Curated “what they do” copy (wins over automated sources when set).
+CREATE TABLE IF NOT EXISTS symbol_narrative_override (
+  symbol TEXT PRIMARY KEY COLLATE NOCASE,
+  summary TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 

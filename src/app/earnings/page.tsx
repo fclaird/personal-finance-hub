@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatUsdCompact } from "@/lib/format";
+import { formatDisplayDate } from "@/lib/formatDate";
 
 type Row = {
   id: string;
@@ -235,7 +236,7 @@ export default function EarningsPage() {
                   <td className="py-2 pr-4 font-medium">
                     <SymbolLink symbol={r.symbol}>{r.symbol}</SymbolLink>
                   </td>
-                  <td className="py-2 pr-4 tabular-nums">{r.earnings_date}</td>
+                  <td className="py-2 pr-4 tabular-nums">{formatDisplayDate(r.earnings_date)}</td>
                   <td className="py-2 pr-4 text-right tabular-nums">{r.days_to_earnings}</td>
                   <td className="py-2 pr-4 uppercase text-zinc-600 dark:text-zinc-400">{(r.time_of_day ?? "—").toString()}</td>
                   <td className="py-2 pr-4 text-right tabular-nums">{ivHistPct(r.iv_current)}</td>

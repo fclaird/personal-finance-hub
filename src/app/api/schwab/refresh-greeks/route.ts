@@ -14,6 +14,7 @@ export async function POST() {
     ok: true,
     carryForwardApplied: result.carryForwardApplied,
     updated: result.updated,
+    pricesUpdated: result.pricesUpdated,
     message: result.message,
   });
 }

@@ -12,18 +12,17 @@ function asNumber(v: unknown): number | null {
   return null;
 }
 
-function pickPrice(quote: Record<string, unknown>): number | null {
+export function pickSchwabQuotePrice(quote: Record<string, unknown>): number | null {
   const rawLast = asNumber(quote.lastPrice) ?? null;
   const mark = asNumber(quote.mark) ?? null;
   const close = asNumber(quote.closePrice) ?? null;
   const display = schwabQuoteDisplayPrice(rawLast, mark, close);
   if (display != null && display > 0) return display;
-  return (
-    asNumber(quote.bid) ??
-    asNumber(quote.ask) ??
-    (close != null && close > 0 ? close : null) ??
-    null
-  );
+  const bid = asNumber(quote.bidPrice ?? quote.bid);
+  const ask = asNumber(quote.askPrice ?? quote.ask);
+  const mid =
+    bid != null && ask != null && bid > 0 && ask > 0 ? (bid + ask) / 2 : null;
+  return mid ?? bid ?? ask ?? (close != null && close > 0 ? close : null);
 }
 
 export type SchwabQuotesPersistResult = {
@@ -73,7 +72,7 @@ export async function runSchwabQuotesPersist(db?: Database.Database): Promise<Sc
       const entry = resp[sym] ?? resp[sym.toUpperCase()];
       const quote = schwabQuoteObjectFromEntry(entry);
       if (!quote) continue;
-      const px = pickPrice(quote);
+      const px = pickSchwabQuotePrice(quote);
       if (px == null || px <= 0) continue;
       upsert.run({ symbol: sym.toUpperCase(), date: today, close: px });
       updated++;

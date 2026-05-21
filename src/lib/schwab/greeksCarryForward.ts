@@ -71,6 +71,7 @@ export function carryForwardGreeksFromPriorSnapshots(db: Database.Database, snap
       AND p2.security_id = @security_id
       AND hs2.id <> @snapshot_id
       AND og.delta IS NOT NULL
+      AND ABS(og.delta) > 1e-12
     ORDER BY hs2.as_of DESC, hs2.created_at DESC
     LIMIT 1
     `,
@@ -96,7 +97,14 @@ export function carryForwardGreeksFromPriorSnapshots(db: Database.Database, snap
     const hasDelta = db
       .prepare(`SELECT delta FROM option_greeks WHERE position_id = ?`)
       .get(r.position_id) as { delta: number | null } | undefined;
-    if (hasDelta != null && hasDelta.delta != null && Number.isFinite(hasDelta.delta)) continue;
+    if (
+      hasDelta != null &&
+      hasDelta.delta != null &&
+      Number.isFinite(hasDelta.delta) &&
+      Math.abs(hasDelta.delta) > 1e-12
+    ) {
+      continue;
+    }
 
     const donor = findDonor.get({
       account_id: r.account_id,

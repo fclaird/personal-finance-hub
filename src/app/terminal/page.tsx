@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Line, LineChart, ResponsiveContainer } from "recharts";
+import { Area, AreaChart, Line, LineChart, ReferenceLine, ResponsiveContainer } from "recharts";
 
 import { usePrivacy } from "@/app/components/PrivacyProvider";
+import { useMarketAwareInterval } from "@/hooks/useMarketAwareInterval";
 import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator";
 import { isUsEquityPreOpenFuturesPollWindow, isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import type { NormalizedQuote as ApiNormalizedQuote } from "@/app/api/quotes/route";
@@ -45,6 +46,17 @@ type QuickGlance = {
   spyPct: number | null;
   qqqPct: number | null;
   updatedAt: string;
+};
+
+type UsMarketGlanceItem = {
+  id: string;
+  label: string;
+  symbol: string;
+  last: number | null;
+  change: number | null;
+  changePct: number | null;
+  previousClose: number | null;
+  series: Array<{ idx: number; close: number }>;
 };
 
 type TerminalCol = "symbol" | "company" | "last" | "chg" | "chgPct" | "volume" | "volX";
@@ -172,6 +184,11 @@ export default function TerminalPage() {
   const [futuresItems, setFuturesItems] = useState<
     Array<{ symbol: string; quote: NormalizedQuote; series: Array<{ date: string; close: number }> }>
   >([]);
+  const [usMarkets, setUsMarkets] = useState<{
+    session: { headline: string; detail: string; isOpen: boolean };
+    items: UsMarketGlanceItem[];
+    updatedAt: string | null;
+  } | null>(null);
   const [clockTick, setClockTick] = useState(() => Date.now());
 
   const heatViewPrimed = useRef(false);
@@ -422,6 +439,26 @@ export default function TerminalPage() {
     }
   }
 
+  async function loadUsMarkets() {
+    try {
+      const resp = await fetch("/api/terminal/us-markets", { cache: "no-store" });
+      const json = await terminalFetchJson<{
+        ok: boolean;
+        session?: { headline: string; detail: string; isOpen: boolean };
+        items?: UsMarketGlanceItem[];
+        updatedAt?: string;
+      }>(resp, "us-markets");
+      if (!json.ok) return;
+      setUsMarkets({
+        session: json.session ?? { headline: "U.S. MARKETS", detail: "", isOpen: false },
+        items: json.items ?? [],
+        updatedAt: json.updatedAt ?? new Date().toISOString(),
+      });
+    } catch {
+      // ignore
+    }
+  }
+
   useEffect(() => {
     const t = setTimeout(() => {
       void refreshAll(watchlistId);
@@ -570,6 +607,8 @@ export default function TerminalPage() {
   }, [quotes, lastUpdatedAt]);
 
 
+  useMarketAwareInterval(() => void loadUsMarkets(), 60_000, 600_000, "us-markets", true);
+
   useEffect(() => {
     let five: ReturnType<typeof setInterval> | null = null;
     const run = () => void loadFutures();
@@ -641,6 +680,12 @@ export default function TerminalPage() {
     });
     return a;
   }, [quotes, portfolioSymbolSet, sortCol, sortAsc, volumeInfo, companyBySymbol]);
+
+  const quoteBySymbol = useMemo(() => {
+    const m = new Map<string, NormalizedQuote>();
+    for (const q of quotes) m.set(q.symbol.toUpperCase(), q);
+    return m;
+  }, [quotes]);
 
   const volumeLeaders = useMemo(() => {
     const rows = quotes
@@ -734,6 +779,92 @@ export default function TerminalPage() {
         <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
           Portfolio today % is computed from latest synced position market values weighted by each symbol’s % change (proxy).
         </div>
+
+        {usMarkets && usMarkets.items.length > 0 ? (
+          <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-white/10">
+            <div
+              className="flex flex-wrap items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
+              title={usMarkets.session.detail}
+            >
+              <span aria-hidden className="text-amber-500">
+                ☀
+              </span>
+              <span>{usMarkets.session.headline}</span>
+            </div>
+            <div className="mt-3 flex gap-3 overflow-x-auto pb-1">
+              {usMarkets.items.map((item) => {
+                const pct = item.changePct;
+                const up = pct == null ? true : pct >= 0;
+                const stroke = up ? "#22c55e" : "#ef4444";
+                const gradId = `usmk-${item.id}`;
+                const chartData = item.series;
+                const prev = item.previousClose;
+                return (
+                  <div
+                    key={item.id}
+                    className="min-w-[11.5rem] flex-1 rounded-xl border border-zinc-300 bg-zinc-50 p-3 dark:border-white/15 dark:bg-zinc-900/80"
+                  >
+                    <div className="text-xs font-medium text-zinc-700 dark:text-zinc-200">{item.label}</div>
+                    {chartData.length >= 2 ? (
+                      <div className="mt-1 h-14 w-full min-w-0">
+                        <ResponsiveContainer width="100%" height="100%" minWidth={64} minHeight={56}>
+                          <AreaChart data={chartData} margin={{ top: 2, right: 2, left: 0, bottom: 0 }}>
+                            <defs>
+                              <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor={stroke} stopOpacity={0.35} />
+                                <stop offset="100%" stopColor={stroke} stopOpacity={0} />
+                              </linearGradient>
+                            </defs>
+                            {prev != null && Number.isFinite(prev) ? (
+                              <ReferenceLine
+                                y={prev}
+                                stroke="currentColor"
+                                strokeDasharray="3 3"
+                                className="text-zinc-400 dark:text-zinc-500"
+                                strokeOpacity={0.55}
+                              />
+                            ) : null}
+                            <Area
+                              type="monotone"
+                              dataKey="close"
+                              dot={false}
+                              stroke={stroke}
+                              fill={`url(#${gradId})`}
+                              strokeWidth={1.5}
+                              isAnimationActive={false}
+                            />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : (
+                      <div className="mt-1 h-14 text-[10px] text-zinc-500">No intraday data</div>
+                    )}
+                    <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0">
+                      <span className="text-lg font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
+                        {item.last == null ? "—" : item.last.toFixed(2)}
+                      </span>
+                      {item.change != null ? (
+                        <span className={"text-xs tabular-nums " + posNegClass(item.change)}>
+                          {item.change >= 0 ? "+" : ""}
+                          {item.change.toFixed(2)}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className={"text-xs tabular-nums " + posNegClass(pct)}>
+                      {pct == null ? "—" : `${pct >= 0 ? "+" : ""}${PCT2.format(pct)}%`}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {usMarkets.updatedAt ? (
+              <div className="mt-2 text-[10px] text-zinc-500 dark:text-zinc-500">
+                Index proxies ({usMarkets.items.map((i) => i.symbol).join(", ")}) via Yahoo Finance; Schwab when unavailable.
+                Updated {new Date(usMarkets.updatedAt).toLocaleTimeString()}.
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </section>
 
       {futuresItems.length > 0 ? (
@@ -1075,19 +1206,29 @@ export default function TerminalPage() {
                   </div>
                 ) : null}
                 <div className="mt-2 grid gap-1">
-                  {(optionFlow?.items ?? []).slice(0, 10).map((it) => (
-                    <SymbolLink
-                      key={it.symbol}
-                      symbol={it.symbol}
-                      title="Open symbol"
-                      className="flex w-full items-center justify-between rounded-md border border-zinc-300 bg-white/70 px-2 py-1.5 text-xs hover:no-underline dark:border-white/15 dark:bg-zinc-950/40"
-                    >
-                      <span className="font-semibold">{it.symbol}</span>
-                      <span className="tabular-nums text-zinc-700 dark:text-zinc-300">
-                        {Math.round(it.totalOptionVolume).toLocaleString()} opt vol
-                      </span>
-                    </SymbolLink>
-                  ))}
+                  {(optionFlow?.items ?? []).slice(0, 10).map((it) => {
+                    const q = quoteBySymbol.get(it.symbol.toUpperCase());
+                    const chgFrac = q?.changePercent ?? null;
+                    return (
+                      <SymbolLink
+                        key={it.symbol}
+                        symbol={it.symbol}
+                        style={sentimentRowBackground(chgFrac)}
+                        title="Open symbol"
+                        className="relative flex w-full items-center justify-between overflow-hidden rounded-md border border-zinc-300 bg-white/70 px-2 py-1 text-xs hover:no-underline dark:border-white/15 dark:bg-zinc-950/40"
+                      >
+                        <span className="font-semibold">{it.symbol}</span>
+                        <span className="flex items-center gap-2 tabular-nums">
+                          <span className={"w-[4.5rem] text-right " + posNegClass(chgFrac == null ? null : chgFrac * 100)}>
+                            {chgFrac == null ? "—" : `${PCT2.format(chgFrac * 100)}%`}
+                          </span>
+                          <span className="text-zinc-700 dark:text-zinc-300">
+                            {Math.round(it.totalOptionVolume).toLocaleString()} opt vol
+                          </span>
+                        </span>
+                      </SymbolLink>
+                    );
+                  })}
                   {optionFlow?.ok && (optionFlow.items?.length ?? 0) === 0 && optionFlow.source === "schwab" ? (
                     <div className="text-sm text-zinc-600 dark:text-zinc-400">No chain volume in the scanned set.</div>
                   ) : null}

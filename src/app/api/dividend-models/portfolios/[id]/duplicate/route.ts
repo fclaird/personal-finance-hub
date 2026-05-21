@@ -18,7 +18,9 @@ export async function POST(_req: Request, ctx: Ctx) {
     .all(sourceId) as Array<{ symbol: string; sort_order: number; shares: number | null }>;
 
   const tx = db.transaction(() => {
-    db.prepare(`INSERT INTO dividend_model_portfolios (id, name, live_started_at, meta_json) VALUES (?, ?, NULL, NULL)`).run(
+    db.prepare(
+      `INSERT INTO dividend_model_portfolios (id, name, live_started_at, tracking_mode, meta_json) VALUES (?, ?, NULL, 'backtest', NULL)`,
+    ).run(
       newIdVal,
       newName,
     );

@@ -6,8 +6,9 @@
   "author": "Finance Hub",
   "main": "desktop/main.cjs",
   "scripts": {
-    "postinstall": "npm rebuild better-sqlite3",
-    "dev": "next dev --experimental-https",
+    "postinstall": "node scripts/ensure-sqlite-native.mjs",
+    "dev": "node scripts/dev.mjs",
+    "dev:next": "next dev --experimental-https",
     "dev:webpack": "next dev --experimental-https --webpack",
     "build": "next build",
     "start": "next start",
@@ -21,7 +22,8 @@
     "digest:pdf": "npx tsx scripts/pdf-allocation-report.ts",
     "digest:notify": "npx tsx scripts/trigger-digest-notify.ts",
     "backfill:portfolio-snapshots": "npx tsx scripts/backfill-portfolio-snapshots.ts",
-    "test:dividend-models": "npx tsx --test src/lib/dividendModels/symbolMonthlyMarket.test.ts src/lib/dividendModels/portfolioSimulation.test.ts"
+    "test:dividend-models": "npx tsx --test src/lib/dividendModels/symbolMonthlyMarket.test.ts src/lib/dividendModels/portfolioSimulation.test.ts src/lib/dividendModels/symbolBacktestAnchor.test.ts src/lib/dividendModels/portfolioDripSimulation.test.ts src/lib/dividendModels/symbolDisplayName.test.ts src/lib/dividendModels/seed.test.ts src/lib/dividendModels/syncScaledShares.test.ts src/lib/dividendModels/syntheticHoldings.test.ts",
+    "test:dividends": "npx tsx --test src/lib/dividendModels/dividendProducingFilter.test.ts src/lib/dividendModels/livePortfolioDashboard.test.ts src/lib/dividendModels/holdingCategory.test.ts src/lib/dividends/schwabDividendBook.test.ts src/lib/dividends/bookForwardSnap.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.9.0",

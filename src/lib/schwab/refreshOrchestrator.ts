@@ -38,12 +38,17 @@ const RTH_FULL_SYNC = process.env.SCHWAB_RTH_FULL_SYNC === "1";
 export function schwabRefreshPlan(bundle: SchwabRefreshBundle): {
   quotes: boolean;
   greeks: boolean;
+  greeksAfterHoldings: boolean;
   slow: boolean;
 } {
+  const slow =
+    bundle === "slow" || bundle === "closed" || (bundle === "rth" && RTH_FULL_SYNC);
   return {
     quotes: bundle === "rth" || bundle === "closed",
-    greeks: bundle === "rth",
-    slow: bundle === "slow" || bundle === "closed" || (bundle === "rth" && RTH_FULL_SYNC),
+    // Run greeks only on the fast RTH tick; when holdings sync runs, refresh greeks after new position rows exist.
+    greeks: bundle === "rth" && !slow,
+    greeksAfterHoldings: slow,
+    slow,
   };
 }
 
@@ -131,7 +136,12 @@ export async function runSchwabRefresh(
 
     logLine(`schwab_refresh_begin bundle=${bundle} reason=${opts?.reason ?? "scheduler"}`);
 
-    const { quotes: includeQuotes, greeks: includeGreeks, slow: includeSlow } = schwabRefreshPlan(bundle);
+    const {
+      quotes: includeQuotes,
+      greeks: includeGreeks,
+      greeksAfterHoldings,
+      slow: includeSlow,
+    } = schwabRefreshPlan(bundle);
 
     if (includeQuotes) {
       const q = await runStep("quotes", async () => {
@@ -142,8 +152,8 @@ export async function runSchwabRefresh(
       steps.push(q);
     }
 
-    if (includeGreeks) {
-      steps.push(await runStep("greeks", () => runSchwabGreeksRefresh(db)));
+    if (includeGreeks && !includeSlow) {
+      steps.push(await runStep("options", () => runSchwabGreeksRefresh(db)));
     }
 
     if (includeSlow) {
@@ -153,6 +163,10 @@ export async function runSchwabRefresh(
         return res;
       });
       steps.push(h);
+
+      if (greeksAfterHoldings && h.ok) {
+        steps.push(await runStep("options", () => runSchwabGreeksRefresh(db)));
+      }
 
       steps.push(
         await runStep("taxonomy", async () =>

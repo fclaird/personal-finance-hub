@@ -1,9 +1,13 @@
+import { fetchYahooChartResult } from "@/lib/market/yahooChartFetch";
 import { fetchYahooTrailingDividendStats } from "@/lib/market/yahooChartDividends";
+
+import { extractYahooLongNameFromChartResult } from "./symbolDisplayName";
 import { fetchSchwabInstrumentFundamental } from "@/lib/schwab/instrumentFundamental";
 
 import { fetchSchwabQuotesNormalized } from "./quotes";
 
 export type MergedFundamentalsSnapshot = {
+  displayName: string | null;
   divYield: number | null;
   annualDivEst: number | null;
   nextExDate: string | null;
@@ -15,7 +19,10 @@ export type MergedFundamentalsSnapshot = {
 /**
  * Schwab fundamentals when available; Yahoo chart dividend history fills missing yield / annual / next ex.
  */
-export async function fetchMergedDividendFundamentals(symbol: string): Promise<MergedFundamentalsSnapshot> {
+export async function fetchMergedDividendFundamentals(
+  symbol: string,
+  opts?: { skipYahoo?: boolean },
+): Promise<MergedFundamentalsSnapshot> {
   const sym = symbol.trim().toUpperCase();
   const parts: string[] = [];
 
@@ -51,11 +58,25 @@ export async function fetchMergedDividendFundamentals(symbol: string): Promise<M
       : null;
 
   let yahoo: Awaited<ReturnType<typeof fetchYahooTrailingDividendStats>> = null;
-  try {
-    yahoo = await fetchYahooTrailingDividendStats(sym);
-    if (yahoo?.annualTrailing12m != null && yahoo.annualTrailing12m > 0) parts.push("yahoo_chart_div");
-  } catch {
-    /* Yahoo optional */
+  let yahooLongName: string | null = null;
+  if (!opts?.skipYahoo) {
+    try {
+      yahoo = await fetchYahooTrailingDividendStats(sym);
+      if (yahoo?.annualTrailing12m != null && yahoo.annualTrailing12m > 0) parts.push("yahoo_chart_div");
+      yahooLongName = yahoo?.longName?.trim() || null;
+    } catch {
+      /* Yahoo optional */
+    }
+  } else if (!companyName?.trim()) {
+    try {
+      const chart = await fetchYahooChartResult(sym, "div");
+      if (chart) {
+        yahooLongName = extractYahooLongNameFromChartResult(chart.result);
+        if (yahooLongName) parts.push("yahoo_chart_meta");
+      }
+    } catch {
+      /* Yahoo optional */
+    }
   }
 
   if (px == null && yahoo?.chartPrice != null && yahoo.chartPrice > 0) {
@@ -90,9 +111,12 @@ export async function fetchMergedDividendFundamentals(symbol: string): Promise<M
 
   const trimmedSchwab = companyName?.trim();
   const resolvedCompany =
-    trimmedSchwab && trimmedSchwab.length > 0 ? trimmedSchwab : (yahoo?.longName?.trim() || null);
+    trimmedSchwab && trimmedSchwab.length > 0
+      ? trimmedSchwab
+      : yahooLongName || yahoo?.longName?.trim() || null;
 
   return {
+    displayName: resolvedCompany,
     divYield,
     annualDivEst,
     nextExDate,

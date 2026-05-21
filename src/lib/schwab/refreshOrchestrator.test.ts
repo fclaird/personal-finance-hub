@@ -12,17 +12,19 @@ describe("schwabRefreshPlan", () => {
     assert.equal(plan.slow, false);
   });
 
-  it("slow bundle includes slow steps only", () => {
+  it("slow bundle includes slow steps and options after holdings", () => {
     const plan = schwabRefreshPlan("slow");
     assert.equal(plan.quotes, false);
     assert.equal(plan.greeks, false);
+    assert.equal(plan.greeksAfterHoldings, true);
     assert.equal(plan.slow, true);
   });
 
-  it("closed bundle includes quotes and slow", () => {
+  it("closed bundle runs options only after holdings sync", () => {
     const plan = schwabRefreshPlan("closed");
     assert.equal(plan.quotes, true);
     assert.equal(plan.greeks, false);
+    assert.equal(plan.greeksAfterHoldings, true);
     assert.equal(plan.slow, true);
   });
 });

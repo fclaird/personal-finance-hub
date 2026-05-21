@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { resolveCompanyNamesOpenFigi } from "@/lib/openData/openFigiNames";
-import { getSecCompanyTickerMap, lookupSecCompanyTitle } from "@/lib/openData/secCompanyTickers";
+import { resolveIssuerIdentity } from "@/lib/openData/resolveIssuerIdentity";
 import { fetchEnrichedCompanyProfile } from "@/lib/schwab/companyProfile";
 
 function normSym(s: string) {
@@ -38,47 +37,18 @@ export async function GET(req: Request) {
   try {
     r = await fetchEnrichedCompanyProfile(symbol);
   } catch (e) {
-    let companyName: string | null = null;
-    let companyNameSource: "openfigi" | "sec" | null = null;
-    const figi = await resolveCompanyNamesOpenFigi([symbol]);
-    const fromFigi = figi[symbol]?.trim();
-    if (fromFigi) {
-      companyName = fromFigi;
-      companyNameSource = "openfigi";
-    } else {
-      const secMap = await getSecCompanyTickerMap();
-      const fromSec = lookupSecCompanyTitle(secMap, symbol);
-      if (fromSec) {
-        companyName = fromSec;
-        companyNameSource = "sec";
-      }
-    }
+    const identity = await resolveIssuerIdentity(symbol);
     return NextResponse.json({
-      ...emptyPayload(symbol, companyName, companyNameSource),
+      ...emptyPayload(symbol, identity.displayName, identity.nameSource),
       schwabError: e instanceof Error ? e.message : String(e),
     });
   }
 
-  let companyName = r.companyName?.trim() || null;
-  let companyNameSource: "schwab" | "openfigi" | "sec" | null = companyName ? "schwab" : null;
-
-  if (!companyName) {
-    const figi = await resolveCompanyNamesOpenFigi([symbol]);
-    const fromFigi = figi[symbol]?.trim();
-    if (fromFigi) {
-      companyName = fromFigi;
-      companyNameSource = "openfigi";
-    }
-  }
-
-  if (!companyName) {
-    const secMap = await getSecCompanyTickerMap();
-    const fromSec = lookupSecCompanyTitle(secMap, symbol);
-    if (fromSec) {
-      companyName = fromSec;
-      companyNameSource = "sec";
-    }
-  }
+  const identity = await resolveIssuerIdentity(symbol, { schwabCompanyName: r.companyName });
+  const companyName = identity.displayName ?? r.companyName?.trim() ?? null;
+  const companyNameSource: "schwab" | "openfigi" | "sec" | null = identity.displayName
+    ? identity.nameSource ?? (r.companyName ? "schwab" : null)
+    : null;
 
   return NextResponse.json(
     {

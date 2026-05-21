@@ -1,8 +1,41 @@
+export type SchwabCategoryHint = {
+  securityType?: string | null;
+  assetType?: string | null;
+};
+
+/** Schwab mutual funds / ETFs (including legacy rows stored as security_type other). */
+export function isSchwabFundLike(securityType: string | null | undefined, assetType: string | null | undefined): boolean {
+  const st = (securityType ?? "").toLowerCase();
+  const at = (assetType ?? "").toUpperCase();
+  if (st === "fund") return true;
+  if (
+    at.includes("MUTUAL_FUND") ||
+    at === "ETF" ||
+    at.includes("EXCHANGE_TRADED") ||
+    at.includes("COLLECTIVE_INVESTMENT") ||
+    (at.includes("FUND") && !at.includes("PENSION"))
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /** Display category for dividend-model inventory (heuristic + Schwab sector/industry). */
-export function inferHoldingCategory(symbol: string, sector: string | null, industry: string | null): string {
+export function inferHoldingCategory(
+  symbol: string,
+  sector: string | null,
+  industry: string | null,
+  schwab?: SchwabCategoryHint | null,
+): string {
   const sym = (symbol ?? "").trim().toUpperCase();
   const s = (sector ?? "").toLowerCase();
   const ind = (industry ?? "").toLowerCase();
+  const at = (schwab?.assetType ?? "").toUpperCase();
+  const st = (schwab?.securityType ?? "").toLowerCase();
+
+  if (at.includes("MUTUAL_FUND")) return "Mutual Funds";
+  if (at.includes("EXCHANGE_TRADED") || at === "ETF" || at.includes("COLLECTIVE_INVESTMENT")) return "ETFs";
+  if (st === "fund" || (at.includes("FUND") && !at.includes("PENSION"))) return "Mutual Funds / ETFs";
 
   if (ind.includes("reit") || s.includes("real estate")) return "REITs";
   if (ind.includes("mlp") || ind.includes("midstream") || ind.includes("pipeline") || s.includes("energy"))
@@ -20,7 +53,7 @@ export function inferHoldingCategory(symbol: string, sector: string | null, indu
   if (s.includes("utilities")) return "Utilities";
   if (s.includes("industrial")) return "Industrials";
   if (s.includes("communication")) return "Communication";
-  if (s.includes("etf") || sym.length <= 4) return "ETFs / Funds";
+  if (s.includes("etf")) return "ETFs";
   if (s) return s.replace(/\b\w/g, (c) => c.toUpperCase());
   return "Individual Stocks";
 }

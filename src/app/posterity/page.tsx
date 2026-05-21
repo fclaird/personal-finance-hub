@@ -8,6 +8,7 @@ import { FinancePiePanel } from "@/app/components/FinancePiePanel";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { formatInt, formatNum, formatUsd2 } from "@/lib/format";
+import { formatDisplayDate } from "@/lib/formatDate";
 import { POSTERITY_ACCOUNT_IDS } from "@/lib/posterity";
 import { symbolPageTargetFromInstrument } from "@/lib/symbolPage";
 import { normalizeSectorLabel } from "@/lib/sectorLabel";
@@ -135,7 +136,7 @@ function symKey(p: PosterityPosition) {
 function formatOptLabel(p: PosterityPosition) {
   const u = (p.underlyingSymbol ?? p.symbol ?? "").toString().trim().toUpperCase();
   const type = (p.optionType ?? "").toString().toUpperCase();
-  const exp = p.expirationDate ? p.expirationDate.slice(0, 10) : "";
+  const exp = p.expirationDate ? formatDisplayDate(p.expirationDate, { fallback: "" }) : "";
   const strike = p.strikePrice != null ? formatNum(p.strikePrice, 2) : "";
   return [u, exp, strike, type].filter(Boolean).join(" ");
 }

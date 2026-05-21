@@ -2,12 +2,12 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
-import { ensureDefaultDividendModelPortfolio } from "@/lib/dividendModels/seed";
+import { ensurePresetDividendPortfolios } from "@/lib/dividendModels/seed";
 import { parsePortfolioMeta } from "@/lib/dividendModels/portfolioMeta";
 
 export async function GET() {
   const db = getDb();
-  ensureDefaultDividendModelPortfolio(db);
+  ensurePresetDividendPortfolios(db);
   const rows = db
     .prepare(
       `
@@ -16,6 +16,7 @@ export async function GET() {
         p.name AS name,
         p.created_at AS createdAt,
         p.live_started_at AS liveStartedAt,
+        p.tracking_mode AS trackingMode,
         p.meta_json AS metaJson,
         (SELECT COUNT(*) FROM dividend_model_holdings h WHERE h.portfolio_id = p.id) AS holdingCount
       FROM dividend_model_portfolios p
@@ -27,6 +28,7 @@ export async function GET() {
     name: string;
     createdAt: string;
     liveStartedAt: string | null;
+    trackingMode: string | null;
     metaJson: string | null;
     holdingCount: number;
   }>;
@@ -39,6 +41,7 @@ export async function GET() {
         name: r.name,
         createdAt: r.createdAt,
         liveStartedAt: r.liveStartedAt,
+        trackingMode: r.trackingMode === "live" ? "live" : "backtest",
         holdingCount: r.holdingCount,
         sliceAccountId: meta.sliceAccountId ?? null,
       };
@@ -53,6 +56,8 @@ export async function POST(req: Request) {
 
   const db = getDb();
   const id = newId("dmport");
-  db.prepare(`INSERT INTO dividend_model_portfolios (id, name, live_started_at, meta_json) VALUES (?, ?, NULL, NULL)`).run(id, name);
+  db.prepare(
+    `INSERT INTO dividend_model_portfolios (id, name, live_started_at, tracking_mode, meta_json) VALUES (?, ?, NULL, 'backtest', NULL)`,
+  ).run(id, name);
   return NextResponse.json({ ok: true, id, name });
 }

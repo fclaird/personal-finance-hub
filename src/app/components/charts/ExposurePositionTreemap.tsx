@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { ResponsiveContainer, Tooltip, Treemap } from "recharts";
 
-import { assignEarthToneColorsBySymbols, distinctColorForIndex } from "@/lib/charts/pieEarthTones";
+import { assignEarthToneColorsByLayoutOrder, distinctColorForIndex } from "@/lib/charts/pieEarthTones";
 import { formatUsd2, formatUsdCompact } from "@/lib/format";
 
 export type ExposureTreemapLeaf = { symbol: string; marketValue: number };
@@ -54,15 +54,14 @@ export function ExposurePositionTreemap({ leaves, underlyingMarketCapBySymbol, m
 
     if (pairs.length === 0) return { data: [] as TreemapDatum[], omittedWithoutCap };
 
-    const colorBySym = assignEarthToneColorsBySymbols(pairs.map((p) => p.symbol).sort((a, b) => a.localeCompare(b)));
+    pairs.sort((a, b) => b.cap - a.cap);
+    const colorBySym = assignEarthToneColorsByLayoutOrder(pairs.map((p) => p.symbol));
 
     const raw: TreemapDatum[] = pairs.map(({ symbol, cap, portfolioMv }, i) => ({
       name: `${symbol}\nMcap ${formatUsdCompact(cap, { mask: masked })}\nPos ${formatUsd2(portfolioMv, { mask: masked })}`,
       size: cap,
       fill: colorBySym.get(symbol) ?? distinctColorForIndex(i),
     }));
-
-    raw.sort((a, b) => b.size - a.size);
     return { data: raw, omittedWithoutCap };
   }, [leaves, underlyingMarketCapBySymbol, masked]);
 

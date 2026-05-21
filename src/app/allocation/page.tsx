@@ -366,7 +366,12 @@ export default function AllocationPage() {
 
   /** Whole-portfolio synthetic MV (for hint when Net vs Spot would match). */
   const portfolioSynthMv = useMemo(() => rows.reduce((s, r) => s + r.syntheticMarketValue, 0), [rows]);
-  const showSyntheticZeroHint = rows.length > 0 && Math.abs(portfolioSynthMv) < 1e-6;
+  const hasOptionContractMarks = useMemo(
+    () => rows.some((r) => Math.abs(r.optionsMarkMarketValue) > 1e-6),
+    [rows],
+  );
+  const showSyntheticZeroHint =
+    rows.length > 0 && Math.abs(portfolioSynthMv) < 1e-6 && hasOptionContractMarks;
 
   /** Denominator for % + pie for active metric + scope. */
   const scopedMetricTotal = useMemo(() => scopedRows.reduce((s, r) => s + sliceMv(r, pieMetric), 0), [scopedRows, pieMetric]);
@@ -496,11 +501,11 @@ export default function AllocationPage() {
 
         {showSyntheticZeroHint ? (
           <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/25 dark:text-amber-100">
-            Synthetic exposure is <span className="font-semibold">$0</span> because option deltas are not loaded yet (Net and Spot weights match). Open{" "}
+            Delta-weighted synthetic exposure is <span className="font-semibold">$0</span> on the latest holdings snapshot (option contract marks are present). Open{" "}
             <Link href="/connections" className="font-medium underline underline-offset-2">
               Connections
             </Link>{" "}
-            and use <span className="font-medium">Refresh option greeks</span>, or stay on this page — greeks refresh runs after quotes on load and at most every 5 minutes while the market is open.
+            and use <span className="font-medium">Refresh option quotes &amp; greeks</span>, or reload this page after the next Schwab sync — greeks are carried forward automatically when possible.
           </div>
         ) : null}
 

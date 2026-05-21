@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 
+import { persistDripLedger, simulatePortfolioDrip } from "./portfolioDripSimulation";
 import { readSymbolMonthlyFacts } from "./symbolMonthlyMarket";
 import type { SimulationMode } from "./types";
 
@@ -132,27 +133,43 @@ export function persistPortfolioSimulation(
   `,
   );
 
-  const modes: SimulationMode[] = ["withdraw", "reinvest"];
+  const startMonthEnd = monthEnds[0] ?? endMonth;
+  const drip = simulatePortfolioDrip(db, holdings, monthEnds, startMonthEnd, endMonth);
+  const withdrawPoints = runPortfolioSimulation(db, holdings, monthEnds, "withdraw", endMonth);
+
   let rows = 0;
   const write = db.transaction(() => {
-    for (const mode of modes) {
-      const points = runPortfolioSimulation(db, holdings, monthEnds, mode, endMonth);
-      for (const p of points) {
-        ins.run({
-          portfolio_id: portfolioId,
-          month_end: p.month_end,
-          simulation_mode: mode,
-          nav_total: p.nav_total,
-          total_dividends: p.total_dividends,
-          portfolio_rebased_pct: p.portfolio_rebased_pct,
-          price_only_rebased_pct: p.price_only_rebased_pct,
-          status: p.status,
-          computed_at: computedAt,
-        });
-        rows += 1;
-      }
+    for (const p of withdrawPoints) {
+      ins.run({
+        portfolio_id: portfolioId,
+        month_end: p.month_end,
+        simulation_mode: "withdraw" satisfies SimulationMode,
+        nav_total: p.nav_total,
+        total_dividends: p.total_dividends,
+        portfolio_rebased_pct: p.portfolio_rebased_pct,
+        price_only_rebased_pct: p.price_only_rebased_pct,
+        status: p.status,
+        computed_at: computedAt,
+      });
+      rows += 1;
+    }
+    for (const p of drip.points) {
+      ins.run({
+        portfolio_id: portfolioId,
+        month_end: p.month_end,
+        simulation_mode: "reinvest" satisfies SimulationMode,
+        nav_total: p.nav_total,
+        total_dividends: p.total_dividends,
+        portfolio_rebased_pct: p.portfolio_rebased_pct,
+        price_only_rebased_pct: p.price_only_rebased_pct,
+        status: p.status,
+        computed_at: computedAt,
+      });
+      rows += 1;
     }
   });
   write();
+
+  persistDripLedger(db, portfolioId, drip.ledger, computedAt);
   return rows;
 }

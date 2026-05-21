@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { impliedPriceMapForSnapshot } from "@/lib/analytics/optionsExposure";
+import { EFFECTIVE_OPTION_DELTA_SQL, impliedPriceMapForSnapshot } from "@/lib/analytics/optionsExposure";
 import { getDb } from "@/lib/db";
 import { isPosterityAccountId, POSTERITY_ACCOUNT_IDS } from "@/lib/posterity";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
@@ -70,8 +70,9 @@ export async function GET(req: Request) {
       SELECT
         us.symbol AS us_symbol,
         sec.symbol AS option_symbol,
-        p.quantity * ? * COALESCE(og.delta, 0) AS synthetic_shares
+        p.quantity * ? * (${EFFECTIVE_OPTION_DELTA_SQL}) AS synthetic_shares
       FROM positions p
+      JOIN holding_snapshots hs ON hs.id = p.snapshot_id
       JOIN securities sec ON sec.id = p.security_id
       LEFT JOIN securities us ON us.id = sec.underlying_security_id
       LEFT JOIN option_greeks og ON og.position_id = p.id

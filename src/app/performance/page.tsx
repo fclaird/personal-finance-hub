@@ -16,6 +16,7 @@ import {
 
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { formatUsd2 } from "@/lib/format";
+import { formatDisplayDate } from "@/lib/formatDate";
 import { timeframeToWindowRangeMs, type PerformanceHistoryTimeframe } from "@/lib/portfolio/performanceWindow";
 
 type TodayPayload = { ok: boolean; portfolioPct: number | null; SPY: number | null; QQQ: number | null };
@@ -188,7 +189,7 @@ export default function PerformancePage() {
             );
       return {
         asOf: r.date,
-        asOfLabel: r.date,
+        asOfLabel: formatDisplayDate(r.date, { fallback: r.date }),
         xMs,
         portfolio,
         portfolioPos: Math.max(0, portfolio),
@@ -353,9 +354,7 @@ export default function PerformancePage() {
                   type="number"
                   dataKey="xMs"
                   domain={windowXDomain}
-                  tickFormatter={(ms) =>
-                    new Date(Number(ms)).toLocaleDateString(undefined, { month: "short", day: "numeric" })
-                  }
+                  tickFormatter={(ms) => formatDisplayDate(new Date(Number(ms)).toISOString(), { short: true })}
                   tick={{ fontSize: 10 }}
                   stroke="rgba(113,113,122,0.5)"
                 />

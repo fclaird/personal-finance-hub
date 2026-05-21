@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { computeFooterTotals, loadEnrichedHoldings } from "@/lib/dividendModels/enrichedHoldings";
+import { readBacktestAnchorClose } from "@/lib/dividendModels/symbolBacktestAnchor";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -31,6 +32,7 @@ export async function GET(req: Request, ctx: Ctx) {
     avgUnitCost: r.avgUnitCost,
     category: r.category,
     cost: r.cost,
+    backtestStartPrice5y: readBacktestAnchorClose(db, r.symbol, 5),
   }));
 
   const footer = computeFooterTotals(enriched);

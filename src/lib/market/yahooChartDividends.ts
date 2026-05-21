@@ -3,11 +3,7 @@
  * Not an official API; best-effort for modeling. See raw payload in snapshots for audit.
  */
 
-const YAHOO_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-function yahooChartSymbol(symbol: string): string {
-  return symbol.trim().toUpperCase().replace(/\./g, "-");
-}
+import { fetchYahooChartResult, yahooChartSymbol } from "./yahooChartFetch";
 
 function isoFromUnix(sec: number): string {
   return new Date(sec * 1000).toISOString().slice(0, 10);
@@ -15,14 +11,14 @@ function isoFromUnix(sec: number): string {
 
 export type YahooDividendPayment = { payDateIso: string; amount: number };
 
-function parseDividendRows(result: Record<string, unknown>): { t: number; amount: number }[] {
-  const source = (result.events as Record<string, unknown> | undefined)?.dividends as
+export function parseDividendRowsFromChartResult(result: Record<string, unknown>): { t: number; amount: number }[] {
+  const raw = (result.events as Record<string, unknown> | undefined)?.dividends as
     | Record<string, { amount?: number; date?: number }>
     | undefined;
-  if (!source || typeof source !== "object") return [];
+  if (!raw || typeof raw !== "object") return [];
 
   const rows: { t: number; amount: number }[] = [];
-  for (const v of Object.values(source)) {
+  for (const v of Object.values(raw)) {
     if (!v || typeof v !== "object") continue;
     const amount = typeof v.amount === "number" && Number.isFinite(v.amount) ? v.amount : null;
     const date = typeof v.date === "number" && Number.isFinite(v.date) ? v.date : null;
@@ -34,17 +30,12 @@ function parseDividendRows(result: Record<string, unknown>): { t: number; amount
 }
 
 export async function fetchYahooDividendPayments(symbol: string): Promise<YahooDividendPayment[]> {
-  const sym = yahooChartSymbol(symbol);
-  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=5y&events=div`;
-  const resp = await fetch(url, {
-    headers: { "User-Agent": YAHOO_UA, Accept: "application/json" },
-  });
-  if (!resp.ok) return [];
-  const json = (await resp.json()) as Record<string, unknown>;
-  const chart = json.chart as Record<string, unknown> | undefined;
-  const result = Array.isArray(chart?.result) ? (chart!.result as Record<string, unknown>[])[0] : null;
-  if (!result) return [];
-  return parseDividendRows(result).map((r) => ({ payDateIso: isoFromUnix(r.t), amount: r.amount }));
+  const chart = await fetchYahooChartResult(symbol, "div");
+  if (!chart) return [];
+  return parseDividendRowsFromChartResult(chart.result).map((r) => ({
+    payDateIso: isoFromUnix(r.t),
+    amount: r.amount,
+  }));
 }
 
 export type YahooTrailingDividendStats = {
@@ -66,18 +57,11 @@ function median(nums: number[]): number | null {
   return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
 }
 
-export async function fetchYahooTrailingDividendStats(symbol: string): Promise<YahooTrailingDividendStats | null> {
-  const sym = yahooChartSymbol(symbol);
-  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=5y&events=div`;
-  const resp = await fetch(url, {
-    headers: { "User-Agent": YAHOO_UA, Accept: "application/json" },
-  });
-  if (!resp.ok) return null;
-  const json = (await resp.json()) as Record<string, unknown>;
-  const chart = json.chart as Record<string, unknown> | undefined;
-  const result = Array.isArray(chart?.result) ? (chart!.result as Record<string, unknown>[])[0] : null;
-  if (!result) return null;
-
+export function trailingDividendStatsFromChartResult(
+  result: Record<string, unknown>,
+  symbolForMeta?: string,
+): YahooTrailingDividendStats | null {
+  const sym = symbolForMeta ?? yahooChartSymbol(String((result.meta as Record<string, unknown> | undefined)?.symbol ?? ""));
   const meta = result.meta as Record<string, unknown> | undefined;
   const chartPrice =
     typeof meta?.regularMarketPrice === "number" && Number.isFinite(meta.regularMarketPrice)
@@ -90,7 +74,7 @@ export async function fetchYahooTrailingDividendStats(symbol: string): Promise<Y
         ? meta.shortName.trim()
         : null;
 
-  const rows = parseDividendRows(result);
+  const rows = parseDividendRowsFromChartResult(result);
   if (rows.length === 0) {
     return {
       annualTrailing12m: null,
@@ -150,4 +134,10 @@ export async function fetchYahooTrailingDividendStats(symbol: string): Promise<Y
       lastDividendIso: isoFromUnix(lastPay),
     },
   };
+}
+
+export async function fetchYahooTrailingDividendStats(symbol: string): Promise<YahooTrailingDividendStats | null> {
+  const chart = await fetchYahooChartResult(symbol, "div");
+  if (!chart) return null;
+  return trailingDividendStatsFromChartResult(chart.result, chart.meta.symbol);
 }

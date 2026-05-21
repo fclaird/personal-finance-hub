@@ -1,7 +1,11 @@
 import type Database from "better-sqlite3";
 
 import { logError } from "@/lib/log";
-import { fetchYahooDividendPayments } from "@/lib/market/yahooChartDividends";
+import { fetchYahooChartResult } from "@/lib/market/yahooChartFetch";
+import { parseDividendRowsFromChartResult } from "@/lib/market/yahooChartDividends";
+
+import { extractYahooLongNameFromChartResult, patchLatestFundamentalsDisplayName } from "./symbolDisplayName";
+import { upsertDividendPaymentsForSymbol } from "./symbolDividendPayments";
 import { ensureCandles } from "@/lib/terminal/ohlcv";
 
 import { monthEndForDate, monthEndsBetweenInclusive } from "./dates";
@@ -53,9 +57,9 @@ export function computeTtmYieldPct(
 export async function backfillSymbolMonthlyMarket(
   db: Database.Database,
   symbols: string[],
-): Promise<{ symbolsProcessed: number; rowsUpserted: number }> {
+): Promise<{ symbolsProcessed: number; rowsUpserted: number; paymentRowsUpserted: number }> {
   const uniq = [...new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))];
-  if (uniq.length === 0) return { symbolsProcessed: 0, rowsUpserted: 0 };
+  if (uniq.length === 0) return { symbolsProcessed: 0, rowsUpserted: 0, paymentRowsUpserted: 0 };
 
   const now = new Date();
   const endMonth = monthEndForDate(now);
@@ -81,6 +85,7 @@ export async function backfillSymbolMonthlyMarket(
 
   const computedAt = now.toISOString();
   let rowsUpserted = 0;
+  let paymentRowsUpserted = 0;
 
   for (const sym of uniq) {
     try {
@@ -89,10 +94,21 @@ export async function backfillSymbolMonthlyMarket(
       let divByMonth = new Map<string, number>();
       let divSource = "none";
       try {
-        const payments = await fetchYahooDividendPayments(sym);
-        if (payments.length > 0) {
-          divByMonth = bucketDividendsByMonthEnd(payments);
-          divSource = "yahoo_chart_div";
+        const chart = await fetchYahooChartResult(sym, "div");
+        if (chart) {
+          const longName = extractYahooLongNameFromChartResult(chart.result);
+          if (longName) patchLatestFundamentalsDisplayName(db, sym, longName, "yahoo_chart_meta");
+
+          const rows = parseDividendRowsFromChartResult(chart.result);
+          const payments = rows.map((r) => ({
+            payDateIso: new Date(r.t * 1000).toISOString().slice(0, 10),
+            amount: r.amount,
+          }));
+          if (payments.length > 0) {
+            paymentRowsUpserted += upsertDividendPaymentsForSymbol(db, sym, payments, computedAt);
+            divByMonth = bucketDividendsByMonthEnd(payments);
+            divSource = "yahoo_chart_div";
+          }
         }
       } catch (e) {
         logError(`symbol_monthly_yahoo_${sym}`, e);
@@ -125,7 +141,7 @@ export async function backfillSymbolMonthlyMarket(
     }
   }
 
-  return { symbolsProcessed: uniq.length, rowsUpserted };
+  return { symbolsProcessed: uniq.length, rowsUpserted, paymentRowsUpserted };
 }
 
 /** Latest month-end TTM yield % from symbol_monthly_market (after Build history). */

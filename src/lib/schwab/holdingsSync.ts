@@ -5,6 +5,7 @@ import { newId } from "@/lib/id";
 import { logError } from "@/lib/log";
 import type { DataMode } from "@/lib/dataMode";
 import { ensureBenchmarkHistory } from "@/lib/market/benchmarks";
+import { ensureOptionGreeksOnLatestSnapshots } from "@/lib/schwab/ensureOptionGreeks";
 import { lastCompletedNyWeekday } from "@/lib/analytics/allocationNyDate";
 import { recordAllocationDailyCloseModes } from "@/lib/analytics/recordAllocationDailyClose";
 import { upsertWeekEndingPortfolioSnapshots } from "@/lib/portfolio/snapshots";
@@ -220,7 +221,17 @@ export async function runSchwabHoldingsSync(
           const securityId = `sec_${symbol}`;
           const assetType = (p.instrument.assetType ?? "OTHER").toUpperCase();
           const securityType =
-            assetType === "OPTION" ? "option" : assetType === "EQUITY" ? "equity" : "other";
+            assetType === "OPTION"
+              ? "option"
+              : assetType === "EQUITY"
+                ? "equity"
+                : assetType.includes("MUTUAL_FUND") ||
+                    assetType === "ETF" ||
+                    assetType.includes("EXCHANGE_TRADED") ||
+                    assetType.includes("COLLECTIVE_INVESTMENT") ||
+                    assetType.includes("FUND")
+                  ? "fund"
+                  : "other";
 
           let underlyingSecurityId: string | null = null;
           if (securityType === "option" && p.instrument.underlyingSymbol) {
@@ -276,10 +287,17 @@ export async function runSchwabHoldingsSync(
 
     tx();
 
+    try {
+      ensureOptionGreeksOnLatestSnapshots(db);
+    } catch (e) {
+      logError("option_greeks_carry_forward_after_holdings", e);
+    }
+
     const mode = opts?.dataMode ?? "schwab";
     try {
       await ensureBenchmarkHistory("SPY");
       await ensureBenchmarkHistory("QQQ");
+      await ensureBenchmarkHistory("IWM");
       upsertWeekEndingPortfolioSnapshots(db, mode, "weekly_job");
       recordAllocationDailyCloseModes(db, lastCompletedNyWeekday(), [mode]);
     } catch (e) {

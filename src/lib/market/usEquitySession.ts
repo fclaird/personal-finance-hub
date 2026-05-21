@@ -94,6 +94,47 @@ export function isUsEquityRegularSessionOpen(now: Date = new Date()): boolean {
  * Weekday equity session day (Mon–Fri, not NYSE holiday): futures pre-open poll window
  * [09:30−60min, 09:30) NY == [08:30, 09:30).
  */
+/** Human-readable US equity session status for market headers. */
+export function usEquitySessionStatus(now: Date = new Date()): {
+  headline: string;
+  detail: string;
+  isOpen: boolean;
+} {
+  const wd = nyWeekdayIso(now);
+  const ymd = nyYmd(now);
+  const mins = nyMinutesSinceMidnight(now);
+  const open = 9 * 60 + 30;
+  const close = 16 * 60;
+
+  if (wd < 1 || wd > 5 || isNyseHolidayYmd(ymd)) {
+    return { headline: "U.S. MARKETS CLOSED", detail: "Weekend or NYSE holiday", isOpen: false };
+  }
+
+  if (mins >= open && mins < close) {
+    const left = close - mins;
+    const h = Math.floor(left / 60);
+    const m = left % 60;
+    return {
+      headline: `U.S. MARKETS CLOSE IN ${h} HR ${m} MIN`,
+      detail: "Regular session 09:30–16:00 ET",
+      isOpen: true,
+    };
+  }
+
+  if (mins < open) {
+    const left = open - mins;
+    const h = Math.floor(left / 60);
+    const m = left % 60;
+    return {
+      headline: `U.S. MARKETS OPEN IN ${h} HR ${m} MIN`,
+      detail: "Pre-market",
+      isOpen: false,
+    };
+  }
+
+  return { headline: "U.S. MARKETS CLOSED", detail: "After 16:00 ET", isOpen: false };
+}
+
 export function isUsEquityPreOpenFuturesPollWindow(now: Date = new Date()): boolean {
   const wd = nyWeekdayIso(now);
   if (wd < 1 || wd > 5) return false;

@@ -199,6 +199,7 @@ function computeLabelSpread(
   maxY: number,
   labelGapPx: number,
   staggerArmPx: number,
+  labelEligible: boolean[],
 ): { yShift: number[]; extraArmPx: number[] } {
   const n = midAngles.length;
   const yShift = new Array(n).fill(0);
@@ -211,7 +212,7 @@ function computeLabelSpread(
         mid,
         py: polarToCartesian(cx, cy, rKnee, mid).y,
       }))
-      .filter((t) => lateralSign(t.mid) === side)
+      .filter((t) => labelEligible[t.i] && lateralSign(t.mid) === side)
       .sort((a, b) => a.py - b.py);
 
     const m = items.length;
@@ -232,11 +233,18 @@ function computeLabelSpread(
 
     const naturalSpan = pySorted[m - 1]! - pySorted[0]!;
     const packedSpan = packed[m - 1]! - packed[0]!;
+    const crowded = m >= 3;
     const compressed =
-      naturalSpan > labelGapPx * 2 && packedSpan < naturalSpan * 0.72 && m >= 4;
-    if (compressed) {
+      naturalSpan > labelGapPx * 2 && packedSpan < naturalSpan * 0.85 && m >= 3;
+    if (crowded) {
       items.forEach((t, rank) => {
-        extraArmPx[t.i] = (rank % 3) * staggerArmPx;
+        const tier = Math.floor(rank / 3);
+        extraArmPx[t.i] = tier * staggerArmPx + (rank % 3) * Math.round(staggerArmPx * 0.45);
+      });
+    }
+    if (compressed && m >= 5) {
+      items.forEach((t, rank) => {
+        extraArmPx[t.i] = Math.max(extraArmPx[t.i]!, Math.floor(rank / 2) * staggerArmPx);
       });
     }
   }
@@ -388,17 +396,17 @@ export function FinancePiePanel({
   /** Horizontal arm from pivot toward label (baseline; stagger adds more only when vertically compressed). */
   const horizontalArm = split ? 30 : compact ? 28 : 44;
   /** Extra horizontal arm when many same-side labels are packed tighter than their natural angular spread. */
-  const staggerArmPx = split ? 12 : compact ? 12 : 18;
+  const staggerArmPx = split ? 18 : compact ? 14 : 20;
   /** Reserve horizontal space for longest label + staggered arms (approximate). */
-  const maxTextReservePx = split ? 240 : compact ? 112 : 330;
+  const maxTextReservePx = split ? 260 : compact ? 120 : 340;
 
   const pieMargin = useMemo(
     () =>
       split
-        ? { top: 28, right: 72, bottom: 28, left: 48 }
+        ? { top: 32, right: 108, bottom: 32, left: 64 }
         : compact
-          ? { top: 52, right: 68, bottom: 52, left: 68 }
-          : { top: 58, right: 96, bottom: 58, left: 96 },
+          ? { top: 52, right: 76, bottom: 52, left: 76 }
+          : { top: 58, right: 108, bottom: 58, left: 108 },
     [compact, split],
   );
   const innerR = split ? "30%" : compact ? "28%" : "34%";
@@ -414,7 +422,13 @@ export function FinancePiePanel({
     [chartW, chartH, pieMargin, outerFrac],
   );
   const { minY: labelMinY, maxY: labelMaxY } = useMemo(() => labelYBand(chartH, labelFontPx), [chartH, labelFontPx]);
-  const labelGapPx = Math.max(12, labelFontPx * 1.12);
+  const labelGapPx = split ? Math.max(18, labelFontPx * 1.5) : compact ? Math.max(14, labelFontPx * 1.25) : Math.max(16, labelFontPx * 1.35);
+  /** Slices below this weight share skip callout labels (still in tooltip). */
+  const minLabelPercent = split ? 0.0075 : compact ? 0.012 : 0.004;
+  const labelEligible = useMemo(() => {
+    if (total <= 0) return data.map(() => false);
+    return data.map((d) => d.marketValue / total >= minLabelPercent);
+  }, [data, total, minLabelPercent]);
   const { yShift: labelYShifts, extraArmPx } = useMemo(() => {
     const rKnee = estOuterR + radialToPivot;
     return computeLabelSpread(
@@ -426,6 +440,7 @@ export function FinancePiePanel({
       labelMaxY,
       labelGapPx,
       staggerArmPx,
+      labelEligible,
     );
   }, [
     midAngles,
@@ -437,6 +452,7 @@ export function FinancePiePanel({
     labelMaxY,
     labelGapPx,
     staggerArmPx,
+    labelEligible,
   ]);
 
   return (
@@ -579,7 +595,16 @@ export function FinancePiePanel({
                       const outerR = Number(lineProps.outerRadius);
                       const mid = lineProps.midAngle;
                       const idx = lineProps.index ?? 0;
-                      if (!pts?.[0] || !Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(outerR) || mid == null || !Number.isFinite(mid)) {
+                      const slicePct = total > 0 ? (data[idx]?.marketValue ?? 0) / total : 0;
+                      if (
+                        slicePct < minLabelPercent ||
+                        !pts?.[0] ||
+                        !Number.isFinite(cx) ||
+                        !Number.isFinite(cy) ||
+                        !Number.isFinite(outerR) ||
+                        mid == null ||
+                        !Number.isFinite(mid)
+                      ) {
                         return <g />;
                       }
                       const p0 = pts[0];
@@ -615,7 +640,7 @@ export function FinancePiePanel({
                     }}
                     label={(props: PieLabelRenderProps) => {
                       const p = typeof props.percent === "number" && Number.isFinite(props.percent) ? props.percent : 0;
-                      if (p <= 0) {
+                      if (p <= 0 || p < minLabelPercent) {
                         return null;
                       }
                       const { cx, cy, outerRadius, midAngle, name, index } = props;

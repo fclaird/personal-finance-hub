@@ -4,6 +4,7 @@ import type { AllocationDigestPayload } from "@/lib/allocationDigest";
 import { buildAllocationDigest } from "@/lib/allocationDigest";
 import { verifyAllocationReportToken } from "@/lib/allocationReportToken";
 import { formatUsd2 } from "@/lib/format";
+import { formatDisplayDateTime } from "@/lib/formatDate";
 import { getReportSigningSecret } from "@/lib/internalCronAuth";
 
 export const metadata: Metadata = {
@@ -80,7 +81,7 @@ function ReportBody({ payload }: { payload: AllocationDigestPayload }) {
       <header className="border-b border-zinc-200 pb-4">
         <h1 className="text-xl font-semibold tracking-tight">Allocation report</h1>
         <p className="mt-1 text-sm text-zinc-600">
-          {payload.generatedAt} · data mode <span className="font-mono">{payload.mode}</span>
+          {formatDisplayDateTime(payload.generatedAt)} · data mode <span className="font-mono">{payload.mode}</span>
         </p>
         <p className="mt-2 text-xs text-zinc-500">
           Consolidated net includes synthetic option exposure in equities; spot excludes option market value.

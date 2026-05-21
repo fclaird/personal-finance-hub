@@ -21,19 +21,54 @@ import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { distinctColorForIndex } from "@/lib/charts/pieEarthTones";
 import { formatUsd2 } from "@/lib/format";
+import {
+  formatDisplayDate,
+  formatDisplayDateRange,
+  formatModeledChartMonthEndLabel,
+  formatPeriodEndingLabel,
+} from "@/lib/formatDate";
 import { symbolPageHref } from "@/lib/symbolPage";
+import {
+  DEFAULT_DIVIDEND_MODEL_PORTFOLIO_ID,
+  DIVIDEND_MODEL_PRESET_PORTFOLIOS,
+} from "@/lib/dividendModels/constants";
 import type { PortfolioDashboard } from "@/lib/dividendModels/dashboardMetrics";
+import { trackingModeTheme } from "@/lib/dividendModels/trackingModeTheme";
+import type { TrackingMode } from "@/lib/dividendModels/types";
 
-const DM_CHART_DIV_LIFT = distinctColorForIndex(11);
+const PRESET_PORTFOLIO_ORDER = Object.fromEntries(
+  DIVIDEND_MODEL_PRESET_PORTFOLIOS.map((preset, index) => [preset.id, index]),
+) as Record<string, number>;
+const PRESET_PORTFOLIO_BADGE = Object.fromEntries(
+  DIVIDEND_MODEL_PRESET_PORTFOLIOS.filter((preset) => preset.multiplier > 1).map((preset) => [
+    preset.id,
+    `${preset.multiplier}×`,
+  ]),
+) as Record<string, string>;
+
+function sortPortfoliosForSidebar<T extends { id: string; createdAt: string }>(list: T[]): T[] {
+  return [...list].sort((a, b) => {
+    const ao = PRESET_PORTFOLIO_ORDER[a.id] ?? 999;
+    const bo = PRESET_PORTFOLIO_ORDER[b.id] ?? 999;
+    if (ao !== bo) return ao - bo;
+    return a.createdAt.localeCompare(b.createdAt);
+  });
+}
+
 const DM_CHART_PORT = distinctColorForIndex(10);
-const DM_CHART_SPY = distinctColorForIndex(4);
-const DM_CHART_QQQ = distinctColorForIndex(5);
+const DM_CHART_SPY = "#ffffff";
+const DM_CHART_QQQ = "#f97316";
+/** Cash dividends overlay (withdraw mode) — green to make collected cash obvious. */
+const DM_CHART_CASH_FILL = "#22c55e";
+/** Reinvested-share lift overlay (reinvest mode) — teal so it's distinct from the cash green. */
+const DM_CHART_DRIP_FILL = "#14b8a6";
 
 type PortfolioRow = {
   id: string;
   name: string;
   createdAt: string;
   liveStartedAt: string | null;
+  trackingMode: TrackingMode;
   holdingCount: number;
   sliceAccountId: string | null;
 };
@@ -54,6 +89,7 @@ type TableRow = {
   avgUnitCost: number | null;
   category: string;
   cost: number | null;
+  backtestStartPrice5y: number | null;
 };
 
 type TableFooter = {
@@ -78,19 +114,12 @@ type SortCol = "symbol" | "name" | "category" | "cost" | "annual$" | "mv" | "yie
 
 type TimelineYears = 1 | 3 | 5;
 type SimulationMode = "reinvest" | "withdraw";
-
-function modeledChartXLabel(monthEndIso: string, _windowYears: TimelineYears): string {
-  const s = monthEndIso.slice(0, 10);
-  const parts = s.split("-");
-  const y = Number(parts[0]);
-  const mo = Number(parts[1]);
-  if (!Number.isFinite(y) || !Number.isFinite(mo)) return monthEndIso.slice(0, 7);
-  const m = mo - 1;
-  const quarterEnd = [2, 5, 8, 11];
-  if (!quarterEnd.includes(m)) return "";
-  const q = Math.floor(m / 3) + 1;
-  return `Q${q} '${String(y).slice(-2)}`;
-}
+/** Stacked return decomposition:
+ *  - Base (purple): price-only % (`price_only_rebased_pct`, frozen shares).
+ *  - Top (green/teal): dividend layer — cash % (withdraw) or DRIP lift % (reinvest).
+ *  - Line (purple): total portfolio % = base + top.
+ */
+type ChartView = "withdraw" | "reinvest";
 
 function positionAnnualDiv(r: { annualDivEst: number | null; shares: number | null }): number | null {
   if (r.annualDivEst == null || r.shares == null || !Number.isFinite(r.annualDivEst) || !Number.isFinite(r.shares)) return null;
@@ -153,6 +182,22 @@ function pctFmt(v: number | null) {
   return `${v.toFixed(2)}%`;
 }
 
+/** Calendar years between two ISO dates (minimum ~1 week for live snapshots). */
+function yearsBetweenIso(isoStart: string, isoEnd: string): number {
+  const start = new Date(`${isoStart.slice(0, 10)}T12:00:00Z`).getTime();
+  const end = new Date(`${isoEnd.slice(0, 10)}T12:00:00Z`).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+  return Math.max((end - start) / (365.25 * 86_400_000), 1 / 52);
+}
+
+/** CAGR from total % return over `yearsElapsed` (e.g. 50% over 5y → ~8.45%/yr). */
+function annualizedReturnPct(totalReturnPct: number | null | undefined, yearsElapsed: number): number | null {
+  if (totalReturnPct == null || !Number.isFinite(totalReturnPct) || yearsElapsed <= 0) return null;
+  const factor = 1 + totalReturnPct / 100;
+  if (!Number.isFinite(factor) || factor <= 0) return null;
+  return (Math.pow(factor, 1 / yearsElapsed) - 1) * 100;
+}
+
 function usdMasked(v: number | null, masked: boolean) {
   if (v == null || !Number.isFinite(v)) return "—";
   return formatUsd2(v, { mask: masked });
@@ -186,27 +231,31 @@ export default function DividendModelsPage() {
   const [modeledSpanSummary, setModeledSpanSummary] = useState<string | null>(null);
 
   const [years, setYears] = useState<TimelineYears>(5);
-  const [simulationMode, setSimulationMode] = useState<SimulationMode>("withdraw");
-  const [showSpy, setShowSpy] = useState(true);
-  const [showQqq, setShowQqq] = useState(true);
+  const [chartView, setChartView] = useState<ChartView>("withdraw");
+  const simulationMode: SimulationMode = chartView === "reinvest" ? "reinvest" : "withdraw";
+  const [showSpy, setShowSpy] = useState(false);
+  const [showQqq, setShowQqq] = useState(false);
 
   const [newPortfolioName, setNewPortfolioName] = useState("");
   const [rename, setRename] = useState("");
   const [newSym, setNewSym] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
 
-  const [sortCol, setSortCol] = useState<SortCol>("symbol");
-  const [sortAsc, setSortAsc] = useState(true);
+  const [sortCol, setSortCol] = useState<SortCol>("mv");
+  const [sortAsc, setSortAsc] = useState(false);
 
   const active = useMemo(() => portfolios.find((p) => p.id === activeId) ?? null, [portfolios, activeId]);
-
+  const isAlphaPortfolio = activeId === DEFAULT_DIVIDEND_MODEL_PORTFOLIO_ID;
+  const trackingMode: TrackingMode = active?.trackingMode ?? "backtest";
+  const modeTheme = useMemo(() => trackingModeTheme(trackingMode), [trackingMode]);
 
   const loadPortfolios = useCallback(async () => {
     const resp = await fetch("/api/dividend-models/portfolios", { cache: "no-store" });
     const json = (await resp.json()) as { ok: boolean; portfolios?: PortfolioRow[]; error?: string };
     if (!json.ok) throw new Error(json.error ?? "Failed to load portfolios");
-    const list = json.portfolios ?? [];
+    const list = sortPortfoliosForSidebar(json.portfolios ?? []);
     setPortfolios(list);
     setActiveId((cur) => {
       if (cur && list.some((p) => p.id === cur)) return cur;
@@ -242,6 +291,7 @@ export default function DividendModelsPage() {
       const qs = new URLSearchParams({
         years: String(years),
         mode: simulationMode,
+        trackingMode,
         includeSpy: showSpy ? "1" : "0",
         includeQqq: showQqq ? "1" : "0",
       });
@@ -257,6 +307,8 @@ export default function DividendModelsPage() {
         firstMonthEnd?: string | null;
         lastMonthEnd?: string | null;
         totalDividendsReceived?: number;
+        trackingMode?: string;
+        liveStartedAt?: string | null;
         error?: string;
       };
       if (!json.ok) throw new Error(json.error ?? "Failed to load modeled timeline");
@@ -271,19 +323,30 @@ export default function DividendModelsPage() {
       const n = json.monthsReturned;
       if (typeof n === "number") {
         if (n === 0) {
-          setModeledSpanSummary(`No month-end points in the last ${y} years for this portfolio yet.`);
+          setModeledSpanSummary(
+            trackingMode === "live"
+              ? "No live tracking snapshots yet. Switch to Live tracking and run Refresh fundamentals."
+              : `No month-end points in the last ${y} years for this portfolio yet.`,
+          );
+        } else if (trackingMode === "live") {
+          const a = json.firstMonthEnd ?? "";
+          const b = json.lastMonthEnd ?? "";
+          const liveStart = formatDisplayDate(json.liveStartedAt, { fallback: "live start" });
+          setModeledSpanSummary(
+            `Live tracking: ${n} weekly snapshot${n === 1 ? "" : "s"} (${formatDisplayDateRange(a, b)}) since ${liveStart}.`,
+          );
         } else {
           const a = json.firstMonthEnd ?? "";
           const b = json.lastMonthEnd ?? "";
           setModeledSpanSummary(
-            `Showing ${n} simulated month-end${n === 1 ? "" : "s"} (${a} → ${b}) for the ${y}-year window. If the span looks short, run Build history after prices load for all tickers.`,
+            `Showing ${n} simulated month-end${n === 1 ? "" : "s"} (${formatDisplayDateRange(a, b)}) for the ${y}-year backtest window (market prices at window start, not purchase price).`,
           );
         }
       } else {
         setModeledSpanSummary(null);
       }
     },
-    [years, simulationMode, showSpy, showQqq],
+    [years, simulationMode, showSpy, showQqq, trackingMode],
   );
 
   useEffect(() => {
@@ -321,7 +384,28 @@ export default function DividendModelsPage() {
         setError(e instanceof Error ? e.message : String(e));
       }
     })();
-  }, [activeId, years, simulationMode, showSpy, showQqq, loadTable, loadDashboard, loadModeled, loadPortfolios]);
+  }, [activeId, years, simulationMode, showSpy, showQqq, trackingMode, loadTable, loadDashboard, loadModeled, loadPortfolios]);
+
+  async function setPortfolioTrackingMode(mode: TrackingMode) {
+    if (!activeId) return;
+    setBusy("tracking");
+    setError(null);
+    try {
+      const resp = await fetch(`/api/dividend-models/portfolios/${encodeURIComponent(activeId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trackingMode: mode }),
+      });
+      const json = (await resp.json()) as { ok?: boolean; error?: string };
+      if (!json.ok) throw new Error(json.error ?? "Failed to update tracking mode");
+      await loadPortfolios();
+      await loadModeled(activeId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   const toggleSort = (c: SortCol) => {
     if (sortCol === c) setSortAsc(!sortAsc);
@@ -374,28 +458,51 @@ export default function DividendModelsPage() {
   }, [tableRows, sortCol, sortAsc]);
 
   const modeledChart = useMemo(() => {
-    const raw = modeled.map((p) => ({
-      monthEnd: p.month_end.slice(0, 10),
-      port: p.portfolio_rebased_pct != null && Number.isFinite(p.portfolio_rebased_pct) ? p.portfolio_rebased_pct : 0,
-      priceOnly:
-        p.price_only_rebased_pct != null && Number.isFinite(p.price_only_rebased_pct) ? p.price_only_rebased_pct : 0,
-      spy: p.spy_rebased_pct != null && Number.isFinite(p.spy_rebased_pct) ? p.spy_rebased_pct : undefined,
-      qqq: p.qqq_rebased_pct != null && Number.isFinite(p.qqq_rebased_pct) ? p.qqq_rebased_pct : undefined,
-    }));
+    const anchorNav = modeled[0]?.total_market_value ?? null;
+    let cumDivUsd = 0;
+    const raw = modeled.map((p) => {
+      cumDivUsd += Math.max(0, Number(p.total_dividends) || 0);
+      const port = p.portfolio_rebased_pct != null && Number.isFinite(p.portfolio_rebased_pct) ? p.portfolio_rebased_pct : 0;
+      const priceFromApi =
+        p.price_only_rebased_pct != null && Number.isFinite(p.price_only_rebased_pct) ? p.price_only_rebased_pct : null;
+      const sharesPct = priceFromApi ?? port;
+      const navUsd =
+        p.total_market_value != null && Number.isFinite(p.total_market_value) ? p.total_market_value : null;
+      return {
+        monthEnd: p.month_end.slice(0, 10),
+        port,
+        sharesPct,
+        navUsd,
+        cumDivUsd,
+        spy: p.spy_rebased_pct != null && Number.isFinite(p.spy_rebased_pct) ? p.spy_rebased_pct : undefined,
+        qqq: p.qqq_rebased_pct != null && Number.isFinite(p.qqq_rebased_pct) ? p.qqq_rebased_pct : undefined,
+      };
+    });
     if (raw.length === 0) return [];
+    const equityAnchor =
+      anchorNav != null && Number.isFinite(anchorNav) ? anchorNav - (raw[0]!.cumDivUsd ?? 0) : null;
     const port0 = raw[0]!.port;
-    const price0 = raw[0]!.priceOnly;
+    const shares0 = raw[0]!.sharesPct;
     const spy0 = raw[0]!.spy ?? 0;
     const qqq0 = raw[0]!.qqq ?? 0;
     return raw.map((p) => {
       const port = p.port - port0;
-      const priceOnly = p.priceOnly - price0;
-      const dividendLift = Math.max(0, port - priceOnly);
+      const sharesPct = p.sharesPct - shares0;
+      const topPct = Math.max(0, port - sharesPct);
+      const priceOnlyUsd =
+        equityAnchor != null && equityAnchor > 0 ? equityAnchor * (1 + sharesPct / 100) : null;
+      const navUsd = p.navUsd;
+      const divStackUsd =
+        navUsd != null && priceOnlyUsd != null ? navUsd - priceOnlyUsd : null;
       return {
         monthEnd: p.monthEnd,
         port,
-        priceOnly,
-        dividendLift,
+        sharesPct,
+        topPct,
+        navUsd,
+        cumDivUsd: p.cumDivUsd,
+        priceOnlyUsd,
+        divStackUsd,
         spy: p.spy != null ? p.spy - spy0 : undefined,
         qqq: p.qqq != null ? p.qqq - qqq0 : undefined,
       };
@@ -403,6 +510,22 @@ export default function DividendModelsPage() {
   }, [modeled]);
 
   const modeledChartEmpty = modeledChart.length === 0;
+  const liveWeeklyChart = trackingMode === "live";
+
+  const chartAnnualizedReturns = useMemo(() => {
+    if (modeledChart.length < 2) return null;
+    const first = modeledChart[0]!;
+    const last = modeledChart[modeledChart.length - 1]!;
+    const yearsElapsed = liveWeeklyChart ? yearsBetweenIso(first.monthEnd, last.monthEnd) : years;
+    if (yearsElapsed <= 0) return null;
+    return {
+      yearsElapsed,
+      withDividends: annualizedReturnPct(last.port, yearsElapsed),
+      withoutDividends: annualizedReturnPct(last.sharesPct, yearsElapsed),
+      spy: showSpy ? annualizedReturnPct(last.spy, yearsElapsed) : null,
+      qqq: showQqq ? annualizedReturnPct(last.qqq, yearsElapsed) : null,
+    };
+  }, [modeledChart, years, liveWeeklyChart, showSpy, showQqq]);
 
   async function onRefreshData() {
     if (!activeId) return;
@@ -441,6 +564,11 @@ export default function DividendModelsPage() {
 
       {error ? (
         <div className="rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">{error}</div>
+      ) : null}
+      {refreshMessage ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/25 dark:text-amber-100">
+          {refreshMessage}
+        </div>
       ) : null}
 
       <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm sm:p-7 dark:border-white/20 dark:bg-zinc-950">
@@ -514,7 +642,27 @@ export default function DividendModelsPage() {
                         : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
                     }
                   >
-                    <span className="font-semibold">{p.name}</span>
+                    <span className="flex items-center gap-2 font-semibold">
+                      <span
+                        className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+                          trackingModeTheme(p.trackingMode).dotClass
+                        }`}
+                        aria-hidden
+                      />
+                      {p.name}
+                      {PRESET_PORTFOLIO_BADGE[p.id] ? (
+                        <span
+                          className={
+                            "rounded px-1 py-0.5 text-[10px] font-bold uppercase tracking-wide " +
+                            (sel
+                              ? "bg-white/20 text-white dark:bg-black/10 dark:text-black"
+                              : "bg-zinc-200 text-zinc-700 dark:bg-white/10 dark:text-zinc-300")
+                          }
+                        >
+                          {PRESET_PORTFOLIO_BADGE[p.id]}
+                        </span>
+                      ) : null}
+                    </span>
                     <span
                       className={
                         "tabular-nums text-xs " + (sel ? "text-white/90 dark:text-black/70" : "text-zinc-600 dark:text-zinc-400")
@@ -564,6 +712,47 @@ export default function DividendModelsPage() {
                   </button>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  {isAlphaPortfolio ? (
+                    <button
+                      type="button"
+                      disabled={busy === "sync-shares"}
+                      className="h-10 rounded-lg border border-amber-400 bg-amber-50 px-3 text-sm font-semibold text-amber-950 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-100 dark:hover:bg-amber-950/60"
+                      onClick={() => {
+                        void (async () => {
+                          setError(null);
+                          setRefreshMessage(null);
+                          setBusy("sync-shares");
+                          try {
+                            const resp = await fetch("/api/dividend-models/portfolios/sync-scaled-shares", {
+                              method: "POST",
+                            });
+                            const json = (await resp.json()) as {
+                              ok?: boolean;
+                              error?: string;
+                              targets?: Array<{ name: string; multiplier: number; holdingsSynced: number }>;
+                            };
+                            if (!json.ok) throw new Error(json.error ?? "Sync failed");
+                            const summary =
+                              json.targets
+                                ?.map((t) => `${t.name} (${t.multiplier}×, ${t.holdingsSynced} symbols)`)
+                                .join("; ") ?? "";
+                            setRefreshMessage(
+                              summary
+                                ? `Synced alpha share counts to scaled portfolios: ${summary}. Rebuild history on bravo and charlie if charts are stale.`
+                                : "Synced alpha share counts to bravo and charlie.",
+                            );
+                            await loadPortfolios();
+                          } catch (e) {
+                            setError(e instanceof Error ? e.message : String(e));
+                          } finally {
+                            setBusy(null);
+                          }
+                        })();
+                      }}
+                    >
+                      {busy === "sync-shares" ? "Syncing…" : "Sync shares to bravo & charlie"}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="h-10 rounded-lg border border-zinc-300 px-3 text-sm font-semibold dark:border-white/20 dark:text-zinc-100"
@@ -663,15 +852,31 @@ export default function DividendModelsPage() {
                   <button
                     type="button"
                     disabled={busy === "fundamentals"}
-                    title="Re-fetch merged fundamentals for every symbol (use if Name / yield columns are empty)."
+                    title="Re-fetch fundamentals, instrument names (Yahoo/Schwab), dividends, and chart history for all holdings."
                     onClick={() => {
                       if (!activeId) return;
                       void (async () => {
                         setBusy("fundamentals");
                         setError(null);
+                        setRefreshMessage(null);
                         try {
-                          await loadTable(activeId, { refetchFundamentals: true });
-                          await loadDashboard(activeId);
+                          const resp = await fetch(
+                            `/api/dividend-models/portfolios/${encodeURIComponent(activeId)}/refresh-fundamentals`,
+                            { method: "POST" },
+                          );
+                          const json = (await resp.json()) as {
+                            ok?: boolean;
+                            partial?: boolean;
+                            message?: string;
+                            error?: string;
+                          };
+                          if (!json.ok) throw new Error(json.error ?? "Refresh failed");
+                          if (json.message) setRefreshMessage(json.message);
+                          await Promise.all([
+                            loadTable(activeId),
+                            loadDashboard(activeId),
+                            loadModeled(activeId),
+                          ]);
                         } catch (e) {
                           setError(e instanceof Error ? e.message : String(e));
                         } finally {
@@ -778,6 +983,9 @@ export default function DividendModelsPage() {
                                 <SortTh col="shares" label="Shares" sortCol={sortCol} sortAsc={sortAsc} onToggle={toggleSort} />
                               </th>
                               <th className="py-2.5 pr-3 text-right">Avg price</th>
+                              <th className="py-2.5 pr-3 text-right" title="Market close at 5y backtest window start (not your purchase price)">
+                                5y start
+                              </th>
                               <th className="py-2.5 pr-3 text-right">
                                 <SortTh col="cost" label="Cost" sortCol={sortCol} sortAsc={sortAsc} onToggle={toggleSort} />
                               </th>
@@ -871,6 +1079,9 @@ export default function DividendModelsPage() {
                                     }}
                                   />
                                 </td>
+                                <td className="py-2.5 pr-3 text-right tabular-nums text-zinc-600 dark:text-zinc-400">
+                                  {usdMasked(r.backtestStartPrice5y, privacy.masked)}
+                                </td>
                                 <td className="py-2.5 pr-3 text-right tabular-nums font-medium text-teal-700 dark:text-teal-300">
                                   {usdMasked(r.cost, privacy.masked)}
                                 </td>
@@ -917,6 +1128,7 @@ export default function DividendModelsPage() {
                                   : "—"}
                               </td>
                               <td className="py-2.5 pr-3">—</td>
+                              <td className="py-2.5 pr-3">—</td>
                               <td className="py-2.5 pr-3 text-right tabular-nums text-teal-700 dark:text-teal-300">
                                 {usdMasked(
                                   sortedRows.reduce((s, row) => s + (row.cost ?? 0), 0),
@@ -948,60 +1160,111 @@ export default function DividendModelsPage() {
         </div>
       </section>
 
-            <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
+            <section className={modeTheme.panelClass}>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
+          <div className={modeTheme.headerAccentClass}>
             <h2 className="text-base font-semibold">Chart</h2>
             <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-              Rebased total return % from the first month in the window. Reinvest mode shades dividend lift above a frozen-share
-              price-only baseline; withdraw shows lines only.
+              {trackingMode === "backtest"
+                ? "Backtest uses historical market prices at the window start (orange), not your purchase price."
+                : "Live tracking (blue) logs forward NAV from current quotes and dividends since your live start date."}
             </p>
           </div>
         </div>
 
-        <div className="mt-3 rounded-lg border border-zinc-200 bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-900 dark:border-white/10 dark:bg-white/10 dark:text-zinc-100">
-          {simulationMode === "reinvest"
-            ? `Reinvest dividends at month-end (${years}-year window).`
-            : `Withdraw dividends to cash (${years}-year window).`}
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Mode</span>
+          <button
+            type="button"
+            aria-pressed={trackingMode === "backtest"}
+            disabled={busy === "tracking"}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors duration-200 ${
+              trackingMode === "backtest" ? modeTheme.toggleActiveClass : modeTheme.toggleInactiveClass
+            }`}
+            onClick={() => void setPortfolioTrackingMode("backtest")}
+          >
+            Backtest
+          </button>
+          <button
+            type="button"
+            aria-pressed={trackingMode === "live"}
+            disabled={busy === "tracking"}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors duration-200 ${
+              trackingMode === "live" ? modeTheme.toggleActiveClass : modeTheme.toggleInactiveClass
+            }`}
+            onClick={() => void setPortfolioTrackingMode("live")}
+          >
+            Live tracking
+          </button>
+        </div>
+
+        <div className={`mt-3 ${modeTheme.bannerClass}`}>
+          {(() => {
+            const prefix = trackingMode === "backtest" ? `Backtest (${years}-year window)` : "Live tracking";
+            const suffix =
+              chartView === "reinvest"
+                ? "· Dividends Reinvest: purple = price-only return; teal stack = extra % from DRIP; green line = total."
+                : "· Dividends: purple = price-only return; green stack = dividend contribution to return; green line = total.";
+            return `${prefix} ${suffix}`;
+          })()}
+          {active?.liveStartedAt && trackingMode === "live" ? (
+            <span className="mt-1 block text-xs opacity-90">
+              Live since {formatDisplayDate(active.liveStartedAt)}
+            </span>
+          ) : null}
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-4 text-sm">
-          <label className="flex items-center gap-2">
+          <label className="flex items-center gap-2 text-zinc-800 dark:text-white">
             <input type="checkbox" checked={showSpy} onChange={(e) => setShowSpy(e.target.checked)} />
             SPY
           </label>
-          <label className="flex items-center gap-2">
+          <label className="flex items-center gap-2" style={{ color: DM_CHART_QQQ }}>
             <input type="checkbox" checked={showQqq} onChange={(e) => setShowQqq(e.target.checked)} />
             QQQ
           </label>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-zinc-500">Range</span>
-            {([1, 3, 5] as const).map((y) => (
-              <button
-                key={y}
-                type="button"
-                className={`rounded-md px-2 py-1 text-xs font-semibold ${years === y ? "bg-zinc-900 text-white dark:bg-white dark:text-black" : "border border-zinc-300 dark:border-white/20"}`}
-                onClick={() => setYears(y)}
-              >
-                {y}y
-              </button>
-            ))}
-          </div>
+          {trackingMode === "backtest" ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-zinc-500">Range</span>
+              {([1, 3, 5] as const).map((y) => (
+                <button
+                  key={y}
+                  type="button"
+                  className={`rounded-md px-2 py-1 text-xs font-semibold ${
+                    years === y ? modeTheme.yearPillActiveClass : "border border-zinc-300 dark:border-white/20"
+                  }`}
+                  onClick={() => setYears(y)}
+                >
+                  {y}y
+                </button>
+              ))}
+            </div>
+          ) : (
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">Weekly snapshots since live start</span>
+          )}
           <div className="flex flex-wrap items-center gap-2 border-l border-zinc-200 pl-4 dark:border-white/10">
-            <span className="text-zinc-500">Dividends</span>
+            <span className="text-zinc-500">View</span>
             <button
               type="button"
-              className={`rounded-md px-2 py-1 text-xs font-semibold ${simulationMode === "withdraw" ? "bg-zinc-900 text-white dark:bg-white dark:text-black" : "border border-zinc-300 dark:border-white/20"}`}
-              onClick={() => setSimulationMode("withdraw")}
+              aria-pressed={chartView === "withdraw"}
+              title="Portfolio % overlaid with cash from dividends (as % of starting NAV)."
+              className={`rounded-md px-2 py-1 text-xs font-semibold transition-colors duration-200 ${
+                chartView === "withdraw" ? modeTheme.dividendPillActiveClass : "border border-zinc-300 dark:border-white/20"
+              }`}
+              onClick={() => setChartView("withdraw")}
             >
-              Withdraw
+              Dividends
             </button>
             <button
               type="button"
-              className={`rounded-md px-2 py-1 text-xs font-semibold ${simulationMode === "reinvest" ? "bg-zinc-900 text-white dark:bg-white dark:text-black" : "border border-zinc-300 dark:border-white/20"}`}
-              onClick={() => setSimulationMode("reinvest")}
+              aria-pressed={chartView === "reinvest"}
+              title="Starting shares + extra shares acquired via DRIP (each dividend buys fractional shares at the pay-date close)."
+              className={`rounded-md px-2 py-1 text-xs font-semibold transition-colors duration-200 ${
+                chartView === "reinvest" ? modeTheme.dividendPillActiveClass : "border border-zinc-300 dark:border-white/20"
+              }`}
+              onClick={() => setChartView("reinvest")}
             >
-              Reinvest
+              Dividends Reinvest
             </button>
           </div>
         </div>
@@ -1012,68 +1275,169 @@ export default function DividendModelsPage() {
         <div className="mt-4 flex min-h-[24rem] w-full min-w-0 flex-col">
           {modeledChartEmpty ? (
             <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300 p-6 text-center text-sm text-zinc-600 dark:border-white/20 dark:text-zinc-400">
-              <p className="font-medium text-zinc-800 dark:text-zinc-200">No simulated months to chart yet.</p>
+              <p className="font-medium text-zinc-800 dark:text-zinc-200">
+                {trackingMode === "live" ? "No live tracking snapshots yet." : "No simulated months to chart yet."}
+              </p>
               <p className="mt-2 max-w-md">
-                Set shares on every holding, then use <span className="font-semibold">Build history</span> to materialize monthly
-                simulation points.
+                {trackingMode === "live" ? (
+                  <>
+                    Set shares on every holding, switch to <span className="font-semibold">Live tracking</span>, then run{" "}
+                    <span className="font-semibold">Refresh fundamentals</span> to capture the first weekly NAV snapshot.
+                  </>
+                ) : (
+                  <>
+                    Set shares on every holding, then use <span className="font-semibold">Build history</span> to materialize
+                    monthly simulation points.
+                  </>
+                )}
               </p>
             </div>
           ) : (
-            <div className="h-96 w-full min-h-[24rem] flex-1">
+            <div className={`h-96 w-full min-h-[24rem] flex-1 ${modeTheme.chartWrapperClass}`}>
               <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={320} debounce={50}>
                 <ComposedChart data={modeledChart} margin={{ top: 8, right: 8, left: 0, bottom: 16 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke={modeTheme.gridStroke}
+                    strokeOpacity={modeTheme.gridStrokeOpacity}
+                  />
                   <XAxis
                     dataKey="monthEnd"
-                    tickFormatter={(v: string) => modeledChartXLabel(v, years)}
+                    tickFormatter={(v: string) => formatModeledChartMonthEndLabel(v, years, liveWeeklyChart)}
                     tick={{ fontSize: 10, fill: "#71717a" }}
-                    interval={years === 1 ? 0 : years === 3 ? 1 : 2}
-                    minTickGap={8}
+                    stroke={modeTheme.axisStroke}
+                    strokeOpacity={0.7}
+                    interval={liveWeeklyChart ? "preserveStartEnd" : years === 1 ? 0 : years === 3 ? 1 : 2}
+                    minTickGap={liveWeeklyChart ? 4 : 8}
                   />
-                  <YAxis width={48} tickFormatter={(v) => `${Number(v).toFixed(0)}%`} />
+                  <YAxis
+                    width={48}
+                    tickFormatter={(v) => `${Number(v).toFixed(0)}%`}
+                    stroke={modeTheme.axisStroke}
+                    strokeOpacity={0.7}
+                  />
                   <Tooltip
-                    labelFormatter={(v) => (typeof v === "string" ? `Month-end ${v}` : String(v))}
-                    formatter={(value) => `${Number(value).toFixed(2)}%`}
+                    labelFormatter={(v) =>
+                      typeof v === "string" ? formatPeriodEndingLabel(v, liveWeeklyChart) : String(v)
+                    }
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      const row = payload[0]?.payload as (typeof modeledChart)[number] | undefined;
+                      if (!row) return null;
+                      const pct = (n: number | null | undefined) =>
+                        n != null && Number.isFinite(n) ? `${n.toFixed(2)}%` : "—";
+                      const usd = (n: number | null | undefined) => usdMasked(n ?? null, privacy.masked);
+                      const divLabel =
+                        chartView === "reinvest" ? "Dividends reinvested" : "From dividends";
+                      return (
+                        <div className="max-w-xs rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs shadow-md dark:border-white/20 dark:bg-zinc-900">
+                          <div className="font-semibold text-zinc-900 dark:text-zinc-100">
+                            {typeof label === "string"
+                              ? formatPeriodEndingLabel(label, liveWeeklyChart)
+                              : String(label)}
+                          </div>
+                          <ul className="mt-1.5 space-y-1 tabular-nums">
+                            <li className="flex justify-between gap-4" style={{ color: DM_CHART_PORT }}>
+                              <span>Price only</span>
+                              <span>
+                                {pct(row.sharesPct)} · {usd(row.priceOnlyUsd)}
+                              </span>
+                            </li>
+                            {!liveWeeklyChart ? (
+                              <li
+                                className="flex justify-between gap-4"
+                                style={{ color: chartView === "reinvest" ? DM_CHART_DRIP_FILL : DM_CHART_CASH_FILL }}
+                              >
+                                <span>{divLabel}</span>
+                                <span>
+                                  {pct(row.topPct)} · {usd(row.divStackUsd)}
+                                </span>
+                              </li>
+                            ) : null}
+                            <li className="flex justify-between gap-4" style={{ color: DM_CHART_PORT }}>
+                              <span>Total portfolio</span>
+                              <span>
+                                {pct(row.port)} · {usd(row.navUsd)}
+                              </span>
+                            </li>
+                            {!liveWeeklyChart && chartView === "withdraw" ? (
+                              <li className="flex justify-between gap-4 text-zinc-600 dark:text-zinc-400">
+                                <span>Cumulative dividends</span>
+                                <span>{usd(row.cumDivUsd)}</span>
+                              </li>
+                            ) : null}
+                          </ul>
+                        </div>
+                      );
+                    }}
                   />
                   <Legend />
-                  {simulationMode === "reinvest" ? (
+                  {liveWeeklyChart ? null : (
                     <>
                       <Area
                         type="monotone"
-                        dataKey="priceOnly"
-                        stackId="portfolio"
-                        stroke="none"
-                        fill="transparent"
-                        legendType="none"
+                        stackId="return"
+                        dataKey="topPct"
+                        name={chartView === "reinvest" ? "Dividends reinvested %" : "From dividends %"}
+                        stroke={chartView === "reinvest" ? DM_CHART_DRIP_FILL : DM_CHART_CASH_FILL}
+                        strokeWidth={1.5}
+                        fill={chartView === "reinvest" ? DM_CHART_DRIP_FILL : DM_CHART_CASH_FILL}
+                        fillOpacity={0.4}
                         isAnimationActive={false}
+                        connectNulls
                       />
                       <Area
                         type="monotone"
-                        dataKey="dividendLift"
-                        stackId="portfolio"
-                        name="Dividend lift"
-                        stroke="none"
-                        fill={DM_CHART_DIV_LIFT}
-                        fillOpacity={0.45}
+                        stackId="return"
+                        dataKey="sharesPct"
+                        name="Price only %"
+                        stroke={DM_CHART_PORT}
+                        strokeWidth={1.5}
+                        fill={DM_CHART_PORT}
+                        fillOpacity={0.28}
                         isAnimationActive={false}
+                        connectNulls
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="topPct"
+                        legendType="none"
+                        stroke={chartView === "reinvest" ? DM_CHART_DRIP_FILL : DM_CHART_CASH_FILL}
+                        strokeWidth={2}
+                        dot={false}
+                        isAnimationActive={false}
+                        connectNulls
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="port"
+                        legendType="none"
+                        stroke={DM_CHART_PORT}
+                        strokeWidth={2}
+                        dot={false}
+                        isAnimationActive={false}
+                        connectNulls
                       />
                     </>
+                  )}
+                  {liveWeeklyChart ? (
+                    <Line
+                      type="monotone"
+                      dataKey="port"
+                      name={chartView === "reinvest" ? "Portfolio % (Dividends Reinvest)" : "Portfolio % (Dividends)"}
+                      stroke={DM_CHART_PORT}
+                      dot={false}
+                      strokeWidth={2}
+                      connectNulls
+                    />
                   ) : null}
-                  <Line
-                    type="monotone"
-                    dataKey="port"
-                    name="Portfolio %"
-                    stroke={DM_CHART_PORT}
-                    dot={false}
-                    strokeWidth={2}
-                    connectNulls
-                  />
                   {showSpy ? (
                     <Line
                       type="monotone"
                       dataKey="spy"
                       name="SPY %"
                       stroke={DM_CHART_SPY}
+                      style={{ filter: "drop-shadow(0 0 1.5px rgba(0,0,0,0.75))" }}
                       dot={false}
                       strokeWidth={1.5}
                       connectNulls
@@ -1096,10 +1460,53 @@ export default function DividendModelsPage() {
           )}
         </div>
 
-        <p className="mt-4 text-sm text-zinc-700 dark:text-zinc-300">
-          <span className="font-medium">Total dividends received ({years}-year window):</span>{" "}
-          {totalDividendsReceived != null ? usdMasked(totalDividendsReceived, privacy.masked) : "—"}
-        </p>
+        <div className="mt-4 flex flex-col gap-3 text-sm text-zinc-700 dark:text-zinc-300 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+          <p>
+            <span className="font-medium">Total dividends received ({years}-year window):</span>{" "}
+            {totalDividendsReceived != null ? usdMasked(totalDividendsReceived, privacy.masked) : "—"}
+          </p>
+          {chartAnnualizedReturns ? (
+            <div className="flex flex-col gap-1.5 sm:items-end">
+              <p>
+                <span className="font-medium">Annualized return (with dividends):</span>{" "}
+                <span className="tabular-nums">{pctFmt(chartAnnualizedReturns.withDividends)}</span>
+                <span>
+                  {" "}
+                  · without dividends {pctFmt(chartAnnualizedReturns.withoutDividends)}
+                </span>
+              </p>
+              {showSpy || showQqq ? (
+                <p className="text-xs text-zinc-700 dark:text-zinc-300">
+                  {showSpy ? (
+                    <>
+                      <span className="font-medium text-zinc-800 dark:text-white">SPY</span>{" "}
+                      <span className="tabular-nums text-zinc-800 dark:text-white">
+                        {pctFmt(chartAnnualizedReturns.spy)}
+                      </span>
+                    </>
+                  ) : null}
+                  {showSpy && showQqq ? <span className="mx-1.5">·</span> : null}
+                  {showQqq ? (
+                    <>
+                      <span className="font-medium" style={{ color: DM_CHART_QQQ }}>
+                        QQQ
+                      </span>{" "}
+                      <span style={{ color: DM_CHART_QQQ }}>{pctFmt(chartAnnualizedReturns.qqq)}</span>
+                    </>
+                  ) : null}
+                  <span>
+                    {" "}
+                    (over{" "}
+                    {chartAnnualizedReturns.yearsElapsed < 1
+                      ? `${Math.round(chartAnnualizedReturns.yearsElapsed * 52)}w`
+                      : `${chartAnnualizedReturns.yearsElapsed.toFixed(1)}y`}
+                    )
+                  </span>
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </section>
 
 

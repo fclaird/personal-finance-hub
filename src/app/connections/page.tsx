@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { formatDisplayDateTime } from "@/lib/formatDate";
 import { MAX_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
 
 type SyncResult = { ok: boolean; accounts?: number; error?: string };
@@ -181,8 +182,7 @@ export default function ConnectionsPage() {
             {schwabStatus?.ok === true && schwabStatus.connected ? (
               <span className="text-zinc-600 dark:text-zinc-400">
                 Access token: {schwabStatus.accessValid ? "valid" : "expiring (will refresh on next API call)"} · Obtained{" "}
-                {new Date(schwabStatus.obtainedAt).toLocaleString()} · Expires{" "}
-                {new Date(schwabStatus.expiresAt).toLocaleString()}
+                {formatDisplayDateTime(schwabStatus.obtainedAt)} · Expires {formatDisplayDateTime(schwabStatus.expiresAt)}
               </span>
             ) : null}
 
@@ -228,7 +228,7 @@ export default function ConnectionsPage() {
             disabled={refreshingGreeks}
             className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
           >
-            {refreshingGreeks ? "Refreshing greeks…" : "Refresh option greeks"}
+            {refreshingGreeks ? "Refreshing options…" : "Refresh option quotes & greeks"}
           </button>
           <a
             href="/api/health"
@@ -262,8 +262,8 @@ export default function ConnectionsPage() {
         {greeks ? (
           <div className="mt-3 rounded-xl bg-zinc-50 p-3 text-sm text-zinc-800 dark:bg-black/40 dark:text-zinc-200">
             {greeks.ok
-              ? `Updated greeks for ${greeks.updated ?? 0} option quote(s).`
-              : `Greeks refresh error: ${greeks.error ?? "Unknown error"}`}
+              ? `Updated ${greeks.updated ?? 0} option quote(s) (marks + greeks).`
+              : `Option refresh error: ${greeks.error ?? "Unknown error"}`}
           </div>
         ) : null}
       </section>

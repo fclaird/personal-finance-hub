@@ -160,6 +160,13 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
       };
     }
 
+    const sym = (r.symbol ?? "").toUpperCase();
+    const qpx = sym ? px.get(sym) ?? null : null;
+    const price = qpx ?? r.price;
+    const qty = r.quantity ?? 0;
+    const marketValue =
+      price != null && Number.isFinite(price) && qty !== 0 ? price * 100 * qty : r.marketValue;
+
     const parsed = parseOptionFromSecurity(r.symbol, r.securityName);
     const dte = parsed ? daysToExpiration(parsed.expiration, r.asOf) : null;
     const effectiveUnderlyingSymbol = normalizeOptionUnderlying(r.underlyingSymbol, r.symbol);
@@ -169,8 +176,8 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
     const S = fromJoined ?? underPx.get(effectiveUnderlyingSymbol);
     const K = parsed?.strike;
     const right = parsed?.right;
-    const qtyAbs = Math.abs(r.quantity ?? 0);
-    const premium = (r.price ?? 0) * 100 * qtyAbs;
+    const qtyAbs = Math.abs(qty);
+    const premium = (price ?? 0) * 100 * qtyAbs;
 
     let intrinsic = null as number | null;
     if (S != null && K != null && right) {
@@ -185,6 +192,8 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
       symbol: r.symbol ?? "",
       securityName: r.securityName ?? "",
       effectiveUnderlyingSymbol,
+      price,
+      marketValue,
       optionExpiration: parsed?.expiration ?? null,
       optionRight: parsed?.right ?? null,
       optionStrike: parsed?.strike ?? null,

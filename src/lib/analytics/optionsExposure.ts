@@ -79,6 +79,26 @@ export type BucketExposure = {
 
 const DEFAULT_CONTRACT_MULTIPLIER = 100;
 
+/** Delta for synthetic exposure: current row, else latest same account+option security. */
+export const EFFECTIVE_OPTION_DELTA_SQL = `
+  COALESCE(
+    CASE WHEN og.delta IS NOT NULL AND ABS(og.delta) > 1e-12 THEN og.delta END,
+    (
+      SELECT og2.delta
+      FROM positions p2
+      JOIN holding_snapshots hs2 ON hs2.id = p2.snapshot_id
+      JOIN option_greeks og2 ON og2.position_id = p2.id
+      WHERE hs2.account_id = hs.account_id
+        AND p2.security_id = p.security_id
+        AND og2.delta IS NOT NULL
+        AND ABS(og2.delta) > 1e-12
+      ORDER BY hs2.as_of DESC, hs2.created_at DESC
+      LIMIT 1
+    ),
+    0
+  )
+`;
+
 export function impliedPriceMapForSnapshot(db: ReturnType<typeof getDb>, snapshotId: string): Map<string, number> {
   const spot = db
     .prepare(
@@ -133,8 +153,9 @@ export function syntheticEquityMvForSnapshot(
         SELECT
           us.symbol AS us_symbol,
           sec.symbol AS option_symbol,
-          p.quantity * ? * COALESCE(og.delta, 0) AS synthetic_shares
+          p.quantity * ? * (${EFFECTIVE_OPTION_DELTA_SQL}) AS synthetic_shares
         FROM positions p
+        JOIN holding_snapshots hs ON hs.id = p.snapshot_id
         JOIN securities sec ON sec.id = p.security_id
         LEFT JOIN securities us ON us.id = sec.underlying_security_id
         LEFT JOIN option_greeks og ON og.position_id = p.id
@@ -240,8 +261,9 @@ export function getUnderlyingExposureByBucket(mode: DataMode = "auto"): BucketEx
         SELECT
           us.symbol AS us_symbol,
           sec.symbol AS option_symbol,
-          p.quantity * ? * COALESCE(og.delta, 0) AS synthetic_shares
+          p.quantity * ? * (${EFFECTIVE_OPTION_DELTA_SQL}) AS synthetic_shares
         FROM positions p
+        JOIN holding_snapshots hs ON hs.id = p.snapshot_id
         JOIN securities sec ON sec.id = p.security_id
         LEFT JOIN securities us ON us.id = sec.underlying_security_id
         LEFT JOIN option_greeks og ON og.position_id = p.id
