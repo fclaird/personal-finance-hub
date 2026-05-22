@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Next.js / build output
+.next/
+.next-desktop/
+out/
+dist/
+desktop/out/
+desktop/server-bundle/
+
+# Environment and secrets
+.env
+.env.*
+!.env.local.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and debug
+*.log
+npm-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+
+# IDE (repo-local only; user-level Cursor config stays outside)
+.idea/
+*.swp
+*.swo
+
+# Certificates (local dev TLS)
+certificates/*.pem
+certificates/*.key
+!certificates/.gitkeep
+
+# Never commit runtime data
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+secrets.json
+secrets.json.enc

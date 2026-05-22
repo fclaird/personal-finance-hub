@@ -1,0 +1,96 @@
+{
+  "name": "finance-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local personal finance dashboard (Next.js + SQLite)",
+  "author": "Finance Hub",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "postinstall": "node scripts/ensure-sqlite-native.mjs",
+    "dev": "node scripts/dev.mjs",
+    "dev:next": "next dev --experimental-https",
+    "dev:webpack": "next dev --experimental-https --webpack",
+    "build": "next build",
+    "start": "next start",
+    "desktop:prepare": "node scripts/desktop-prepare-standalone.mjs",
+    "desktop:dev": "FINANCE_HUB_ELECTRON_DEV=1 electron desktop/main.cjs",
+    "desktop:dev:win": "set FINANCE_HUB_ELECTRON_DEV=1&& electron desktop/main.cjs",
+    "desktop:pack": "next build && npm run desktop:prepare && electron-builder --dir",
+    "desktop:dist": "next build && npm run desktop:prepare && electron-builder",
+    "lint": "eslint",
+    "rebuild:sqlite": "npm rebuild better-sqlite3",
+    "digest:pdf": "npx tsx scripts/pdf-allocation-report.ts",
+    "digest:notify": "npx tsx scripts/trigger-digest-notify.ts",
+    "backfill:portfolio-snapshots": "npx tsx scripts/backfill-portfolio-snapshots.ts",
+    "test:dividends": "npx tsx --test src/lib/dividends/dividendProducingFilter.test.ts src/lib/dividends/holdingCategory.test.ts src/lib/dividends/schwabDividendBook.test.ts src/lib/dividends/bookForwardSnap.test.ts"
+  },
+  "dependencies": {
+    "@tailwindcss/oxide-darwin-x64": "^4.2.4",
+    "better-sqlite3": "^12.9.0",
+    "jose": "^6.2.3",
+    "lightningcss-darwin-x64": "^1.32.0",
+    "next": "16.2.4",
+    "plaid": "^42.2.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "recharts": "^3.8.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "electron": "^34.5.8",
+    "electron-builder": "^26.0.12",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.4",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  },
+  "build": {
+    "appId": "com.financehub.desktop",
+    "productName": "Finance Hub",
+    "directories": {
+      "output": "desktop/out"
+    },
+    "npmRebuild": false,
+    "files": [
+      "desktop/main.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "desktop/server-bundle",
+        "to": "server",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.finance",
+      "target": [
+        "dmg"
+      ],
+      "hardenedRuntime": false,
+      "identity": null
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Office"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
