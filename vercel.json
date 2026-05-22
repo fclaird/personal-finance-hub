@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/internal/dividend-models/roll",
+      "schedule": "15 7 * * *"
+    }
+  ]
+}
