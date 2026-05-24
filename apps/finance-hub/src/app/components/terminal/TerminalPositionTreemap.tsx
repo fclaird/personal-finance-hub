@@ -148,11 +148,14 @@ export function TerminalPositionTreemap({
   mvBySymbol,
   heatView,
   companyNamesBySymbol,
+  portfolioSizeCaption,
 }: {
   items: HeatmapItem[];
   mvBySymbol: Map<string, number>;
   heatView: "portfolio" | "spy" | "qqq";
   companyNamesBySymbol?: Map<string, string>;
+  /** Overrides default portfolio caption when scope / weight controls are active. */
+  portfolioSizeCaption?: string | null;
 }) {
   const { rows, caption } = useMemo(() => {
     function companyNameFor(it: HeatmapItem): string | null {
@@ -191,7 +194,8 @@ export function TerminalPositionTreemap({
     if (firstPass.length > 0) {
       const cap =
         heatView === "portfolio"
-          ? "Tile area = portfolio market value (synced positions). Color = today’s % change (same scale as heatmap)."
+          ? (portfolioSizeCaption?.trim() ||
+            "Tile area = portfolio market value (synced positions). Color = today’s % change (same scale as heatmap).")
           : "Tile area ∝ √(market cap). Color = today’s % change.";
       return { rows: sortTreemapRowsDesc(firstPass), caption: cap };
     }
@@ -222,7 +226,7 @@ export function TerminalPositionTreemap({
     }
 
     return { rows: [], caption: "" };
-  }, [items, mvBySymbol, heatView, companyNamesBySymbol]);
+  }, [items, mvBySymbol, heatView, companyNamesBySymbol, portfolioSizeCaption]);
 
   if (rows.length === 0) {
     return (

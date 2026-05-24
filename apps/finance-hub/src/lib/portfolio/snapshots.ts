@@ -76,6 +76,27 @@ export function portfolioAsOfIsoDate(iso: string): string {
   return iso.slice(0, 10);
 }
 
+/** Mon–Fri in UTC (NYSE-style weekday filter; holidays not excluded). */
+export function isUsWeekdayIso(iso: string): boolean {
+  const y = Number(iso.slice(0, 4));
+  const m = Number(iso.slice(5, 7)) - 1;
+  const d = Number(iso.slice(8, 10));
+  const dow = new Date(Date.UTC(y, m, d)).getUTCDay();
+  return dow >= 1 && dow <= 5;
+}
+
+/** One point per weekday — last sync of each day; drops Sat/Sun. */
+export function collapseToTradingDays(series: PortfolioValuePoint[]): PortfolioValuePoint[] {
+  const byDay = new Map<string, PortfolioValuePoint>();
+  for (const p of series) {
+    const iso = portfolioAsOfIsoDate(p.asOf);
+    if (!isUsWeekdayIso(iso)) continue;
+    const prev = byDay.get(iso);
+    if (!prev || p.asOf.localeCompare(prev.asOf) > 0) byDay.set(iso, p);
+  }
+  return [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([, pt]) => pt);
+}
+
 /** Last series point with day <= anchorDay (carry-forward). */
 export function lastPointOnOrBefore(series: PortfolioValuePoint[], anchorDay: string): PortfolioValuePoint | null {
   let best: PortfolioValuePoint | null = null;
@@ -236,6 +257,8 @@ function xMsFromPortfolioAsOf(asOf: string): number {
 export type PerformanceHistoryChartRow = {
   date: string;
   x_ms: number;
+  /** Sequential index (0-based) for gapless x-axis; skips weekends/holidays visually. */
+  seq_index: number;
   portfolio: number;
   spy: number | null;
   qqq: number | null;
@@ -281,9 +304,10 @@ export function chartDataFromSnapshotRows(
   const startSpy = rows[0]!.spy_close;
   const startQq = rows[0]!.qqq_close;
 
-  return rows.map((r) => ({
+  return rows.map((r, idx) => ({
     date: r.snapshot_date,
     x_ms: utcNoonMsFromIsoDate(r.snapshot_date),
+    seq_index: idx,
     portfolio: startPv > 0 ? ((r.total_value / startPv) - 1) * 100 : 0,
     spy:
       startSpy != null && startSpy > 0 && r.spy_close != null && r.spy_close > 0
@@ -312,11 +336,12 @@ export function chartDataFromDenseSeries(
   const baselineSpy = baselineCloseOnOrBefore(benchSpy, startIso);
   const baselineQq = baselineCloseOnOrBefore(benchQq, startIso);
 
-  return series.map((p) => {
+  return series.map((p, idx) => {
     const iso = portfolioAsOfIsoDate(p.asOf);
     return {
       date: iso,
       x_ms: xMsFromPortfolioAsOf(p.asOf),
+      seq_index: idx,
       portfolio: ((p.totalMarketValue / startPv) - 1) * 100,
       spy: benchPctSeries(benchSpy, iso, baselineSpy),
       qqq: benchPctSeries(benchQq, iso, baselineQq),
@@ -343,6 +368,7 @@ export function extendChartDataThroughNow(
   const baselineSpy = baselineCloseOnOrBefore(benchSpy, firstDate);
   const baselineQq = baselineCloseOnOrBefore(benchQq, firstDate);
   const todayIso = new Date(nowMs).toISOString().slice(0, 10);
+  if (!isUsWeekdayIso(todayIso)) return sorted;
   const spyClose = baselineCloseOnOrBefore(benchSpy, todayIso);
   const qqqClose = baselineCloseOnOrBefore(benchQq, todayIso);
 
@@ -354,6 +380,7 @@ export function extendChartDataThroughNow(
     {
       date: todayIso,
       x_ms: nowMs,
+      seq_index: sorted.length,
       portfolio: startPv > 0 ? ((lastPv / startPv) - 1) * 100 : last.portfolio,
       spy:
         baselineSpy != null && spyClose != null && baselineSpy > 0

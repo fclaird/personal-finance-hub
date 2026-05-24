@@ -1,9 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, Treemap, XAxis, YAxis } from "recharts";
 
+import { TerminalTreemapWeightControls } from "@/app/components/terminal/TerminalTreemapWeightControls";
 import type { PortfolioDashboard } from "@/lib/dividends/portfolioDashboard";
+import {
+  exposureMvByUnderlying,
+  exposureTileSizeCaption,
+  normalizeExposureRow,
+  scopeExposureRows,
+  type ExposurePieMetric,
+  type ExposureRow,
+  type ExposureScope,
+  type SyntheticChartBasis,
+} from "@/lib/analytics/exposureWeighting";
 import {
   assignEarthToneColorsByLayoutOrder,
   distinctColorForIndex,
@@ -29,6 +40,36 @@ function num(v: number | null, d = 2) {
 
 type TreemapLabelMode = "dollars" | "percent";
 type CumulativeDividendsRange = "1y" | "lifetime";
+
+function readTreemapScope(): ExposureScope {
+  try {
+    const v = localStorage.getItem("dividends_treemap_scope_v1");
+    if (v === "brokerage" || v === "retirement" || v === "net") return v;
+  } catch {
+    /* ignore */
+  }
+  return "net";
+}
+
+function readTreemapMetric(): ExposurePieMetric {
+  try {
+    const v = localStorage.getItem("dividends_treemap_metric_v1");
+    if (v === "spot" || v === "synthetic" || v === "net") return v;
+  } catch {
+    /* ignore */
+  }
+  return "net";
+}
+
+function readTreemapSyntheticBasis(): SyntheticChartBasis {
+  try {
+    const v = localStorage.getItem("dividends_treemap_synthetic_basis_v1");
+    if (v === "delta" || v === "mark") return v;
+  } catch {
+    /* ignore */
+  }
+  return "delta";
+}
 
 /** YYYY-MM for the first month included in a trailing-12-month window. */
 function trailingTwelveMonthCutoffYm(): string {
@@ -58,24 +99,108 @@ type Props = {
 export function DividendBookDashboard({ dashboard, masked }: Props) {
   const [treemapLabelMode, setTreemapLabelMode] = useState<TreemapLabelMode>("dollars");
   const [cumRange, setCumRange] = useState<CumulativeDividendsRange>("lifetime");
+  const [treemapScope, setTreemapScope] = useState<ExposureScope>(() => readTreemapScope());
+  const [treemapMetric, setTreemapMetric] = useState<ExposurePieMetric>(() => readTreemapMetric());
+  const [treemapSyntheticBasis, setTreemapSyntheticBasis] = useState<SyntheticChartBasis>(() =>
+    readTreemapSyntheticBasis(),
+  );
+  const [exposureRows, setExposureRows] = useState<ExposureRow[]>([]);
+  const [exposureBuckets, setExposureBuckets] = useState<
+    Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>
+  >([]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("dividends_treemap_scope_v1", treemapScope);
+      localStorage.setItem("dividends_treemap_metric_v1", treemapMetric);
+      localStorage.setItem("dividends_treemap_synthetic_basis_v1", treemapSyntheticBasis);
+    } catch {
+      /* ignore */
+    }
+  }, [treemapScope, treemapMetric, treemapSyntheticBasis]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [pageResp, bucketResp] = await Promise.all([
+          fetch("/api/allocation/page-data?synthetic=1", { cache: "no-store" }),
+          fetch("/api/exposure/buckets", { cache: "no-store" }),
+        ]);
+        const pageJson = (await pageResp.json()) as { ok: boolean; exposure?: ExposureRow[] };
+        const bucketJson = (await bucketResp.json()) as {
+          ok: boolean;
+          buckets?: Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>;
+        };
+        if (cancelled) return;
+        if (pageJson.ok) {
+          setExposureRows((pageJson.exposure ?? []).map(normalizeExposureRow));
+        }
+        if (bucketJson.ok) {
+          setExposureBuckets(
+            (bucketJson.buckets ?? []).map((b) => ({
+              ...b,
+              exposure: (b.exposure ?? []).map(normalizeExposureRow),
+            })),
+          );
+        }
+      } catch {
+        /* keep prior exposure data */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const spotMvBySym = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const t of dashboard?.treemap ?? []) {
+      m.set(t.symbol.toUpperCase(), t.value);
+    }
+    return m;
+  }, [dashboard?.treemap]);
+
+  const treemapMvBySym = useMemo(() => {
+    if (exposureRows.length === 0) return spotMvBySym;
+    const scoped = scopeExposureRows(exposureRows, exposureBuckets, treemapScope);
+    const weighted = exposureMvByUnderlying(scoped, treemapMetric, treemapSyntheticBasis);
+    return weighted.size > 0 ? weighted : spotMvBySym;
+  }, [exposureRows, exposureBuckets, treemapScope, treemapMetric, treemapSyntheticBasis, spotMvBySym]);
+
+  const treemapSizeCaption = useMemo(
+    () => exposureTileSizeCaption(treemapScope, treemapMetric, treemapSyntheticBasis),
+    [treemapScope, treemapMetric, treemapSyntheticBasis],
+  );
 
   const treemapData = useMemo(() => {
-    const rows = [...(dashboard?.treemap ?? [])].sort((a, b) => b.value - a.value);
-    const totalValue = dashboard?.totalValue ?? rows.reduce((sum, t) => sum + t.value, 0);
-    const colorBySym = assignEarthToneColorsByLayoutOrder(rows.map((t) => t.symbol));
-    return rows.map((t) => {
-      const sharePct = totalValue > 0 ? (t.value / totalValue) * 100 : null;
-      const label =
-        treemapLabelMode === "dollars"
-          ? `${t.symbol}\n${usd(t.value, masked)}`
-          : `${t.symbol}\n${pct(sharePct)}`;
-      return {
-        name: label,
-        size: t.value,
-        fill: colorBySym.get(t.symbol) ?? distinctColorForIndex(0),
-      };
+    const rows = [...(dashboard?.treemap ?? [])].sort((a, b) => {
+      const mvA = treemapMvBySym.get(a.symbol.toUpperCase()) ?? a.value;
+      const mvB = treemapMvBySym.get(b.symbol.toUpperCase()) ?? b.value;
+      return mvB - mvA;
     });
-  }, [dashboard?.treemap, dashboard?.totalValue, masked, treemapLabelMode]);
+    const totalValue = rows.reduce(
+      (sum, t) => sum + (treemapMvBySym.get(t.symbol.toUpperCase()) ?? t.value),
+      0,
+    );
+    const colorBySym = assignEarthToneColorsByLayoutOrder(rows.map((t) => t.symbol));
+    return rows
+      .map((t) => {
+        const size = treemapMvBySym.get(t.symbol.toUpperCase()) ?? t.value;
+        if (!Number.isFinite(size) || size <= 0) return null;
+        const sharePct = totalValue > 0 ? (size / totalValue) * 100 : null;
+        const label =
+          treemapLabelMode === "dollars"
+            ? `${t.symbol}\n${usd(size, masked)}`
+            : `${t.symbol}\n${pct(sharePct)}`;
+        return {
+          name: label,
+          size,
+          fill: colorBySym.get(t.symbol) ?? distinctColorForIndex(0),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x != null);
+  }, [dashboard?.treemap, treemapMvBySym, masked, treemapLabelMode]);
 
   const cumData = useMemo(
     () => buildCumulativeDividendSeries(dashboard?.cumulativeDividends ?? [], cumRange),
@@ -322,7 +447,7 @@ export function DividendBookDashboard({ dashboard, masked }: Props) {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="text-sm font-semibold uppercase tracking-wide text-emerald-200/95">Ticker treemap — position size</div>
-            <p className="mt-2 text-sm leading-relaxed text-zinc-400">Area ∝ market value (latest quote × shares).</p>
+            <p className="mt-2 text-sm leading-relaxed text-zinc-400">{treemapSizeCaption}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs text-zinc-500">Labels</span>
@@ -350,6 +475,15 @@ export function DividendBookDashboard({ dashboard, masked }: Props) {
             </button>
           </div>
         </div>
+        <TerminalTreemapWeightControls
+          panel="dark"
+          scope={treemapScope}
+          onScopeChange={setTreemapScope}
+          pieMetric={treemapMetric}
+          onPieMetricChange={setTreemapMetric}
+          syntheticChartBasis={treemapSyntheticBasis}
+          onSyntheticChartBasisChange={setTreemapSyntheticBasis}
+        />
         <div className="mt-5 h-72 w-full min-w-0">
           {treemapData.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-zinc-400">No market values to chart.</div>

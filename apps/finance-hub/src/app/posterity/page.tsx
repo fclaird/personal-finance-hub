@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useState } from "react";
 
+import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { ExposurePositionTreemap } from "@/app/components/charts/ExposurePositionTreemap";
 import { FinancePiePanel } from "@/app/components/FinancePiePanel";
 import { SymbolLink } from "@/app/components/SymbolLink";
@@ -283,11 +284,17 @@ export default function PosterityPage() {
         </div>
       </div>
 
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
+      <DraggableTileLayout
+        storageKey="fh.posterity.tiles.v1"
+        defaultOrder={["account", "diversification", "positions"]}
+        tiles={{
+          account: {
+            title: "Account",
+            children: (
+              <>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
           <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold">Account</h2>
-            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">Choose which posterity account to view.</p>
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">Choose which posterity account to view.</p>
           </div>
           <div
             className="flex w-full shrink-0 flex-col rounded-2xl border border-zinc-200/90 bg-zinc-100/90 p-1 shadow-inner sm:w-auto sm:min-w-[min(100%,22rem)] dark:border-white/10 dark:bg-zinc-900/70"
@@ -335,11 +342,14 @@ export default function PosterityPage() {
             {error}
           </div>
         ) : null}
-      </section>
-
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
-        <h2 className="text-base font-semibold">Diversification (Posterity)</h2>
-        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">Same views as Diversification, scoped to this account.</p>
+              </>
+            ),
+          },
+          diversification: {
+            title: "Diversification (Posterity)",
+            children: (
+              <>
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">Same views as Diversification, scoped to this account.</p>
 
         <div className="mt-4 grid gap-4 lg:grid-cols-[18rem_1fr]">
           <div className="rounded-xl border border-zinc-300 bg-white p-4 dark:border-white/20 dark:bg-zinc-950">
@@ -405,11 +415,14 @@ export default function PosterityPage() {
 
           </div>
         </div>
-      </section>
-
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
-        <h2 className="text-base font-semibold">Positions (Posterity)</h2>
-        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">Latest snapshot for the selected posterity account.</p>
+              </>
+            ),
+          },
+          positions: {
+            title: "Positions (Posterity)",
+            children: (
+              <>
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">Latest snapshot for the selected posterity account.</p>
 
         <div className="mt-4 overflow-x-auto rounded-xl ring-1 ring-zinc-300 dark:ring-white/20">
           <table className="w-full min-w-[36rem] border-collapse text-sm">
@@ -471,7 +484,11 @@ export default function PosterityPage() {
             </tbody>
           </table>
         </div>
-      </section>
+              </>
+            ),
+          },
+        }}
+      />
     </div>
   );
 }

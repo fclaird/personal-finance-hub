@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatUsdCompact } from "@/lib/format";
@@ -153,7 +154,14 @@ export default function EarningsPage() {
         </Link>
       </div>
 
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
+      <DraggableTileLayout
+        storageKey="fh.earnings.tiles.v1"
+        defaultOrder={["sync", "ranked"]}
+        tiles={{
+          sync: {
+            title: "Sync & refresh",
+            children: (
+              <>
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -204,11 +212,14 @@ export default function EarningsPage() {
         {error ? (
           <div className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">{error}</div>
         ) : null}
-      </section>
-
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
-        <h2 className="text-base font-semibold">Ranked upcoming</h2>
-        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              </>
+            ),
+          },
+          ranked: {
+            title: "Ranked upcoming",
+            children: (
+              <>
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
           Score blends IV rank (when present) with dollar liquidity (0–100, log-scaled vs typical listed names: ~$1M/day low, ~$1B/day high). IV and HV30 are annualized
           decimals; IV/HV is implied vs realized vol in demo.
         </p>
@@ -267,7 +278,11 @@ export default function EarningsPage() {
             </tbody>
           </table>
         </div>
-      </section>
+              </>
+            ),
+          },
+        }}
+      />
     </div>
   );
 }

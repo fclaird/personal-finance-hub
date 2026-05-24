@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { ExposurePositionTreemap } from "@/app/components/charts/ExposurePositionTreemap";
-import { DraggableControlColumn } from "@/app/components/DraggableControlColumn";
+import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { FinancePiePanel, type PieBucket } from "@/app/components/FinancePiePanel";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { formatUsd2 } from "@/lib/format";
@@ -79,8 +79,29 @@ function pieMetricChartSubtitle(metric: PieMetric): string {
   }
 }
 
-const BTN_CLASSES =
-  "flex h-8 w-full min-w-0 items-center justify-center whitespace-nowrap rounded-md px-2 text-xs font-semibold tracking-tight";
+const BTN =
+  "flex h-8 min-w-0 shrink-0 items-center justify-center whitespace-nowrap rounded-md px-2.5 text-xs font-semibold tracking-tight";
+
+function controlBtnClass(active: boolean) {
+  return (
+    BTN +
+    " shadow-sm " +
+    (active
+      ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+      : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900")
+  );
+}
+
+function ControlGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+        {label}
+      </span>
+      <div className="flex flex-wrap items-center gap-1">{children}</div>
+    </div>
+  );
+}
 
 type RolledSlice = {
   key: string;
@@ -296,6 +317,53 @@ export default function DiversificationPage() {
 
   const scopeTitle = pieView === "net" ? "Net" : pieView === "brokerage" ? "Brokerage" : "Retirement";
 
+  const chartTitle = `${scopeTitle} · ${categoryTitle} · ${pieMetricChartSubtitle(pieMetric)}`;
+
+  const pieControlBanner = (
+    <div className="flex flex-wrap items-end justify-between gap-x-5 gap-y-2 border-b border-zinc-200 pb-3 dark:border-white/10">
+      <div className="flex min-w-0 flex-wrap items-end gap-x-5 gap-y-2">
+        <ControlGroup label="Category">
+          {(
+            [
+              { key: "sector", label: "Sector" },
+              { key: "marketCap", label: "Market cap" },
+              { key: "revenueGeo", label: "Revenue geo" },
+            ] as const
+          ).map((c) => (
+            <button key={c.key} type="button" onClick={() => setCategory(c.key)} className={controlBtnClass(category === c.key)}>
+              {c.label}
+            </button>
+          ))}
+        </ControlGroup>
+        <ControlGroup label="Scope">
+          {(
+            [
+              { key: "net", label: "Net" },
+              { key: "brokerage", label: "Brokerage" },
+              { key: "retirement", label: "Retirement" },
+            ] as const
+          ).map((v) => (
+            <button key={v.key} type="button" onClick={() => setPieView(v.key)} className={controlBtnClass(pieView === v.key)}>
+              {v.label}
+            </button>
+          ))}
+        </ControlGroup>
+        <ControlGroup label="Weights">
+          {(["net", "spot", "synthetic"] as const).map((m) => (
+            <button key={m} type="button" onClick={() => setPieMetric(m)} className={controlBtnClass(pieMetric === m)}>
+              {PIE_METRIC_LABEL[m]}
+            </button>
+          ))}
+        </ControlGroup>
+      </div>
+      {expandedSectorKeys.length ? (
+        <p className="shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
+          {expandedSectorKeys.length} slice{expandedSectorKeys.length === 1 ? "" : "s"} broken out
+        </p>
+      ) : null}
+    </div>
+  );
+
   return (
     <div className="flex w-full max-w-[108rem] flex-1 flex-col gap-8 py-10 pl-5 pr-6 sm:pl-6 sm:pr-8">
       <div className="flex items-start justify-between gap-4">
@@ -315,135 +383,41 @@ export default function DiversificationPage() {
         </div>
       </div>
 
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
-        <h2 className="text-base font-semibold">Diversification mix</h2>
-        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          Drag the blocks on the left by their handle to reorder. Pie slice labels are editable on click; use the chart tooltip to break a slice into individual holdings.
+      <DraggableTileLayout
+        storageKey="fh.diversification.tiles.v1"
+        defaultOrder={["overview", "chart"]}
+        tiles={{
+          overview: {
+            title: "Diversification mix",
+            children: (
+              <>
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          Category, scope, and weight controls sit in a compact banner above the chart. Pie slice labels are editable on click; use the chart tooltip to break a slice into individual holdings.
         </p>
-
         {error ? (
           <div className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">
             {error}
           </div>
         ) : null}
-
-        <div className="mt-4 flex flex-col gap-4 lg:flex-row lg:items-start">
-          <DraggableControlColumn
-            storageKey="fh.diversification.controlOrder.v1"
-            defaultOrder={["category", "scope", "weights", "selection"]}
-            titles={{
-              category: "Category",
-              scope: "Scope",
-              weights: "Weights",
-              selection: "Current",
-            }}
-            className="w-full shrink-0 lg:w-[15.5rem]"
-            renderBlock={(id) => {
-              if (id === "category") {
-                return (
-                  <div className="grid w-full max-w-full grid-cols-1 gap-1.5">
-                    {(
-                      [
-                        { key: "sector", label: "Sector" },
-                        { key: "marketCap", label: "Market cap" },
-                        { key: "revenueGeo", label: "Revenue geo" },
-                      ] as const
-                    ).map((c) => (
-                      <button
-                        key={c.key}
-                        type="button"
-                        onClick={() => setCategory(c.key)}
-                        className={
-                          BTN_CLASSES +
-                          " min-w-0 shadow-sm " +
-                          (category === c.key
-                            ? "bg-zinc-900 text-white shadow dark:bg-white dark:text-zinc-900"
-                            : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900")
-                        }
-                      >
-                        {c.label}
-                      </button>
-                    ))}
-                  </div>
-                );
-              }
-              if (id === "scope") {
-                return (
-                  <div className="grid w-full max-w-full grid-cols-1 gap-1.5">
-                    {(
-                      [
-                        { key: "net", label: "Net" },
-                        { key: "brokerage", label: "Brokerage" },
-                        { key: "retirement", label: "Retirement" },
-                      ] as const
-                    ).map((v) => (
-                      <button
-                        key={v.key}
-                        type="button"
-                        onClick={() => setPieView(v.key)}
-                        className={
-                          BTN_CLASSES +
-                          " min-w-0 shadow-sm " +
-                          (pieView === v.key
-                            ? "bg-zinc-900 text-white shadow dark:bg-white dark:text-zinc-900"
-                            : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900")
-                        }
-                      >
-                        {v.label}
-                      </button>
-                    ))}
-                  </div>
-                );
-              }
-              if (id === "weights") {
-                return (
-                  <div className="grid w-full max-w-full grid-cols-1 gap-1.5">
-                    {(["net", "spot", "synthetic"] as const).map((m) => (
-                      <button
-                        key={m}
-                        type="button"
-                        onClick={() => setPieMetric(m)}
-                        className={
-                          BTN_CLASSES +
-                          " min-w-0 shadow-sm " +
-                          (pieMetric === m
-                            ? "bg-zinc-900 text-white shadow dark:bg-white dark:text-zinc-900"
-                            : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900")
-                        }
-                      >
-                        {PIE_METRIC_LABEL[m]}
-                      </button>
-                    ))}
-                  </div>
-                );
-              }
-              if (id === "selection") {
-                return (
-                  <div className="text-xs font-medium leading-relaxed text-zinc-700 dark:text-zinc-300">
-                    {scopeTitle} · {PIE_METRIC_LABEL[pieMetric]}
-                    {expandedSectorKeys.length ? (
-                      <span className="mt-1 block text-zinc-500 dark:text-zinc-500">
-                        {expandedSectorKeys.length} slice{expandedSectorKeys.length === 1 ? "" : "s"} broken out to holdings
-                      </span>
-                    ) : null}
-                  </div>
-                );
-              }
-              return null;
-            }}
-          />
-
-          <div className="min-w-0 flex-1">
+              </>
+            ),
+          },
+          chart: {
+            title: chartTitle,
+            bodyClassName: "p-4",
+            children: (
+          <div className="flex min-w-0 flex-col gap-3">
+            {pieControlBanner}
             {category === "marketCap" ? (
               <ExposurePositionTreemap
                 leaves={rolled.rows.flatMap((r) => r.constituents)}
                 underlyingMarketCapBySymbol={capBySymbol}
                 masked={privacy.masked}
-                title={`${scopeTitle} · ${categoryTitle} · ${pieMetricChartSubtitle(pieMetric)}`}
+                title={chartTitle}
               />
             ) : (
               <FinancePiePanel
-                title={`${scopeTitle} · ${categoryTitle} · ${pieMetricChartSubtitle(pieMetric)}`}
+                title={chartTitle}
                 symbolColorMap={pieSymbolColors}
                 allowLabelEdit
                 labelStorageKey={`diversification-${category}`}
@@ -460,8 +434,10 @@ export default function DiversificationPage() {
               />
             )}
           </div>
-        </div>
-      </section>
+            ),
+          },
+        }}
+      />
     </div>
   );
 }

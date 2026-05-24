@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { AccountPositionsForAllocation } from "@/app/components/AccountPositionsForAllocation";
+import { DraggableColumnHeader, DRAGGABLE_COLUMN_HEADER_GRAB_CLASS } from "@/app/components/DraggableColumnHeader";
+import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { DraggableControlColumn } from "@/app/components/DraggableControlColumn";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { AllocationWeightingChart } from "@/app/components/allocation/AllocationWeightingChart";
@@ -12,6 +14,7 @@ import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { assignEarthToneColorsBySymbols } from "@/lib/charts/pieEarthTones";
 import { formatUsd2 } from "@/lib/format";
+import { usePersistedColumnOrder } from "@/lib/usePersistedColumnOrder";
 import { posNegClass } from "@/lib/terminal/colors";
 
 type ExposureRow = {
@@ -36,6 +39,32 @@ type SortColumn =
   | "netShares"
   | "pct";
 type ClassSortColumn = "key" | "mv" | "weight";
+
+const DEFAULT_EXPOSURE_COLUMN_ORDER: readonly SortColumn[] = [
+  "underlying",
+  "spot",
+  "synthetic",
+  "optionsLiquidating",
+  "netLiquidating",
+  "net",
+  "syntheticShares",
+  "heldShares",
+  "netShares",
+  "pct",
+];
+
+const EXPOSURE_COLUMN_LABEL: Record<SortColumn, string> = {
+  underlying: "Underlying",
+  spot: "Spot MV",
+  synthetic: "Synthetic MV",
+  optionsLiquidating: "Options liquidating value",
+  netLiquidating: "Net liquidating value",
+  net: "Net MV",
+  syntheticShares: "Synthetic shares",
+  heldShares: "Held shares",
+  netShares: "Net shares",
+  pct: "% of total",
+};
 
 type PieMetric = "spot" | "synthetic" | "net";
 
@@ -75,6 +104,38 @@ const PCT2 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximu
 
 function usd2Masked(v: number, masked: boolean) {
   return formatUsd2(v, { mask: masked });
+}
+
+function SortHeaderBtn<T extends string>({
+  col,
+  label,
+  sortColumn,
+  sortAsc,
+  onToggle,
+  align = "left",
+}: {
+  col: T;
+  label: string;
+  sortColumn: T;
+  sortAsc: boolean;
+  onToggle: (col: T) => void;
+  align?: "left" | "right";
+}) {
+  const active = sortColumn === col;
+  const arrow = active ? (sortAsc ? " ▲" : " ▼") : "";
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(col)}
+      className={
+        "inline-flex w-full items-center gap-1 hover:underline underline-offset-4 " +
+        (align === "right" ? "justify-end" : "justify-start")
+      }
+    >
+      <span>{label}</span>
+      <span className="text-[10px] opacity-70">{arrow}</span>
+    </button>
+  );
 }
 
 function SortTh<T extends string>({
@@ -256,6 +317,10 @@ export default function AllocationPage() {
       exposure: ExposureRow[];
     }>
   >([]);
+  const { order: exposureColumnOrder, moveColumn: moveExposureColumn } = usePersistedColumnOrder(
+    "fh.allocation.exposureColumns.v1",
+    DEFAULT_EXPOSURE_COLUMN_ORDER,
+  );
 
   async function load() {
     setError(null);
@@ -469,6 +534,241 @@ export default function AllocationPage() {
     }
   }
 
+  function exposureHeaderCell(col: SortColumn) {
+    const align = col === "underlying" ? "left" : "right";
+    const ariaSort = sortColumn === col ? (sortAsc ? "ascending" : "descending") : "none";
+    return (
+      <DraggableColumnHeader
+        key={col}
+        colId={col}
+        columnOrder={exposureColumnOrder}
+        moveColumn={moveExposureColumn}
+        aria-sort={ariaSort}
+        className={
+          `py-2 pr-4 font-medium ${align === "right" ? "text-right" : "text-left"} ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`
+        }
+      >
+        <SortHeaderBtn
+          col={col}
+          label={EXPOSURE_COLUMN_LABEL[col]}
+          sortColumn={sortColumn}
+          sortAsc={sortAsc}
+          onToggle={toggleSort}
+          align={align}
+        />
+      </DraggableColumnHeader>
+    );
+  }
+
+  function exposureDataCell(col: SortColumn, r: ExposureRow) {
+    const netMv = r.spotMarketValue + r.syntheticMarketValue;
+    const netLiq = netLiquidatingMv(r);
+    const pct = scopedMetricTotal ? sliceMv(r, pieMetric) / scopedMetricTotal : 0;
+    switch (col) {
+      case "underlying":
+        return (
+          <td key={col} className="py-2 pr-4 font-medium">
+            <SymbolLink symbol={r.underlyingSymbol}>{r.underlyingSymbol}</SymbolLink>
+          </td>
+        );
+      case "spot":
+        return (
+          <td key={col} className={"py-2 pr-4 text-right tabular-nums " + posNegClass(r.spotMarketValue)}>
+            {usd2Masked(r.spotMarketValue, privacy.masked)}
+          </td>
+        );
+      case "synthetic":
+        return (
+          <td
+            key={col}
+            className={"py-2 pr-4 text-right tabular-nums " + posNegClass(r.syntheticMarketValue)}
+            onMouseEnter={() => void ensureDetail(r.underlyingSymbol)}
+            title={(() => {
+              const d = detail.get(r.underlyingSymbol.trim().toUpperCase());
+              if (!d) return "Hover to load synthetic MV breakdown";
+              const px = d.impliedPrice;
+              const pxStr = px == null ? "n/a" : `$${px.toFixed(2)}`;
+              const sharesStr = d.syntheticShares == null ? "n/a" : d.syntheticShares.toFixed(2);
+              const lines = [
+                `Synthetic MV breakdown for ${r.underlyingSymbol}`,
+                `syntheticShares = Σ(positionQty × 100 × delta) = ${sharesStr}`,
+                `impliedPrice = ${pxStr}`,
+                `syntheticMV = syntheticShares × impliedPrice`,
+                `(implied price is portfolio-wide VWAP from non-option shares, same as the breakdown API.)`,
+                ``,
+                `Top contributors:`,
+                ...d.contributors.slice(0, 8).map((c) => {
+                  const dlt = c.delta == null ? "—" : c.delta.toFixed(3);
+                  return `${c.optionSymbol} | qty=${c.quantity} | delta=${dlt} | contribShares=${c.syntheticShares.toFixed(2)}`;
+                }),
+              ];
+              return lines.join("\n");
+            })()}
+          >
+            {usd2Masked(r.syntheticMarketValue, privacy.masked)}
+          </td>
+        );
+      case "optionsLiquidating":
+        return (
+          <td key={col} className={"py-2 pr-4 text-right tabular-nums " + posNegClass(r.optionsMarkMarketValue)}>
+            {usd2Masked(r.optionsMarkMarketValue, privacy.masked)}
+          </td>
+        );
+      case "netLiquidating":
+        return (
+          <td key={col} className={"py-2 pr-4 text-right tabular-nums " + posNegClass(netLiq)}>
+            {usd2Masked(netLiq, privacy.masked)}
+          </td>
+        );
+      case "net":
+        return (
+          <td key={col} className="py-2 pr-4 text-right tabular-nums font-medium text-zinc-900 dark:text-zinc-100">
+            <span className={posNegClass(netMv)}>{usd2Masked(netMv, privacy.masked)}</span>
+          </td>
+        );
+      case "syntheticShares":
+        return (
+          <td key={col} className={"py-2 pr-4 text-right tabular-nums " + posNegClass(r.syntheticShares)}>
+            {(Number.isFinite(r.syntheticShares) ? r.syntheticShares : 0).toLocaleString(undefined, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
+          </td>
+        );
+      case "heldShares":
+        return (
+          <td key={col} className={"py-2 pr-4 text-right tabular-nums " + posNegClass(r.heldShares ?? 0)}>
+            {(r.heldShares ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </td>
+        );
+      case "netShares":
+        return (
+          <td key={col} className={"py-2 pr-4 text-right tabular-nums " + posNegClass(netShares(r))}>
+            {netShares(r).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </td>
+        );
+      case "pct":
+        return <td key={col} className="py-2 pr-4 text-right tabular-nums">{PCT2.format(pct * 100)}%</td>;
+      default: {
+        const _exhaustive: never = col;
+        return _exhaustive;
+      }
+    }
+  }
+
+  function exposureTotalCell(col: SortColumn) {
+    switch (col) {
+      case "underlying":
+        return <td key={col} className="py-2 pr-4">TOTAL</td>;
+      case "spot":
+        return (
+          <td
+            key={col}
+            className={
+              "py-2 pr-4 text-right tabular-nums " + posNegClass(scopedRows.reduce((s, r) => s + r.spotMarketValue, 0))
+            }
+          >
+            {usd2Masked(scopedRows.reduce((s, r) => s + r.spotMarketValue, 0), privacy.masked)}
+          </td>
+        );
+      case "synthetic":
+        return (
+          <td
+            key={col}
+            className={
+              "py-2 pr-4 text-right tabular-nums " +
+              posNegClass(scopedRows.reduce((s, r) => s + r.syntheticMarketValue, 0))
+            }
+          >
+            {usd2Masked(scopedRows.reduce((s, r) => s + r.syntheticMarketValue, 0), privacy.masked)}
+          </td>
+        );
+      case "optionsLiquidating":
+        return (
+          <td
+            key={col}
+            className={
+              "py-2 pr-4 text-right tabular-nums " +
+              posNegClass(scopedRows.reduce((s, r) => s + r.optionsMarkMarketValue, 0))
+            }
+          >
+            {usd2Masked(scopedRows.reduce((s, r) => s + r.optionsMarkMarketValue, 0), privacy.masked)}
+          </td>
+        );
+      case "netLiquidating":
+        return (
+          <td
+            key={col}
+            className={
+              "py-2 pr-4 text-right tabular-nums " +
+              posNegClass(scopedRows.reduce((s, r) => s + netLiquidatingMv(r), 0))
+            }
+          >
+            {usd2Masked(scopedRows.reduce((s, r) => s + netLiquidatingMv(r), 0), privacy.masked)}
+          </td>
+        );
+      case "net":
+        return (
+          <td
+            key={col}
+            className={
+              "py-2 pr-4 text-right tabular-nums " +
+              posNegClass(scopedRows.reduce((s, r) => s + r.spotMarketValue + r.syntheticMarketValue, 0))
+            }
+          >
+            {usd2Masked(scopedRows.reduce((s, r) => s + r.spotMarketValue + r.syntheticMarketValue, 0), privacy.masked)}
+          </td>
+        );
+      case "syntheticShares":
+        return (
+          <td
+            key={col}
+            className={
+              "py-2 pr-4 text-right tabular-nums " +
+              posNegClass(scopedRows.reduce((s, r) => s + (Number.isFinite(r.syntheticShares) ? r.syntheticShares : 0), 0))
+            }
+          >
+            {scopedRows
+              .reduce((s, r) => s + (Number.isFinite(r.syntheticShares) ? r.syntheticShares : 0), 0)
+              .toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </td>
+        );
+      case "heldShares":
+        return (
+          <td
+            key={col}
+            className={
+              "py-2 pr-4 text-right tabular-nums " + posNegClass(scopedRows.reduce((s, r) => s + (r.heldShares ?? 0), 0))
+            }
+          >
+            {scopedRows
+              .reduce((s, r) => s + (r.heldShares ?? 0), 0)
+              .toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </td>
+        );
+      case "netShares":
+        return (
+          <td
+            key={col}
+            className={
+              "py-2 pr-4 text-right tabular-nums " +
+              posNegClass(scopedRows.reduce((s, r) => s + (r.heldShares ?? 0) + (r.syntheticShares ?? 0), 0))
+            }
+          >
+            {scopedRows
+              .reduce((s, r) => s + (r.heldShares ?? 0) + (r.syntheticShares ?? 0), 0)
+              .toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </td>
+        );
+      case "pct":
+        return <td key={col} className="py-2 pr-4 text-right tabular-nums">100.00%</td>;
+      default: {
+        const _exhaustive: never = col;
+        return _exhaustive;
+      }
+    }
+  }
+
   return (
     <div className="flex w-full min-w-0 max-w-[108rem] flex-1 flex-col gap-8 py-8 pl-4 pr-5 sm:py-10 sm:pl-6 sm:pr-8">
       <div className="flex items-start justify-between gap-4">
@@ -492,9 +792,16 @@ export default function AllocationPage() {
         </div>
       </div>
 
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
+      <DraggableTileLayout
+        storageKey="fh.allocation.tiles.v1"
+        defaultOrder={["exposure-table", "weighting", "asset-class", "by-account"]}
+        tiles={{
+          "exposure-table": {
+            title: "Exposure by underlying",
+            children: (
+              <>
         {error ? (
-          <div className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">
+          <div className="rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">
             {error}
           </div>
         ) : null}
@@ -513,234 +820,32 @@ export default function AllocationPage() {
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="border-b border-zinc-300 text-left text-zinc-600 dark:border-white/20 dark:text-zinc-400">
-                <SortTh
-                  col="underlying"
-                  label="Underlying"
-                  sortColumn={sortColumn}
-                  sortAsc={sortAsc}
-                  onToggle={toggleSort}
-                  className="py-2 pr-4 font-medium"
-                />
-                <SortTh
-                  col="spot"
-                  label="Spot MV"
-                  sortColumn={sortColumn}
-                  sortAsc={sortAsc}
-                  onToggle={toggleSort}
-                  className="py-2 pr-4 text-right font-medium"
-                />
-                <SortTh
-                  col="synthetic"
-                  label="Synthetic MV"
-                  sortColumn={sortColumn}
-                  sortAsc={sortAsc}
-                  onToggle={toggleSort}
-                  className="py-2 pr-4 text-right font-medium"
-                />
-                <SortTh
-                  col="optionsLiquidating"
-                  label="Options liquidating value"
-                  sortColumn={sortColumn}
-                  sortAsc={sortAsc}
-                  onToggle={toggleSort}
-                  className="py-2 pr-4 text-right font-medium"
-                />
-                <SortTh
-                  col="netLiquidating"
-                  label="Net liquidating value"
-                  sortColumn={sortColumn}
-                  sortAsc={sortAsc}
-                  onToggle={toggleSort}
-                  className="py-2 pr-4 text-right font-medium"
-                />
-                <SortTh
-                  col="net"
-                  label="Net MV"
-                  sortColumn={sortColumn}
-                  sortAsc={sortAsc}
-                  onToggle={toggleSort}
-                  className="py-2 pr-4 text-right font-medium"
-                />
-                <SortTh
-                  col="syntheticShares"
-                  label="Synthetic shares"
-                  sortColumn={sortColumn}
-                  sortAsc={sortAsc}
-                  onToggle={toggleSort}
-                  className="py-2 pr-4 text-right font-medium"
-                />
-                <SortTh
-                  col="heldShares"
-                  label="Held shares"
-                  sortColumn={sortColumn}
-                  sortAsc={sortAsc}
-                  onToggle={toggleSort}
-                  className="py-2 pr-4 text-right font-medium"
-                />
-                <SortTh
-                  col="netShares"
-                  label="Net shares"
-                  sortColumn={sortColumn}
-                  sortAsc={sortAsc}
-                  onToggle={toggleSort}
-                  className="py-2 pr-4 text-right font-medium"
-                />
-                <SortTh
-                  col="pct"
-                  label="% of total"
-                  sortColumn={sortColumn}
-                  sortAsc={sortAsc}
-                  onToggle={toggleSort}
-                  className="py-2 pr-4 text-right font-medium"
-                />
+                <th
+                  scope="col"
+                  className="w-10 py-2 pr-2 text-right font-medium tabular-nums"
+                  title="Rank by current sort (1 = top row)"
+                >
+                  #
+                </th>
+                {exposureColumnOrder.map((col) => exposureHeaderCell(col))}
               </tr>
             </thead>
             <tbody>
-              {sortedRows.map((r) => {
-                const netMv = r.spotMarketValue + r.syntheticMarketValue;
-                const netLiq = netLiquidatingMv(r);
-                const pct = scopedMetricTotal ? sliceMv(r, pieMetric) / scopedMetricTotal : 0;
-                return (
-                  <tr key={r.underlyingSymbol} className="border-b border-zinc-200 dark:border-white/20">
-                    <td className="py-2 pr-4 font-medium">
-                      <SymbolLink symbol={r.underlyingSymbol}>{r.underlyingSymbol}</SymbolLink>
-                    </td>
-                      <td className={"py-2 pr-4 text-right tabular-nums " + posNegClass(r.spotMarketValue)}>
-                        {usd2Masked(r.spotMarketValue, privacy.masked)}
-                      </td>
-                      <td
-                        className={"py-2 pr-4 text-right tabular-nums " + posNegClass(r.syntheticMarketValue)}
-                        onMouseEnter={() => void ensureDetail(r.underlyingSymbol)}
-                        title={(() => {
-                          const d = detail.get(r.underlyingSymbol.trim().toUpperCase());
-                          if (!d) return "Hover to load synthetic MV breakdown";
-                          const px = d.impliedPrice;
-                          const pxStr = px == null ? "n/a" : `$${px.toFixed(2)}`;
-                          const sharesStr = d.syntheticShares == null ? "n/a" : d.syntheticShares.toFixed(2);
-                          const lines = [
-                            `Synthetic MV breakdown for ${r.underlyingSymbol}`,
-                            `syntheticShares = Σ(positionQty × 100 × delta) = ${sharesStr}`,
-                            `impliedPrice = ${pxStr}`,
-                            `syntheticMV = syntheticShares × impliedPrice`,
-                            `(implied price is portfolio-wide VWAP from non-option shares, same as the breakdown API.)`,
-                            ``,
-                            `Top contributors:`,
-                            ...d.contributors.slice(0, 8).map((c) => {
-                              const dlt = c.delta == null ? "—" : c.delta.toFixed(3);
-                              return `${c.optionSymbol} | qty=${c.quantity} | delta=${dlt} | contribShares=${c.syntheticShares.toFixed(2)}`;
-                            }),
-                          ];
-                          return lines.join("\n");
-                        })()}
-                      >
-                        {usd2Masked(r.syntheticMarketValue, privacy.masked)}
-                      </td>
-                      <td className={"py-2 pr-4 text-right tabular-nums " + posNegClass(r.optionsMarkMarketValue)}>
-                        {usd2Masked(r.optionsMarkMarketValue, privacy.masked)}
-                      </td>
-                      <td className={"py-2 pr-4 text-right tabular-nums " + posNegClass(netLiq)}>
-                        {usd2Masked(netLiq, privacy.masked)}
-                      </td>
-                    <td className="py-2 pr-4 text-right tabular-nums font-medium text-zinc-900 dark:text-zinc-100">
-                        <span className={posNegClass(netMv)}>{usd2Masked(netMv, privacy.masked)}</span>
-                    </td>
-                      <td className={"py-2 pr-4 text-right tabular-nums " + posNegClass(r.syntheticShares)}>
-                        {(Number.isFinite(r.syntheticShares) ? r.syntheticShares : 0).toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
-                      </td>
-                      <td className={"py-2 pr-4 text-right tabular-nums " + posNegClass(r.heldShares ?? 0)}>
-                        {(r.heldShares ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                      <td className={"py-2 pr-4 text-right tabular-nums " + posNegClass(netShares(r))}>
-                        {netShares(r).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                    <td className="py-2 pr-4 text-right tabular-nums">{PCT2.format(pct * 100)}%</td>
-                  </tr>
-                );
-              })}
+              {sortedRows.map((r, idx) => (
+                <tr key={r.underlyingSymbol} className="border-b border-zinc-200 dark:border-white/20">
+                  <td className="py-2 pr-2 text-right tabular-nums text-zinc-500 dark:text-zinc-400">{idx + 1}</td>
+                  {exposureColumnOrder.map((col) => exposureDataCell(col, r))}
+                </tr>
+              ))}
               {rows.length ? (
                 <tr className="border-t border-zinc-300 bg-zinc-50/60 font-semibold text-zinc-900 dark:border-white/20 dark:bg-white/5 dark:text-zinc-100">
-                  <td className="py-2 pr-4">TOTAL</td>
-                  <td
-                    className={
-                      "py-2 pr-4 text-right tabular-nums " +
-                      posNegClass(scopedRows.reduce((s, r) => s + r.spotMarketValue, 0))
-                    }
-                  >
-                    {usd2Masked(scopedRows.reduce((s, r) => s + r.spotMarketValue, 0), privacy.masked)}
-                  </td>
-                  <td
-                    className={
-                      "py-2 pr-4 text-right tabular-nums " +
-                      posNegClass(scopedRows.reduce((s, r) => s + r.syntheticMarketValue, 0))
-                    }
-                  >
-                    {usd2Masked(scopedRows.reduce((s, r) => s + r.syntheticMarketValue, 0), privacy.masked)}
-                  </td>
-                  <td
-                    className={
-                      "py-2 pr-4 text-right tabular-nums " +
-                      posNegClass(scopedRows.reduce((s, r) => s + r.optionsMarkMarketValue, 0))
-                    }
-                  >
-                    {usd2Masked(scopedRows.reduce((s, r) => s + r.optionsMarkMarketValue, 0), privacy.masked)}
-                  </td>
-                  <td
-                    className={
-                      "py-2 pr-4 text-right tabular-nums " +
-                      posNegClass(scopedRows.reduce((s, r) => s + netLiquidatingMv(r), 0))
-                    }
-                  >
-                    {usd2Masked(scopedRows.reduce((s, r) => s + netLiquidatingMv(r), 0), privacy.masked)}
-                  </td>
-                  <td
-                    className={
-                      "py-2 pr-4 text-right tabular-nums " +
-                      posNegClass(scopedRows.reduce((s, r) => s + r.spotMarketValue + r.syntheticMarketValue, 0))
-                    }
-                  >
-                    {usd2Masked(scopedRows.reduce((s, r) => s + r.spotMarketValue + r.syntheticMarketValue, 0), privacy.masked)}
-                  </td>
-                  <td
-                    className={
-                      "py-2 pr-4 text-right tabular-nums " +
-                      posNegClass(scopedRows.reduce((s, r) => s + (Number.isFinite(r.syntheticShares) ? r.syntheticShares : 0), 0))
-                    }
-                  >
-                    {scopedRows
-                      .reduce((s, r) => s + (Number.isFinite(r.syntheticShares) ? r.syntheticShares : 0), 0)
-                      .toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td
-                    className={
-                      "py-2 pr-4 text-right tabular-nums " +
-                      posNegClass(scopedRows.reduce((s, r) => s + (r.heldShares ?? 0), 0))
-                    }
-                  >
-                    {scopedRows
-                      .reduce((s, r) => s + (r.heldShares ?? 0), 0)
-                      .toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td
-                    className={
-                      "py-2 pr-4 text-right tabular-nums " +
-                      posNegClass(
-                        scopedRows.reduce((s, r) => s + (r.heldShares ?? 0) + (r.syntheticShares ?? 0), 0),
-                      )
-                    }
-                  >
-                    {scopedRows
-                      .reduce((s, r) => s + (r.heldShares ?? 0) + (r.syntheticShares ?? 0), 0)
-                      .toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td className="py-2 pr-4 text-right tabular-nums">100.00%</td>
+                  <td className="py-2 pr-2" />
+                  {exposureColumnOrder.map((col) => exposureTotalCell(col))}
                 </tr>
               ) : null}
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-6 text-center text-zinc-600 dark:text-zinc-400">
+                  <td colSpan={exposureColumnOrder.length + 1} className="py-6 text-center text-zinc-600 dark:text-zinc-400">
                     No data yet. Connect Schwab and run a sync.
                   </td>
                 </tr>
@@ -748,11 +853,15 @@ export default function AllocationPage() {
             </tbody>
           </table>
         </div>
-      </section>
-
-      <section className="flex flex-col rounded-2xl border border-zinc-300 bg-white p-4 shadow-sm dark:border-white/20 dark:bg-zinc-950 sm:p-6">
-        <h2 className="text-base font-semibold">Weighting (pie & bars)</h2>
-        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              </>
+            ),
+          },
+          weighting: {
+            title: "Weighting (pie & bars)",
+            bodyClassName: "p-4 sm:p-6",
+            children: (
+              <>
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
           Color-coded by symbol. The exposure table and % column always use delta-weighted synthetic MV. Pie and bar charts follow the scope below; when you choose{" "}
           <span className="font-medium text-zinc-800 dark:text-zinc-200">Mark (contracts)</span> (options liquidating value) for charts, slices can diverge from the table while History (if enabled) stays
           delta-based snapshots. Drag the control blocks on the left by their handle to reorder them.
@@ -913,11 +1022,14 @@ export default function AllocationPage() {
             />
           </div>
         </div>
-      </section>
-
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
-        <h2 className="text-base font-semibold">By asset class</h2>
-        <div className="mt-4 overflow-x-auto">
+              </>
+            ),
+          },
+          "asset-class": {
+            title: "By asset class",
+            children: (
+              <>
+        <div className="overflow-x-auto">
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="border-b border-zinc-300 text-left text-zinc-600 dark:border-white/20 dark:text-zinc-400">
@@ -967,11 +1079,14 @@ export default function AllocationPage() {
             </tbody>
           </table>
         </div>
-      </section>
-
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
-        <h2 className="text-base font-semibold">By account</h2>
-        <div className="mt-4 grid gap-4">
+              </>
+            ),
+          },
+          "by-account": {
+            title: "By account",
+            children: (
+              <>
+        <div className="grid gap-4">
           {accounts.map((a) => (
             <details
               key={a.accountId}
@@ -995,7 +1110,11 @@ export default function AllocationPage() {
             <div className="text-sm text-zinc-600 dark:text-zinc-400">No accounts yet.</div>
           ) : null}
         </div>
-      </section>
+              </>
+            ),
+          },
+        }}
+      />
     </div>
   );
 }

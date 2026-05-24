@@ -10,10 +10,22 @@ import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator
 import { isUsEquityPreOpenFuturesPollWindow, isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import type { NormalizedQuote as ApiNormalizedQuote } from "@/app/api/quotes/route";
 import { HeatmapGrid, type HeatmapItem } from "@/app/components/HeatmapGrid";
+import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { NewsFeedPanel } from "@/app/components/terminal/NewsFeedPanel";
 import { TerminalPositionTreemap } from "@/app/components/terminal/TerminalPositionTreemap";
+import { TerminalTreemapWeightControls } from "@/app/components/terminal/TerminalTreemapWeightControls";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatUsd2 } from "@/lib/format";
+import {
+  type ExposurePieMetric,
+  type ExposureRow,
+  type ExposureScope,
+  type SyntheticChartBasis,
+  exposureMvByUnderlying,
+  normalizeExposureRow,
+  scopeExposureRows,
+  terminalTreemapSizeCaption,
+} from "@/lib/analytics/exposureWeighting";
 import { heatmapCellStyle } from "@/lib/terminal/dailyPerfColor";
 import { posNegClass, priceDirClass } from "@/lib/terminal/colors";
 import { computeMovers } from "@/lib/terminal/movers";
@@ -63,6 +75,36 @@ type UsMarketGlanceItem = {
 type TerminalCol = "symbol" | "company" | "last" | "chg" | "chgPct" | "volume" | "volX";
 
 const DEFAULT_TERMINAL_COL_ORDER: TerminalCol[] = ["symbol", "company", "last", "chg", "chgPct", "volume", "volX"];
+
+function readTreemapScope(): ExposureScope {
+  try {
+    const v = localStorage.getItem("terminal_treemap_scope_v1");
+    if (v === "net" || v === "brokerage" || v === "retirement") return v;
+  } catch {
+    // ignore
+  }
+  return "net";
+}
+
+function readTreemapMetric(): ExposurePieMetric {
+  try {
+    const v = localStorage.getItem("terminal_treemap_metric_v1");
+    if (v === "net" || v === "spot" || v === "synthetic") return v;
+  } catch {
+    // ignore
+  }
+  return "net";
+}
+
+function readTreemapSyntheticBasis(): SyntheticChartBasis {
+  try {
+    const v = localStorage.getItem("terminal_treemap_synthetic_basis_v1");
+    if (v === "delta" || v === "mark") return v;
+  } catch {
+    // ignore
+  }
+  return "delta";
+}
 
 const PCT2 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -181,6 +223,15 @@ export default function TerminalPage() {
   const [heatView, setHeatView] = useState<"portfolio" | "spy" | "qqq">("portfolio");
   const [heatItems, setHeatItems] = useState<HeatmapItem[]>([]);
   const [positionMvBySym, setPositionMvBySym] = useState<Map<string, number>>(() => new Map());
+  const [exposureRows, setExposureRows] = useState<ExposureRow[]>([]);
+  const [exposureBuckets, setExposureBuckets] = useState<
+    Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>
+  >([]);
+  const [treemapScope, setTreemapScope] = useState<ExposureScope>(() => readTreemapScope());
+  const [treemapMetric, setTreemapMetric] = useState<ExposurePieMetric>(() => readTreemapMetric());
+  const [treemapSyntheticBasis, setTreemapSyntheticBasis] = useState<SyntheticChartBasis>(() =>
+    readTreemapSyntheticBasis(),
+  );
   const [quick, setQuick] = useState<QuickGlance | null>(null);
   const [futuresItems, setFuturesItems] = useState<
     Array<{ symbol: string; quote: NormalizedQuote; series: Array<{ date: string; close: number }> }>
@@ -214,11 +265,53 @@ export default function TerminalPage() {
     [watchlistId, heatView],
   );
 
+  const treemapMvBySym = useMemo(() => {
+    if (exposureRows.length === 0) return positionMvBySym;
+    const scoped = scopeExposureRows(exposureRows, exposureBuckets, treemapScope);
+    const weighted = exposureMvByUnderlying(scoped, treemapMetric, treemapSyntheticBasis);
+    return weighted.size > 0 ? weighted : positionMvBySym;
+  }, [exposureRows, exposureBuckets, treemapScope, treemapMetric, treemapSyntheticBasis, positionMvBySym]);
+
+  const treemapSizeCaption = useMemo(
+    () => terminalTreemapSizeCaption(treemapScope, treemapMetric, treemapSyntheticBasis),
+    [treemapScope, treemapMetric, treemapSyntheticBasis],
+  );
+
   async function loadWatchlists() {
     const resp = await fetch("/api/watchlists", { cache: "no-store" });
     const json = await terminalFetchJson<{ ok: boolean; watchlists?: WatchlistRow[]; error?: string }>(resp, "watchlists");
     if (!json.ok) throw new Error(json.error ?? "Failed to load watchlists");
     setWatchlists(json.watchlists ?? []);
+  }
+
+  async function loadExposureWeighting() {
+    try {
+      const [pageResp, bucketResp] = await Promise.all([
+        fetch("/api/allocation/page-data?synthetic=1", { cache: "no-store" }),
+        fetch("/api/exposure/buckets", { cache: "no-store" }),
+      ]);
+      const pageJson = await terminalFetchJson<{ ok: boolean; exposure?: ExposureRow[] }>(
+        pageResp,
+        "allocation page-data",
+      );
+      const bucketJson = await terminalFetchJson<{
+        ok: boolean;
+        buckets?: Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>;
+      }>(bucketResp, "exposure buckets");
+      if (pageJson.ok) {
+        setExposureRows((pageJson.exposure ?? []).map(normalizeExposureRow));
+      }
+      if (bucketJson.ok) {
+        setExposureBuckets(
+          (bucketJson.buckets ?? []).map((b) => ({
+            ...b,
+            exposure: (b.exposure ?? []).map(normalizeExposureRow),
+          })),
+        );
+      }
+    } catch {
+      // keep prior exposure data
+    }
   }
 
   async function loadUniverse(nextWatchlistId: string | null) {
@@ -488,9 +581,25 @@ export default function TerminalPage() {
       if (sym.length === 0) return;
       if (Date.now() - lastPrimaryLoadAtRef.current < 55_000) return;
       void runTerminalPrimaryLoad(sym, watchlistId).catch(() => null);
+      void loadExposureWeighting();
     },
     resetKey: marketPollResetKey,
   });
+
+  useEffect(() => {
+    void loadExposureWeighting();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("terminal_treemap_scope_v1", treemapScope);
+      localStorage.setItem("terminal_treemap_metric_v1", treemapMetric);
+      localStorage.setItem("terminal_treemap_synthetic_basis_v1", treemapSyntheticBasis);
+    } catch {
+      // ignore
+    }
+  }, [treemapScope, treemapMetric, treemapSyntheticBasis]);
 
   useEffect(() => {
     const allowed = new Set<TerminalCol>(["symbol", "company", "last", "chg", "chgPct", "volume", "volX"]);
@@ -581,6 +690,7 @@ export default function TerminalPage() {
           }
 
           setPositionMvBySym(mvBySym);
+          void loadExposureWeighting();
 
           const qMap = new Map<string, NormalizedQuote>();
           for (const q of quotes) qMap.set(q.symbol.toUpperCase(), q);
@@ -762,9 +872,15 @@ export default function TerminalPage() {
         <div className="rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">{error}</div>
       ) : null}
 
-      <section className="rounded-2xl border border-zinc-300 bg-white p-4 shadow-sm dark:border-white/20 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-sm font-semibold">Quick glance (today)</div>
+      <DraggableTileLayout
+        storageKey="fh.terminal.tiles.v1"
+        defaultOrder={["quick-glance", "futures", "watchlist"]}
+        tiles={{
+          "quick-glance": {
+            title: "Quick glance (today)",
+            children: (
+              <>
+        <div className="flex flex-wrap items-center justify-end gap-3">
           <div className="text-xs text-zinc-600 dark:text-zinc-400">{quick ? `Updated ${new Date(quick.updatedAt).toLocaleTimeString()}` : "—"}</div>
         </div>
         <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -878,16 +994,17 @@ export default function TerminalPage() {
             ) : null}
           </div>
         ) : null}
-      </section>
-
-      {futuresItems.length > 0 ? (
-        <section className="rounded-2xl border border-zinc-300 bg-white p-4 shadow-sm dark:border-white/20 dark:bg-zinc-950">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-sm font-semibold">Futures</div>
+              </>
+            ),
+          },
+          futures: {
+            title: "Futures",
+            visible: futuresItems.length > 0,
+            children: (
+              <>
             <div className="text-[11px] text-zinc-600 dark:text-zinc-400">
               Set <span className="font-mono">TERMINAL_FUTURES_SYMBOLS</span> (e.g. <span className="font-mono">/ESM6,/NQM6</span>). Pre-open: every 5 min 08:30–09:30 ET; one fetch on load.
             </div>
-          </div>
           <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {futuresItems.map((row) => {
               const last = row.quote.last ?? row.quote.mark;
@@ -930,23 +1047,25 @@ export default function TerminalPage() {
               );
             })}
           </div>
-        </section>
-      ) : null}
-
-      <section className="rounded-2xl border border-zinc-300 bg-white p-4 shadow-sm sm:p-6 dark:border-white/20 dark:bg-zinc-950">
-        <NewsFeedPanel
-          title="Market news"
-          mode="default"
-          symbols={newsFocusSymbols}
-          anomalySymbols={newsAnomalySymbols}
-          maxItems={24}
-        />
-      </section>
-
-      <section className="min-w-0 rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
+              </>
+            ),
+          },
+          watchlist: {
+            title: "Watchlist & quotes",
+            bodyClassName: "p-4 sm:p-6",
+            children: (
+        <DraggableTileLayout
+          storageKey="fh.terminal.watchlist.tiles.v1"
+          hint={null}
+          className="flex flex-col gap-4"
+          defaultOrder={["watchlist-controls", "heatmap", "treemap", "news", "quotes-table", "market-sidebar"]}
+          tiles={{
+            "watchlist-controls": {
+              title: "Watchlist overlay",
+              bodyClassName: "p-4",
+              children: (
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
-            <div className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Watchlist overlay</div>
             <select
               value={watchlistId ?? ""}
               onChange={(e) => {
@@ -971,12 +1090,14 @@ export default function TerminalPage() {
             {symbols.length} symbols • Updated {updatedLabel}
           </div>
         </div>
-
-        <details open className="mt-4 rounded-xl border border-zinc-300 bg-white/60 p-4 dark:border-white/20 dark:bg-black/20">
-          <summary className="cursor-pointer list-none">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="text-sm font-semibold">Market heatmap (tile size ∝ cap, color = day %)</div>
-              <div className="flex items-center gap-1">
+              ),
+            },
+            heatmap: {
+              title: "Market heatmap (tile size ∝ cap, color = day %)",
+              bodyClassName: "p-4",
+              children: (
+                <>
+              <div className="flex flex-wrap items-center justify-end gap-1">
                 {(
                   [
                     { key: "spy", label: "SPY" },
@@ -987,10 +1108,7 @@ export default function TerminalPage() {
                   <button
                     key={v.key}
                     type="button"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      setHeatView(v.key);
-                    }}
+                    onClick={() => setHeatView(v.key)}
                     className={
                       "h-9 min-w-[5.5rem] whitespace-nowrap rounded-md px-3 text-sm font-semibold " +
                       (heatView === v.key
@@ -1002,31 +1120,61 @@ export default function TerminalPage() {
                   </button>
                 ))}
               </div>
-            </div>
-          </summary>
           <div className="mt-3 min-w-0">
             <HeatmapGrid items={heatItems.slice(0, 220)} companyNamesBySymbol={companyBySymbol} />
             {heatItems.length === 0 ? <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">No heatmap data yet.</div> : null}
           </div>
-          <div className="mt-6 min-w-0 border-t border-zinc-200 pt-4 dark:border-white/10">
-            <div className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">Position treemap (size = weight, color = day %)</div>
-            <p className="mt-1 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
+                </>
+              ),
+            },
+            treemap: {
+              title: "Position treemap (size = weight, color = day %)",
+              bodyClassName: "p-4",
+              children: (
+                <>
+            <p className="text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
               Same daily % scale as the heatmap; mid-range moves are stretched so small differences read more clearly.
             </p>
+            {heatView === "portfolio" ? (
+              <TerminalTreemapWeightControls
+                scope={treemapScope}
+                onScopeChange={setTreemapScope}
+                pieMetric={treemapMetric}
+                onPieMetricChange={setTreemapMetric}
+                syntheticChartBasis={treemapSyntheticBasis}
+                onSyntheticChartBasisChange={setTreemapSyntheticBasis}
+              />
+            ) : null}
             <div className="mt-3">
               <TerminalPositionTreemap
                 items={heatItems}
-                mvBySymbol={positionMvBySym}
+                mvBySymbol={heatView === "portfolio" ? treemapMvBySym : positionMvBySym}
                 heatView={heatView}
                 companyNamesBySymbol={companyBySymbol}
+                portfolioSizeCaption={heatView === "portfolio" ? treemapSizeCaption : null}
               />
             </div>
-          </div>
-        </details>
-
-        <div className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4">
-          <div className="flex min-w-0 flex-col gap-4">
-            <div className="min-w-0 overflow-x-auto rounded-xl ring-1 ring-zinc-300 dark:ring-white/20">
+                </>
+              ),
+            },
+            news: {
+              title: "Market news",
+              bodyClassName: "p-4",
+              children: (
+          <NewsFeedPanel
+            title="Market news"
+            mode="default"
+            symbols={newsFocusSymbols}
+            anomalySymbols={newsAnomalySymbols}
+            maxItems={24}
+          />
+              ),
+            },
+            "quotes-table": {
+              title: "Quotes",
+              bodyClassName: "p-0",
+              children: (
+            <div className="min-w-0 overflow-x-auto">
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="border-b border-zinc-300 bg-zinc-50 text-left text-zinc-600 dark:border-white/20 dark:bg-zinc-900/40 dark:text-zinc-400">
@@ -1168,15 +1316,18 @@ export default function TerminalPage() {
               </tbody>
             </table>
             </div>
-          </div>
-
-          <div className="flex min-w-0 flex-col gap-4">
-            <div className="min-w-0 rounded-2xl border border-zinc-300 bg-white p-4 shadow-sm dark:border-white/20 dark:bg-zinc-950">
-              <div className="text-sm font-semibold">Movers</div>
+              ),
+            },
+            "market-sidebar": {
+              title: "Movers, options & volume",
+              bodyClassName: "p-4",
+              children: (
+                <>
               {movers?.ok === false ? (
-                <div className="mt-2 text-xs text-red-700 dark:text-red-300">{movers.error ?? "Failed to load movers"}</div>
+                <div className="text-xs text-red-700 dark:text-red-300">{movers.error ?? "Failed to load movers"}</div>
               ) : null}
 
+              <div className="text-sm font-semibold">Movers</div>
               <div className="mt-2 grid grid-cols-2 gap-3">
                 <div>
                   <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-400">Top gainers</div>
@@ -1316,10 +1467,15 @@ export default function TerminalPage() {
                   {volumeLeaders.length === 0 ? <div className="text-sm text-zinc-600 dark:text-zinc-400">No volume data yet.</div> : null}
                 </div>
               </div>
-            </div>
-          </div>
-        </div>
-      </section>
+                </>
+              ),
+            },
+          }}
+        />
+            ),
+          },
+        }}
+      />
     </div>
   );
 }

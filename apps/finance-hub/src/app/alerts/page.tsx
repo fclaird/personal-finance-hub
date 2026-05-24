@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { DraggableColumnHeader, DRAGGABLE_COLUMN_HEADER_GRAB_CLASS } from "@/app/components/DraggableColumnHeader";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { SymbolLink } from "@/app/components/SymbolLink";
@@ -434,16 +435,15 @@ function OptionContractsRedTile({
   }
 
   return (
-    <section className="relative overflow-hidden rounded-2xl border border-red-200/80 bg-white shadow-sm dark:border-red-500/25 dark:bg-zinc-950">
+    <div className="relative overflow-hidden">
       <div
         className="pointer-events-none absolute inset-0 bg-gradient-to-b from-red-100/90 via-red-50/40 to-white dark:from-red-600/18 dark:via-red-950/35 dark:to-zinc-950"
         aria-hidden
       />
-      <div className="relative p-6">
+      <div className="relative">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">{title}</h2>
-            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{description}</p>
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">{description}</p>
           </div>
           <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-900 dark:bg-red-950/60 dark:text-red-100">
             {badgeCount} contract{badgeCount === 1 ? "" : "s"}
@@ -474,7 +474,7 @@ function OptionContractsRedTile({
           </table>
         </div>
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -628,36 +628,53 @@ export default function AlertsPage() {
         </div>
       </div>
 
-      <OptionContractsRedTile
-        title={`Options expiring within ${DTE_THRESHOLD} days`}
-        description={positionsBlurb}
-        badgeCount={expiringOptions.length}
-        rows={expiringOptions}
-        nickByAccountId={nickByAccountId}
-        privacy={privacy}
-        emptyMessage={`No option positions under ${DTE_THRESHOLD} DTE in the latest snapshots.`}
-        optionColumnOrder={optionColumnOrder}
-        moveOptionColumn={moveOptionColumn}
-      />
-
-      <OptionContractsRedTile
-        title="Low extrinsic vs intrinsic"
-        description={
-          <>
-            Short option positions (negative qty) where extrinsic is under {(EXTRINSIC_VS_INTRINSIC_MAX * 100).toFixed(0)}%
-            of intrinsic (intrinsic must be positive). {positionsBlurb}
-          </>
-        }
-        badgeCount={lowExtrinsicOptions.length}
-        rows={lowExtrinsicOptions}
-        nickByAccountId={nickByAccountId}
-        privacy={privacy}
-        emptyMessage="No short option positions match this extrinsic / intrinsic relationship in the latest snapshots."
-        optionColumnOrder={optionColumnOrder}
-        moveOptionColumn={moveOptionColumn}
-      />
-
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
+      <DraggableTileLayout
+        storageKey="fh.alerts.tiles.v1"
+        defaultOrder={["expiring-options", "low-extrinsic", "alert-rules", "recent-events"]}
+        tiles={{
+          "expiring-options": {
+            title: `Options expiring within ${DTE_THRESHOLD} days`,
+            bodyClassName: "relative p-4 sm:p-6",
+            children: (
+              <OptionContractsRedTile
+                title={`Options expiring within ${DTE_THRESHOLD} days`}
+                description={positionsBlurb}
+                badgeCount={expiringOptions.length}
+                rows={expiringOptions}
+                nickByAccountId={nickByAccountId}
+                privacy={privacy}
+                emptyMessage={`No option positions under ${DTE_THRESHOLD} DTE in the latest snapshots.`}
+                optionColumnOrder={optionColumnOrder}
+                moveOptionColumn={moveOptionColumn}
+              />
+            ),
+          },
+          "low-extrinsic": {
+            title: "Low extrinsic vs intrinsic",
+            bodyClassName: "relative p-4 sm:p-6",
+            children: (
+              <OptionContractsRedTile
+                title="Low extrinsic vs intrinsic"
+                description={
+                  <>
+                    Short option positions (negative qty) where extrinsic is under {(EXTRINSIC_VS_INTRINSIC_MAX * 100).toFixed(0)}%
+                    of intrinsic (intrinsic must be positive). {positionsBlurb}
+                  </>
+                }
+                badgeCount={lowExtrinsicOptions.length}
+                rows={lowExtrinsicOptions}
+                nickByAccountId={nickByAccountId}
+                privacy={privacy}
+                emptyMessage="No short option positions match this extrinsic / intrinsic relationship in the latest snapshots."
+                optionColumnOrder={optionColumnOrder}
+                moveOptionColumn={moveOptionColumn}
+              />
+            ),
+          },
+          "alert-rules": {
+            title: "Alert rules",
+            children: (
+              <>
         <div className="flex flex-wrap items-center justify-between gap-4">
           <label className="flex items-center gap-3 text-sm font-medium">
             <input
@@ -733,11 +750,14 @@ export default function AlertsPage() {
             </div>
           </div>
         </div>
-      </section>
-
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
-        <h2 className="text-base font-semibold">Recent events</h2>
-        <div className="mt-4 overflow-x-auto">
+              </>
+            ),
+          },
+          "recent-events": {
+            title: "Recent events",
+            children: (
+              <>
+        <div className="overflow-x-auto">
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="border-b border-zinc-300 text-left text-zinc-600 dark:border-white/20 dark:text-zinc-400">
@@ -847,7 +867,11 @@ export default function AlertsPage() {
             </tbody>
           </table>
         </div>
-      </section>
+              </>
+            ),
+          },
+        }}
+      />
     </div>
   );
 }

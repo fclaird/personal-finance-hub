@@ -27,18 +27,16 @@ export function countBenchmarkPriceRows(symbol: string): number {
   return row?.n ?? 0;
 }
 
-/**
- * Cache daily closes for benchmarks (SPY/QQQ). Tries 20y, then 5y, then 1y if Schwab returns no candles.
- */
-export async function ensureBenchmarkHistory(symbol: string): Promise<void> {
+export function latestBenchmarkDate(symbol: string): string | null {
   const db = getDb();
+  const row = db
+    .prepare(`SELECT MAX(date) AS d FROM price_points WHERE provider = 'schwab' AND symbol = ?`)
+    .get(symbol) as { d: string | null } | undefined;
+  return row?.d ?? null;
+}
 
-  const cachedCount = db
-    .prepare(`SELECT COUNT(1) AS n FROM price_points WHERE provider='schwab' AND symbol = ?`)
-    .get(symbol) as { n: number } | undefined;
-
-  if ((cachedCount?.n ?? 0) >= 1500) return;
-
+async function fetchAndUpsertBenchmarkHistory(symbol: string): Promise<void> {
+  const db = getDb();
   const upsert = db.prepare(`
     INSERT INTO price_points (provider, symbol, date, close)
     VALUES ('schwab', @symbol, @date, @close)
@@ -78,6 +76,26 @@ export async function ensureBenchmarkHistory(symbol: string): Promise<void> {
     tx();
     return;
   }
+}
+
+/**
+ * Cache daily closes for benchmarks (SPY/QQQ). Tries 20y, then 5y, then 1y if Schwab returns no candles.
+ * Re-fetches when cache is empty or latest cached date is before `minThroughDate` (defaults to today UTC).
+ */
+export async function ensureBenchmarkHistory(symbol: string, minThroughDate?: string): Promise<void> {
+  const db = getDb();
+  const through = minThroughDate ?? new Date().toISOString().slice(0, 10);
+
+  const cachedCount = db
+    .prepare(`SELECT COUNT(1) AS n FROM price_points WHERE provider='schwab' AND symbol = ?`)
+    .get(symbol) as { n: number } | undefined;
+
+  const latest = latestBenchmarkDate(symbol);
+  const stale = !latest || latest < through;
+
+  if ((cachedCount?.n ?? 0) >= 1500 && !stale) return;
+
+  await fetchAndUpsertBenchmarkHistory(symbol);
 }
 
 export function getCachedBenchmarkSeries(symbol: string): Array<{ date: string; close: number }> {

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
+import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { formatUsd2 } from "@/lib/format";
 
 type Target = { assetClass: string; targetWeight: number };
@@ -96,7 +97,14 @@ export default function RebalancingPage() {
         </div>
       </div>
 
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
+      <DraggableTileLayout
+        storageKey="fh.rebalancing.tiles.v1"
+        defaultOrder={["settings", "drift-table"]}
+        tiles={{
+          settings: {
+            title: "Target settings",
+            children: (
+              <>
         <div className="flex flex-wrap items-center justify-between gap-4">
           <label className="flex items-center gap-3 text-sm font-medium">
             <input
@@ -126,8 +134,14 @@ export default function RebalancingPage() {
             {error}
           </div>
         ) : null}
-
-        <div className="mt-5 overflow-x-auto">
+              </>
+            ),
+          },
+          "drift-table": {
+            title: "Drift & suggested trades",
+            bodyClassName: "p-0",
+            children: (
+        <div className="overflow-x-auto p-6 pt-0">
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="border-b border-zinc-300 text-left text-zinc-600 dark:border-white/20 dark:text-zinc-400">
@@ -167,7 +181,10 @@ export default function RebalancingPage() {
             </tbody>
           </table>
         </div>
-      </section>
+            ),
+          },
+        }}
+      />
     </div>
   );
 }

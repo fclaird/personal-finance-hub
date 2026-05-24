@@ -1,8 +1,8 @@
 /** Client-safe helpers for performance chart time windows (no DB). */
 
-export type PerformanceHistoryTimeframe = "1D" | "1W" | "1M" | "3M" | "6M" | "1Y" | "3Y" | "5Y";
+export type PerformanceHistoryTimeframe = "ALL" | "1D" | "1W" | "1M" | "3M" | "6M" | "1Y" | "3Y" | "5Y";
 
-const TF_DAYS: Record<PerformanceHistoryTimeframe, number> = {
+const TF_DAYS: Record<Exclude<PerformanceHistoryTimeframe, "ALL">, number> = {
   "1D": 1,
   "1W": 7,
   "1M": 30,
@@ -13,12 +13,21 @@ const TF_DAYS: Record<PerformanceHistoryTimeframe, number> = {
   "5Y": 5 * 365,
 };
 
-export function timeframeToCutoffIso(tf: PerformanceHistoryTimeframe, nowMs: number): string {
+export function timeframeToCutoffIso(tf: PerformanceHistoryTimeframe, nowMs: number): string | null {
+  if (tf === "ALL") return null;
   const day = 86400000;
   return new Date(nowMs - TF_DAYS[tf] * day).toISOString().slice(0, 10);
 }
 
-export function timeframeToWindowRangeMs(tf: PerformanceHistoryTimeframe, nowMs: number): { startMs: number; endMs: number } {
+export function timeframeToWindowRangeMs(
+  tf: PerformanceHistoryTimeframe,
+  nowMs: number,
+  dataStartMs?: number | null,
+): { startMs: number; endMs: number } {
+  const endMs = nowMs;
+  if (tf === "ALL") {
+    return { startMs: dataStartMs ?? nowMs, endMs };
+  }
   const day = 86400000;
-  return { startMs: nowMs - TF_DAYS[tf] * day, endMs: nowMs };
+  return { startMs: nowMs - TF_DAYS[tf] * day, endMs };
 }

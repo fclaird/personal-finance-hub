@@ -16,6 +16,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { DividendBookDashboard } from "@/app/dividends/DividendBookDashboard";
+import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatUsd2 } from "@/lib/format";
@@ -28,13 +29,10 @@ import {
 import { symbolPageHref } from "@/lib/symbolPage";
 import type { PortfolioDashboard } from "@/lib/dividends/portfolioDashboard";
 import type { DividendBookBanner } from "@/lib/dividends/schwabDividendBook";
-import { trackingModeTheme } from "@/lib/dividends/trackingModeTheme";
 
 const DM_CHART_PORT = "#a855f7";
 const DM_CHART_SPY = "#ffffff";
 const DM_CHART_QQQ = "#f97316";
-
-const liveTheme = trackingModeTheme("live");
 
 type TableRow = {
   symbol: string;
@@ -409,13 +407,33 @@ export function DividendsWorkspace() {
         <div className="rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">{error}</div>
       ) : null}
 
-      {banner ? (
-        <section className={`rounded-2xl border p-5 sm:p-6 ${liveTheme.panelClass}`}>
+      {!hasSchwabSnapshots ? (
+        <div className="rounded-xl border border-dashed border-zinc-300 p-6 text-sm text-zinc-600 dark:border-white/20 dark:text-zinc-400">
+          <p className="font-medium text-zinc-800 dark:text-zinc-200">No Schwab holdings snapshots yet</p>
+          <p className="mt-2">
+            Run a Schwab sync from{" "}
+            <Link href="/connections" className="font-semibold underline underline-offset-2">
+              Connections
+            </Link>{" "}
+            to populate positions, then return here.
+          </p>
+        </div>
+      ) : null}
+
+      <DraggableTileLayout
+        storageKey="fh.dividends.tiles.v1"
+        defaultOrder={["book-banner", "workspace", "live-chart"]}
+        tiles={{
+          "book-banner": {
+            title: "Combined Schwab book",
+            visible: !!banner,
+            bodyClassName: "p-5 sm:p-6",
+            children: banner ? (
+              <>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">Combined Schwab book</h2>
               {banner.snapshotAsOf ? (
-                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
                   Positions as of {formatDisplayDate(banner.snapshotAsOf)}
                 </p>
               ) : null}
@@ -457,22 +475,15 @@ export function DividendsWorkspace() {
               <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">Yield on dividend-paying portion only</p>
             </div>
           </div>
-        </section>
-      ) : null}
-
-      {!hasSchwabSnapshots ? (
-        <div className="rounded-xl border border-dashed border-zinc-300 p-6 text-sm text-zinc-600 dark:border-white/20 dark:text-zinc-400">
-          <p className="font-medium text-zinc-800 dark:text-zinc-200">No Schwab holdings snapshots yet</p>
-          <p className="mt-2">
-            Run a Schwab sync from{" "}
-            <Link href="/connections" className="font-semibold underline underline-offset-2">
-              Connections
-            </Link>{" "}
-            to populate positions, then return here.
-          </p>
-        </div>
-      ) : (
-        <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm sm:p-7 dark:border-white/20 dark:bg-zinc-950">
+              </>
+            ) : null,
+          },
+          workspace: {
+            title: "Overview & holdings",
+            visible: hasSchwabSnapshots,
+            bodyClassName: "p-6 sm:p-7",
+            children: (
+              <>
           <div className="flex flex-wrap gap-2 border-b border-zinc-200 pb-3 dark:border-white/10">
             <button
               type="button"
@@ -613,16 +624,17 @@ export function DividendsWorkspace() {
               </table>
             </div>
           )}
-        </section>
-      )}
-
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm sm:p-7 dark:border-white/20 dark:bg-zinc-950">
-        <div>
-          <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">Live forward chart</h2>
-          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-            Weekly NAV % for the aggregated dividend book across all Schwab accounts.
-          </p>
-        </div>
+              </>
+            ),
+          },
+          "live-chart": {
+            title: "Live forward chart",
+            bodyClassName: "p-6 sm:p-7",
+            children: (
+              <>
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          Weekly NAV % for the aggregated dividend book across all Schwab accounts.
+        </p>
 
         <div className="mt-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700 dark:border-white/10 dark:bg-white/5 dark:text-zinc-300">
           Live tracking · single portfolio NAV % line rebased to first snapshot
@@ -776,7 +788,11 @@ export function DividendsWorkspace() {
             </div>
           ) : null}
         </div>
-      </section>
+              </>
+            ),
+          },
+        }}
+      />
     </div>
   );
 }

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { SymbolLink } from "@/app/components/SymbolLink";
+import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 
 type WatchlistRow = { id: string; name: string; createdAt: string; itemCount: number };
 
@@ -78,10 +79,15 @@ export default function TerminalWatchlistsPage() {
         <div className="rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">{error}</div>
       ) : null}
 
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
+      <DraggableTileLayout
+        storageKey="fh.terminal.watchlists.tiles.v1"
+        defaultOrder={["create", "lists", "items"]}
+        tiles={{
+          create: {
+            title: "Create watchlist",
+            children: (
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="grid gap-1">
-            <div className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Create watchlist</div>
             <div className="flex flex-wrap items-center gap-2">
               <input
                 value={newName}
@@ -123,11 +129,14 @@ export default function TerminalWatchlistsPage() {
             Refresh
           </button>
         </div>
-
-        <div className="mt-5 grid gap-4 lg:grid-cols-[320px_1fr]">
+            ),
+          },
+          lists: {
+            title: "Watchlists",
+            bodyClassName: "p-4",
+            children: (
           <div className="rounded-xl border border-zinc-300 p-3 dark:border-white/20">
-            <div className="text-sm font-semibold">Lists</div>
-            <div className="mt-2 grid gap-1">
+            <div className="mt-0 grid gap-1">
               {watchlists.length === 0 ? (
                 <div className="text-sm text-zinc-600 dark:text-zinc-400">No watchlists yet.</div>
               ) : null}
@@ -154,10 +163,15 @@ export default function TerminalWatchlistsPage() {
               })}
             </div>
           </div>
-
+            ),
+          },
+          items: {
+            title: active ? `Items: ${active.name}` : "List items",
+            bodyClassName: "p-4",
+            children: (
           <div className="rounded-xl border border-zinc-300 p-3 dark:border-white/20">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="text-sm font-semibold">{active ? `Items: ${active.name}` : "Select a list"}</div>
+              <div className="text-sm font-semibold">{active ? `${active.name}` : "Select a list"}</div>
               {active ? (
                 <div className="flex flex-wrap items-center gap-2">
                   <input
@@ -239,8 +253,10 @@ export default function TerminalWatchlistsPage() {
               )}
             </div>
           </div>
-        </div>
-      </section>
+            ),
+          },
+        }}
+      />
     </div>
   );
 }

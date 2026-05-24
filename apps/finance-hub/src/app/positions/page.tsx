@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
+import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import {
   GroupedTable,
   computeUnderlyingGroups,
@@ -157,6 +158,128 @@ export default function PositionsPage() {
 
   const allGroups = useMemo(() => computeUnderlyingGroups(rows, sortColumn, sortAsc, underPx), [rows, sortColumn, sortAsc, underPx]);
 
+  const positionsTileOrder = useMemo(() => {
+    if (viewMode === "allAccounts") return ["all-accounts"] as const;
+    return [
+      ...grouped.joint.map((a) => `acct-${a.accountId}`),
+      ...grouped.brokerage.map((a) => `acct-${a.accountId}`),
+      ...grouped.retirement.map((a) => `acct-${a.accountId}`),
+    ];
+  }, [viewMode, grouped]);
+
+  const positionsTiles = useMemo(() => {
+    if (viewMode === "allAccounts") {
+      return {
+        "all-accounts": {
+          title: "All accounts",
+          children: (
+            <>
+              <div className="mb-4 text-xs text-zinc-600 dark:text-zinc-400">
+                {rows.length} position{rows.length === 1 ? "" : "s"} • {allGroups.length} underlying
+              </div>
+              <GroupedTable
+                accountId="all"
+                viewMode={viewMode}
+                groups={allGroups}
+                showAccountCol={true}
+                nick={nick}
+                sortColumn={sortColumn}
+                sortAsc={sortAsc}
+                toggleSort={toggleSort}
+                collapsed={collapsed}
+                toggleCollapsed={toggleCollapsed}
+                privacyMasked={privacy.masked}
+              />
+            </>
+          ),
+        },
+      };
+    }
+
+    const tiles: Record<string, { title: string; children: ReactNode }> = {};
+    const addAccount = (
+      acct: { accountId: string; accountName: string; rows: Row[] },
+      bucket: "joint" | "brokerage" | "retirement",
+    ) => {
+      const rs = acct.rows;
+      const groups = computeUnderlyingGroups(rs, sortColumn, sortAsc, underPx);
+      const displayName = (nick.get(acct.accountId) ?? "").trim() || acct.accountName;
+      const prefix =
+        bucket === "joint" ? "" : bucket === "brokerage" ? "Brokerage · " : "Retirement · ";
+      tiles[`acct-${acct.accountId}`] = {
+        title: `${prefix}${displayName}`,
+        children: (
+          <>
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+              <span className="font-mono">{acct.accountId}</span>
+              <span aria-hidden="true">•</span>
+              <label className="flex items-center gap-2">
+                <span className="font-medium">Nickname</span>
+                <input
+                  defaultValue={nick.get(acct.accountId) ?? ""}
+                  placeholder="(optional)"
+                  className="h-8 w-56 rounded-md border border-zinc-300 bg-white px-2 text-xs text-zinc-900 shadow-sm placeholder:text-zinc-400 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    const v = (e.currentTarget.value ?? "").trim();
+                    void (async () => {
+                      setSavingNick(acct.accountId);
+                      try {
+                        await fetch("/api/accounts/nickname", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ accountId: acct.accountId, nickname: v }),
+                        });
+                        await loadNicknames();
+                      } finally {
+                        setSavingNick(null);
+                      }
+                    })();
+                  }}
+                />
+              </label>
+              {savingNick === acct.accountId ? <span className="text-zinc-500">Saving…</span> : null}
+              <span aria-hidden="true">•</span>
+              <span>
+                {rs.length} position{rs.length === 1 ? "" : "s"} • {groups.length} underlying
+              </span>
+            </div>
+            <GroupedTable
+              accountId={acct.accountId}
+              viewMode={viewMode}
+              groups={groups}
+              showAccountCol={false}
+              nick={nick}
+              sortColumn={sortColumn}
+              sortAsc={sortAsc}
+              toggleSort={toggleSort}
+              collapsed={collapsed}
+              toggleCollapsed={toggleCollapsed}
+              privacyMasked={privacy.masked}
+            />
+          </>
+        ),
+      };
+    };
+
+    for (const acct of grouped.joint) addAccount(acct, "joint");
+    for (const acct of grouped.brokerage) addAccount(acct, "brokerage");
+    for (const acct of grouped.retirement) addAccount(acct, "retirement");
+    return tiles;
+  }, [
+    viewMode,
+    grouped,
+    rows.length,
+    allGroups,
+    nick,
+    sortColumn,
+    sortAsc,
+    collapsed,
+    privacy.masked,
+    underPx,
+    savingNick,
+  ]);
+
   function toggleSort(col: SortColumn) {
     if (sortColumn === col) setSortAsc((v) => !v);
     else {
@@ -177,72 +300,6 @@ export default function PositionsPage() {
       else next.add(k);
       return next;
     });
-  }
-
-  function renderAccount(acct: { accountId: string; accountName: string; rows: Row[] }) {
-    const rs = acct.rows;
-    const groups = computeUnderlyingGroups(rs, sortColumn, sortAsc, underPx);
-    return (
-      <details
-        key={acct.accountId}
-        open
-        className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950"
-      >
-        <summary className="cursor-pointer list-none">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="min-w-0">
-              <h2 className="text-base font-semibold">{nick.get(acct.accountId) ? nick.get(acct.accountId) : acct.accountName}</h2>
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
-                <span className="font-mono">{acct.accountId}</span>
-                <span aria-hidden="true">•</span>
-                <label className="flex items-center gap-2">
-                  <span className="font-medium">Nickname</span>
-                  <input
-                    defaultValue={nick.get(acct.accountId) ?? ""}
-                    placeholder="(optional)"
-                    className="h-8 w-56 rounded-md border border-zinc-300 bg-white px-2 text-xs text-zinc-900 shadow-sm placeholder:text-zinc-400 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500"
-                    onKeyDown={(e) => {
-                      if (e.key !== "Enter") return;
-                      const v = (e.currentTarget.value ?? "").trim();
-                      void (async () => {
-                        setSavingNick(acct.accountId);
-                        try {
-                          await fetch("/api/accounts/nickname", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ accountId: acct.accountId, nickname: v }),
-                          });
-                          await loadNicknames();
-                        } finally {
-                          setSavingNick(null);
-                        }
-                      })();
-                    }}
-                  />
-                </label>
-                {savingNick === acct.accountId ? <span className="text-zinc-500">Saving…</span> : null}
-              </div>
-            </div>
-            <div className="text-sm text-zinc-600 dark:text-zinc-400">
-              {rs.length} position{rs.length === 1 ? "" : "s"} • {groups.length} underlying
-            </div>
-          </div>
-        </summary>
-        <GroupedTable
-          accountId={acct.accountId}
-          viewMode={viewMode}
-          groups={groups}
-          showAccountCol={false}
-          nick={nick}
-          sortColumn={sortColumn}
-          sortAsc={sortAsc}
-          toggleSort={toggleSort}
-          collapsed={collapsed}
-          toggleCollapsed={toggleCollapsed}
-          privacyMasked={privacy.masked}
-        />
-      </details>
-    );
   }
 
   return (
@@ -300,64 +357,17 @@ export default function PositionsPage() {
         </div>
       </div>
 
-      <div className="grid gap-4">
-        {viewMode === "allAccounts" ? (
-          <details
-            open
-            className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950"
-          >
-            <summary className="cursor-pointer list-none">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <h2 className="text-base font-semibold">All accounts</h2>
-                  <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-                    {rows.length} position{rows.length === 1 ? "" : "s"} • {allGroups.length} underlying
-                  </div>
-                </div>
-              </div>
-            </summary>
-            <GroupedTable
-              accountId="all"
-              viewMode={viewMode}
-              groups={allGroups}
-              showAccountCol={true}
-              nick={nick}
-              sortColumn={sortColumn}
-              sortAsc={sortAsc}
-              toggleSort={toggleSort}
-              collapsed={collapsed}
-              toggleCollapsed={toggleCollapsed}
-              privacyMasked={privacy.masked}
-            />
-          </details>
-        ) : (
-          <>
-            {grouped.joint.map((acct) => renderAccount(acct))}
-
-            {grouped.brokerage.length ? (
-              <div className="rounded-xl border border-zinc-300 bg-zinc-50 px-4 py-2 text-xs font-semibold tracking-wide text-zinc-700 dark:border-white/20 dark:bg-white/5 dark:text-zinc-200">
-                Brokerage
-              </div>
-            ) : null}
-
-            {grouped.brokerage.map((acct) => renderAccount(acct))}
-
-            {grouped.retirement.length ? (
-              <div className="rounded-xl border border-zinc-300 bg-zinc-50 px-4 py-2 text-xs font-semibold tracking-wide text-zinc-700 dark:border-white/20 dark:bg-white/5 dark:text-zinc-200">
-                Retirement
-              </div>
-            ) : null}
-
-            {grouped.retirement.map((acct) => renderAccount(acct))}
-          </>
-        )}
-
-        {grouped.joint.length + grouped.brokerage.length + grouped.retirement.length === 0 ? (
-          <div className="text-sm text-zinc-600 dark:text-zinc-400">
-            No positions yet. Run Schwab sync on Connections.
-          </div>
-        ) : null}
-      </div>
+      {grouped.joint.length + grouped.brokerage.length + grouped.retirement.length === 0 ? (
+        <div className="text-sm text-zinc-600 dark:text-zinc-400">
+          No positions yet. Run Schwab sync on Connections.
+        </div>
+      ) : (
+        <DraggableTileLayout
+          storageKey="fh.positions.tiles.v1"
+          defaultOrder={positionsTileOrder}
+          tiles={positionsTiles}
+        />
+      )}
     </div>
   );
 }

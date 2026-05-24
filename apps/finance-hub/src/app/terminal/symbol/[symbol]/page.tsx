@@ -15,6 +15,7 @@ import {
   YAxis,
 } from "recharts";
 
+import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import type { Row } from "@/app/components/PositionsGroupedTable";
 import { SymbolLink } from "@/app/components/SymbolLink";
@@ -447,7 +448,14 @@ export default function TerminalSymbolPage() {
         <div className="rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">{error}</div>
       ) : null}
 
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
+      <DraggableTileLayout
+        storageKey="fh.terminal.symbol.tiles.v1"
+        defaultOrder={["overview", "exposure"]}
+        tiles={{
+          overview: {
+            title: "Quote & research",
+            children: (
+              <>
         <div className="grid min-w-0 gap-4 lg:grid-cols-3">
           <div className="rounded-xl border border-zinc-300 bg-white/60 p-4 dark:border-white/20 dark:bg-black/20">
             <div className="text-sm font-semibold">Quote</div>
@@ -672,11 +680,14 @@ export default function TerminalSymbolPage() {
             </div>
           )}
         </div>
-      </section>
-
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
-        <div className="text-sm font-semibold">Your exposure</div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              </>
+            ),
+          },
+          exposure: {
+            title: "Your exposure",
+            children: (
+              <>
+        <div className="grid gap-3 sm:grid-cols-3">
           <div className="rounded-xl border border-zinc-300 bg-white/60 p-3 text-sm dark:border-white/20 dark:bg-black/20">
             <div className="text-xs text-zinc-600 dark:text-zinc-400">Shares</div>
             <div className="mt-1 grid gap-1 tabular-nums">
@@ -788,7 +799,11 @@ export default function TerminalSymbolPage() {
             </div>
           )}
         </div>
-      </section>
+              </>
+            ),
+          },
+        }}
+      />
     </div>
   );
 }

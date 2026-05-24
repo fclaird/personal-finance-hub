@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { formatDisplayDateTime } from "@/lib/formatDate";
 import { MAX_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
 
@@ -142,11 +143,17 @@ export default function ConnectionsPage() {
         </p>
       </div>
 
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
+      <DraggableTileLayout
+        storageKey="fh.connections.tiles.v1"
+        defaultOrder={["schwab", "plaid"]}
+        tiles={{
+          schwab: {
+            title: "Schwab",
+            children: (
+              <>
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="text-base font-semibold">Schwab</div>
-            <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+            <div className="text-sm text-zinc-600 dark:text-zinc-400">
               Connect via OAuth, then sync holdings/positions into the local SQLite database.
             </div>
           </div>
@@ -267,11 +274,14 @@ export default function ConnectionsPage() {
               : `Option refresh error: ${greeks.error ?? "Unknown error"}`}
           </div>
         ) : null}
-      </section>
-
-      <section className="rounded-2xl border border-zinc-300 bg-white p-6 shadow-sm dark:border-white/20 dark:bg-zinc-950">
-        <div className="text-base font-semibold">Plaid (later)</div>
-        <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              </>
+            ),
+          },
+          plaid: {
+            title: "Plaid (later)",
+            children: (
+              <>
+        <div className="text-sm text-zinc-600 dark:text-zinc-400">
           We’ll add Plaid as an alternate ingestion path (and for Vanguard 529 later).
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -331,7 +341,11 @@ export default function ConnectionsPage() {
             Sync Plaid holdings
           </button>
         </div>
-      </section>
+              </>
+            ),
+          },
+        }}
+      />
     </div>
   );
 }

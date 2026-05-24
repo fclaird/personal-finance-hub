@@ -9,6 +9,7 @@ import { countBenchmarkPriceRows, ensureBenchmarkHistory } from "@/lib/market/be
 import {
   chartDataFromDenseSeries,
   chartDataFromSnapshotRows,
+  collapseToTradingDays,
   extendChartDataThroughNow,
   getCachedBenchmarkSeriesLocal,
   portfolioAsOfIsoDate,
@@ -20,13 +21,13 @@ import {
   type PerformanceHistoryTimeframe,
 } from "@/lib/portfolio/performanceWindow";
 
-const VALID_TF: PerformanceHistoryTimeframe[] = ["1D", "1W", "1M", "3M", "6M", "1Y", "3Y", "5Y"];
+const VALID_TF: PerformanceHistoryTimeframe[] = ["ALL", "1D", "1W", "1M", "3M", "6M", "1Y", "3Y", "5Y"];
 const VALID_BUCKET = new Set(["combined", "retirement", "brokerage"]);
 
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
-    const tf = (url.searchParams.get("timeframe") ?? "6M") as PerformanceHistoryTimeframe;
+    const tf = (url.searchParams.get("timeframe") ?? "ALL") as PerformanceHistoryTimeframe;
     if (!VALID_TF.includes(tf)) {
       return NextResponse.json({ ok: false, error: "Invalid timeframe" }, { status: 400 });
     }
@@ -53,24 +54,42 @@ export async function GET(req: Request) {
       });
     }
 
-    await ensureBenchmarkHistory("SPY");
-    await ensureBenchmarkHistory("QQQ");
-
     const nowMs = Date.now();
-    const { startMs: windowStartMs, endMs: windowEndMs } = timeframeToWindowRangeMs(tf, nowMs);
     const cutoff = timeframeToCutoffIso(tf, nowMs);
     const db = getDb();
+    const todayIso = new Date(nowMs).toISOString().slice(0, 10);
 
-    const snapRows = db
-      .prepare(
-        `
+    const dense = getPortfolioValueSeriesByBucket(bucket as "combined" | "retirement" | "brokerage", mode);
+    const denseInWindow = cutoff ? dense.filter((p) => portfolioAsOfIsoDate(p.asOf) >= cutoff) : dense;
+    const tradingDaySeries = collapseToTradingDays(denseInWindow);
+    const throughDate =
+      tradingDaySeries.length > 0
+        ? portfolioAsOfIsoDate(tradingDaySeries[tradingDaySeries.length - 1]!.asOf)
+        : todayIso;
+    const needThrough = throughDate > todayIso ? throughDate : todayIso;
+
+    await ensureBenchmarkHistory("SPY", needThrough);
+    await ensureBenchmarkHistory("QQQ", needThrough);
+
+    const snapRows = (
+      cutoff
+        ? db.prepare(
+            `
         SELECT snapshot_date, total_value, spy_close, qqq_close
         FROM portfolio_snapshots
         WHERE bucket = ? AND snapshot_date >= ?
         ORDER BY snapshot_date ASC
       `,
-      )
-      .all(bucket, cutoff) as Array<{
+          )
+        : db.prepare(
+            `
+        SELECT snapshot_date, total_value, spy_close, qqq_close
+        FROM portfolio_snapshots
+        WHERE bucket = ?
+        ORDER BY snapshot_date ASC
+      `,
+          )
+    ).all(...(cutoff ? [bucket, cutoff] : [bucket])) as Array<{
       snapshot_date: string;
       total_value: number;
       spy_close: number | null;
@@ -82,13 +101,10 @@ export async function GET(req: Request) {
     const spyRows = countBenchmarkPriceRows("SPY");
     const qqqRows = countBenchmarkPriceRows("QQQ");
 
-    const dense = getPortfolioValueSeriesByBucket(bucket as "combined" | "retirement" | "brokerage", mode);
-    const denseInWindow = dense.filter((p) => portfolioAsOfIsoDate(p.asOf) >= cutoff);
-
-    let source_mix: "snapshots" | "fallback";
+    let source_mix: "sync_points" | "snapshots" | "fallback";
     let chart_data;
 
-    if (denseInWindow.length === 0) {
+    if (tradingDaySeries.length === 0) {
       return NextResponse.json({
         ok: true,
         timeframe: tf,
@@ -97,8 +113,8 @@ export async function GET(req: Request) {
         meta: {
           source_mix: "fallback" as const,
           note: "no_portfolio_points_in_window",
-          window_start_ms: windowStartMs,
-          window_end_ms: windowEndMs,
+          window_start_ms: nowMs,
+          window_end_ms: nowMs,
           benchmark_spy_rows: spyRows,
           benchmark_qqq_rows: qqqRows,
         },
@@ -109,9 +125,22 @@ export async function GET(req: Request) {
       });
     }
 
-    if (shouldUseSnapshotFallback(snapRows.length, tf)) {
-      chart_data = chartDataFromDenseSeries(denseInWindow, benchSpy, benchQq);
-      source_mix = "fallback";
+    const dataStartMs = Date.parse(tradingDaySeries[0]!.asOf);
+    const { startMs: windowStartMs, endMs: windowEndMs } = timeframeToWindowRangeMs(
+      tf,
+      nowMs,
+      Number.isFinite(dataStartMs) ? dataStartMs : null,
+    );
+
+    if (tradingDaySeries.length >= 2) {
+      chart_data = chartDataFromDenseSeries(tradingDaySeries, benchSpy, benchQq);
+      source_mix = "sync_points";
+    } else if (snapRows.length >= 2 && !shouldUseSnapshotFallback(snapRows.length, tf === "ALL" ? "6M" : tf)) {
+      chart_data = chartDataFromSnapshotRows(snapRows);
+      source_mix = "snapshots";
+    } else if (tradingDaySeries.length >= 1) {
+      chart_data = chartDataFromDenseSeries(tradingDaySeries, benchSpy, benchQq);
+      source_mix = "sync_points";
     } else {
       chart_data = chartDataFromSnapshotRows(snapRows);
       source_mix = "snapshots";
@@ -119,6 +148,7 @@ export async function GET(req: Request) {
 
     if (chart_data.length > 0) {
       chart_data = extendChartDataThroughNow(chart_data, benchSpy, benchQq, nowMs);
+      chart_data = chart_data.map((row, idx) => ({ ...row, seq_index: idx }));
     }
 
     if (chart_data.length === 0) {
@@ -152,13 +182,14 @@ export async function GET(req: Request) {
       timeframe: tf,
       bucket,
       mode,
-      meta: {
-        source_mix,
-        window_start_ms: windowStartMs,
-        window_end_ms: windowEndMs,
-        benchmark_spy_rows: spyRows,
-        benchmark_qqq_rows: qqqRows,
-      },
+        meta: {
+          source_mix,
+          tracking_start: tradingDaySeries[0] ? portfolioAsOfIsoDate(tradingDaySeries[0].asOf) : null,
+          window_start_ms: windowStartMs,
+          window_end_ms: windowEndMs,
+          benchmark_spy_rows: spyRows,
+          benchmark_qqq_rows: qqqRows,
+        },
       chart_data,
       total_return_pct,
       vs_spy,
