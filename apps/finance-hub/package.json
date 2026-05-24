@@ -22,6 +22,7 @@
     "digest:pdf": "npx tsx scripts/pdf-allocation-report.ts",
     "digest:notify": "npx tsx scripts/trigger-digest-notify.ts",
     "backfill:portfolio-snapshots": "npx tsx scripts/backfill-portfolio-snapshots.ts",
+    "test": "npx tsx --test src/lib/*.test.ts src/lib/**/*.test.ts",
     "test:dividends": "npx tsx --test src/lib/dividends/dividendProducingFilter.test.ts src/lib/dividends/holdingCategory.test.ts src/lib/dividends/schwabDividendBook.test.ts src/lib/dividends/bookForwardSnap.test.ts"
   },
   "dependencies": {

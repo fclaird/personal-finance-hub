@@ -77,19 +77,12 @@ export function normalizeSeriesForChart(
 ): Array<{ idx: number; close: number }> {
   let out = series.map((p, i) => ({ idx: i, close: p.close }));
 
+  // No intraday bars — fall back to prior close → last (day change only).
   if (out.length === 0 && previousClose != null && last != null) {
     return [
       { idx: 0, close: previousClose },
       { idx: 1, close: last },
     ];
-  }
-
-  if (previousClose != null && out.length > 0) {
-    const head = out[0]!.close;
-    const ref = Math.max(Math.abs(previousClose), 1e-9);
-    if (Math.abs(head - previousClose) / ref > 0.00005) {
-      out = [{ idx: 0, close: previousClose }, ...out.map((p, i) => ({ idx: i + 1, close: p.close }))];
-    }
   }
 
   if (last != null && out.length > 0) {
@@ -100,11 +93,16 @@ export function normalizeSeriesForChart(
     }
   }
 
-  if (out.length === 1 && previousClose != null && last != null) {
-    return [
-      { idx: 0, close: previousClose },
-      { idx: 1, close: last },
-    ];
+  // Single intraday point: anchor at open (first bar), not prior close.
+  if (out.length === 1 && last != null) {
+    const open = out[0]!.close;
+    const ref = Math.max(Math.abs(last), 1e-9);
+    if (Math.abs(open - last) / ref > 0.00005) {
+      return [
+        { idx: 0, close: open },
+        { idx: 1, close: last },
+      ];
+    }
   }
 
   return out.map((p, i) => ({ idx: i, close: p.close }));

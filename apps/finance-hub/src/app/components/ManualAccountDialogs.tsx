@@ -148,6 +148,115 @@ export function AddManualAccountDialog({
   );
 }
 
+export function EditManualAccountDialog({
+  open,
+  account,
+  onClose,
+  onSaved,
+  onDeleted,
+}: {
+  open: boolean;
+  account: { id: string; name: string; nickname: string | null; accountBucket: AccountBucket } | null;
+  onClose: () => void;
+  onSaved: () => void;
+  onDeleted: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [nickname, setNickname] = useState("");
+  const [accountBucket, setAccountBucket] = useState<AccountBucket>("brokerage");
+  const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !account) return;
+    setName(account.name);
+    setNickname(account.nickname ?? "");
+    setAccountBucket(account.accountBucket);
+    setError(null);
+  }, [open, account]);
+
+  if (!open || !account) return null;
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const resp = await fetch(`/api/manual/accounts/${encodeURIComponent(account!.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, nickname: nickname || null, accountBucket }),
+      });
+      const json = (await resp.json()) as { ok: boolean; error?: string };
+      if (!json.ok) throw new Error(json.error ?? "Failed to update account");
+      onSaved();
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    const label = name.trim() || account!.name;
+    if (
+      !confirm(
+        `Remove external account "${label}"? All holdings entered for this account will be permanently deleted.`,
+      )
+    ) {
+      return;
+    }
+    setRemoving(true);
+    setError(null);
+    try {
+      const resp = await fetch(`/api/manual/accounts/${encodeURIComponent(account!.id)}`, { method: "DELETE" });
+      const json = (await resp.json()) as { ok: boolean; error?: string };
+      if (!json.ok) throw new Error(json.error ?? "Failed to remove account");
+      onDeleted();
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRemoving(false);
+    }
+  }
+
+  return (
+    <ModalShell title="Edit external account" onClose={onClose}>
+      <Field label="Account name">
+        <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <Field label="Nickname (optional)">
+        <input className={inputClass} value={nickname} onChange={(e) => setNickname(e.target.value)} />
+      </Field>
+      <div>
+        <div className="mb-2 text-sm font-medium text-zinc-800 dark:text-zinc-200">Account type</div>
+        <BucketPicker value={accountBucket} onChange={setAccountBucket} />
+      </div>
+      {error ? <div className="text-sm text-red-600 dark:text-red-400">{error}</div> : null}
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          disabled={saving || removing || !name.trim()}
+          onClick={() => void save()}
+          className="rounded-full bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-white dark:text-black"
+        >
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+        <button
+          type="button"
+          disabled={saving || removing}
+          onClick={() => void remove()}
+          className="rounded-full border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/50 dark:text-red-300 dark:hover:bg-red-950/30"
+        >
+          {removing ? "Removing…" : "Remove account"}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
 export type ManualPositionFormState = {
   positionId?: string;
   accountId: string;

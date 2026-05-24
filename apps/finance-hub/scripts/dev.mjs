@@ -34,7 +34,9 @@ const ensure = spawnSync(nodeBin, ["scripts/ensure-sqlite-native.mjs"], {
 });
 if (ensure.status !== 0) process.exit(ensure.status ?? 1);
 
-const nextArgs = ["node_modules/next/dist/bin/next", "dev", "--experimental-https"];
+const bindHost = (process.env.FINANCE_HUB_BIND_HOST ?? "127.0.0.1").trim() || "127.0.0.1";
+
+const nextArgs = ["node_modules/next/dist/bin/next", "dev", "--experimental-https", "--hostname", bindHost];
 const child = spawn(nodeBin, nextArgs, { cwd: root, stdio: "inherit", env: process.env });
 child.on("exit", (code, signal) => {
   if (signal) process.kill(process.pid, signal);

@@ -10,7 +10,7 @@ This doc covers **Path A** (reach your local hub from a phone) and **Path B** (s
 | **Cloudflare Tunnel + Access** | HTTPS is public, but Access (or similar) gates who can hit the origin. | You need a shareable URL without installing Tailscale on every device. |
 | **ngrok / raw tunnel** | Public URL → your Next server. | Quick tests only unless you add auth in front. |
 
-**Risks:** The hub reads portfolio data from SQLite and may hold Schwab/OAuth tokens on disk. Anyone who can use the app as you can see balances. Treat **CRON_SECRET**, tunnel URLs, and JWT report tokens like passwords.
+**Risks:** The hub reads portfolio data from SQLite and may hold Schwab/OAuth tokens on disk. Anyone who can use the app as you can see balances. Treat **CRON_SECRET**, **FINANCE_HUB_API_KEY** (when LAN/VPN access is enabled), tunnel URLs, and JWT report tokens like passwords.
 
 **OAuth:** Schwab (and others) may only allow specific redirect URIs. If login breaks through a tunnel hostname, use **Tailscale** so the browser still sees a private IP, or register the tunnel hostname in the Schwab developer app.
 
@@ -42,6 +42,7 @@ If `next dev --experimental-https` uses a self-signed cert, the phone may warn�
 
 | Variable | Purpose |
 |----------|---------|
+| `FINANCE_HUB_API_KEY` | Optional. When set, all `/api/*` routes require Bearer auth (see [security.md](../../../docs/security.md)). Required before binding to LAN or exposing via Tailscale/VPN. |
 | `CRON_SECRET` | Bearer secret for `/api/internal/*` routes (same pattern as X digest refresh). |
 | `PUBLIC_APP_URL` | Optional base URL (no trailing slash) for links in SMS/email, e.g. `https://your-tunnel.example.com`. |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` | SMS delivery. |
@@ -53,7 +54,7 @@ If `next dev --experimental-https` uses a self-signed cert, the phone may warn�
 
 ## Path B: Allocation digest API
 
-- **GET** `/api/internal/allocation-digest` — JSON snapshot (consolidated + per-account), weights and totals. Auth: `Authorization: Bearer <CRON_SECRET>` or `?secret=` (same as X digest).
+- **GET** `/api/internal/allocation-digest` — JSON snapshot (consolidated + per-account), weights and totals. Auth: `Authorization: Bearer <CRON_SECRET>` or `x-cron-secret` header (same as X digest).
 - **GET** `/api/internal/allocation-digest?format=jwt` — returns `{ ok, token, expiresInSec }` for opening `/allocation/report?token=...` or PDF scripts.
 - **POST** `/api/internal/allocation-digest/notify` — sends SMS (% only) and optional Resend email (full detail). Same auth.
 

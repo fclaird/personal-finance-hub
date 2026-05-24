@@ -1,3 +1,5 @@
+import type { AnalyticsBucketKey } from "@/lib/accountBuckets";
+
 export type ExposureRow = {
   underlyingSymbol: string;
   spotMarketValue: number;
@@ -7,7 +9,7 @@ export type ExposureRow = {
   optionsMarkMarketValue: number;
 };
 
-export type ExposureScope = "net" | "brokerage" | "retirement";
+export type ExposureScope = "net" | "brokerage" | "retirement" | "529";
 export type ExposurePieMetric = "spot" | "synthetic" | "net";
 export type SyntheticChartBasis = "delta" | "mark";
 
@@ -47,7 +49,7 @@ export function netLiquidatingMv(r: ExposureRow): number {
 
 export function scopeExposureRows(
   rows: ExposureRow[],
-  buckets: Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>,
+  buckets: Array<{ bucketKey: AnalyticsBucketKey; exposure: ExposureRow[] }>,
   scope: ExposureScope,
 ): ExposureRow[] {
   if (scope === "net") return rows;
@@ -86,6 +88,7 @@ export function exposureMvByUnderlying(
 export function exposureScopeLabel(scope: ExposureScope): string {
   if (scope === "net") return "All";
   if (scope === "brokerage") return "Brokerage";
+  if (scope === "529") return "529";
   return "Retirement";
 }
 

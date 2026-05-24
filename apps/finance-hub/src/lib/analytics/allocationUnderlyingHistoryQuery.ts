@@ -3,7 +3,7 @@ import type Database from "better-sqlite3";
 import { nyCalendarIso } from "@/lib/analytics/allocationNyDate";
 import type { DataMode } from "@/lib/dataMode";
 
-export type AllocationHistoryBucket = "net" | "brokerage" | "retirement";
+export type AllocationHistoryBucket = "net" | "brokerage" | "retirement" | "529";
 export type AllocationHistoryMetric = "net" | "spot" | "synthetic";
 
 export type AllocationHistoryPoint = { date: string; pct: number };

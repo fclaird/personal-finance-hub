@@ -58,6 +58,8 @@ npm install
 npm run dev                        # http://localhost:3000
 ```
 
+From the repo root you can also run `npm run dev` (delegates to `apps/finance-hub`).
+
 Desktop shell: see `apps/finance-hub/docs/DESKTOP.md`.
 
 ## Documentation

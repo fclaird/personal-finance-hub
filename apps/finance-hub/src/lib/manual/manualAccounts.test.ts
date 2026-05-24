@@ -6,6 +6,8 @@ import { describe, it } from "node:test";
 import Database from "better-sqlite3";
 
 import {
+  createManualAccountInDb,
+  deleteManualAccountInDb,
   ensureManualConnection,
   MANUAL_CONNECTION_ID,
   parseManualPositionMetadata,
@@ -88,5 +90,43 @@ describe("manualAccounts", () => {
 
     assert.equal(row.bucket, "529");
     assert.equal(parseManualPositionMetadata(row.meta)?.purchaseDate, "2023-06-01");
+  });
+
+  it("createManualAccountInDb creates account with empty snapshot", () => {
+    const db = createTestDb();
+    const acct = createManualAccountInDb(db, { name: "529 Plan", accountBucket: "529" });
+    assert.ok(acct.id.startsWith("manual_"));
+    assert.equal(acct.accountBucket, "529");
+    const snap = db
+      .prepare(`SELECT COUNT(*) AS c FROM holding_snapshots WHERE account_id = ?`)
+      .get(acct.id) as { c: number };
+    assert.equal(snap.c, 1);
+  });
+
+  it("deleteManualAccountInDb removes account snapshots and positions", () => {
+    const db = createTestDb();
+    const acct = createManualAccountInDb(db, { name: "External IRA", accountBucket: "retirement" });
+    const snap = db
+      .prepare(`SELECT id FROM holding_snapshots WHERE account_id = ?`)
+      .get(acct.id) as { id: string };
+    db.prepare(`INSERT INTO securities (id, symbol, name, security_type) VALUES ('sec_VTI', 'VTI', 'VTI', 'equity')`).run();
+    db.prepare(
+      `
+      INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value, metadata_json)
+      VALUES ('pos_del', ?, 'sec_VTI', 5, 100, 500, ?)
+    `,
+    ).run(snap.id, JSON.stringify({ source: "manual", purchaseDate: null, notes: null }));
+
+    deleteManualAccountInDb(db, acct.id);
+
+    assert.equal(
+      (db.prepare(`SELECT COUNT(*) AS c FROM accounts WHERE id = ?`).get(acct.id) as { c: number }).c,
+      0,
+    );
+    assert.equal(
+      (db.prepare(`SELECT COUNT(*) AS c FROM holding_snapshots WHERE account_id = ?`).get(acct.id) as { c: number }).c,
+      0,
+    );
+    assert.equal((db.prepare(`SELECT COUNT(*) AS c FROM positions WHERE id = 'pos_del'`).get() as { c: number }).c, 0);
   });
 });

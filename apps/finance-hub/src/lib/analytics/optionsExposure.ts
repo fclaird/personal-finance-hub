@@ -1,7 +1,9 @@
 import { getDb } from "@/lib/db";
 import type { DataMode } from "@/lib/dataMode";
+import type { AnalyticsBucketKey } from "@/lib/accountBuckets";
 import { bucketFromAccount } from "@/lib/accountBuckets";
-import { latestSnapshotIds } from "@/lib/holdings/latestSnapshots";
+import { latestSnapshotIds, latestSnapshotScopeForMode } from "@/lib/holdings/latestSnapshots";
+import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
 
 /**
@@ -17,14 +19,14 @@ export function portfolioImpliedEquityPrice(
 }
 
 export function portfolioImpliedEquityPriceMap(db: ReturnType<typeof getDb>, mode: DataMode): Map<string, number> {
-  const scope = mode === "schwab" ? "schwab_only" : "all_synced";
+  const scope = latestSnapshotScopeForMode(mode);
   const snapshotIds = latestSnapshotIds(db, scope);
   if (snapshotIds.length === 0) return new Map();
 
   const rows = db
     .prepare(
       `
-      SELECT UPPER(COALESCE(s.symbol, '')) AS symbol, SUM(p.quantity) AS qty, SUM(COALESCE(p.market_value, 0)) AS mv
+      SELECT UPPER(COALESCE(s.symbol, '')) AS symbol, SUM(p.quantity) AS qty, SUM(${POSITION_MARKET_VALUE_SQL}) AS mv
       FROM positions p
       JOIN securities s ON s.id = p.security_id
       WHERE p.snapshot_id IN (SELECT value FROM json_each(@snaps))
@@ -56,7 +58,7 @@ export type ExposureRow = {
 };
 
 export type BucketExposure = {
-  bucketKey: "brokerage" | "retirement";
+  bucketKey: AnalyticsBucketKey;
   exposure: ExposureRow[];
 };
 
@@ -88,7 +90,7 @@ export function impliedPriceMapForSnapshot(db: ReturnType<typeof getDb>, snapsho
       `
         SELECT
           COALESCE(sec.symbol, 'UNKNOWN') AS symbol,
-          SUM(COALESCE(p.market_value, 0)) AS mv,
+          SUM(${POSITION_MARKET_VALUE_SQL}) AS mv,
           SUM(COALESCE(p.quantity, 0)) AS qty
         FROM positions p
         JOIN securities sec ON sec.id = p.security_id
@@ -107,7 +109,7 @@ export function impliedPriceMapForSnapshot(db: ReturnType<typeof getDb>, snapsho
     const qtyRow = db
       .prepare(
         `
-          SELECT SUM(quantity) AS qty, SUM(COALESCE(market_value, 0)) AS mv
+          SELECT SUM(quantity) AS qty, SUM(${POSITION_MARKET_VALUE_SQL}) AS mv
           FROM positions p
           JOIN securities sec ON sec.id = p.security_id
           WHERE p.snapshot_id = ?
@@ -194,7 +196,7 @@ export function getUnderlyingExposureRollup(mode: DataMode = "auto"): ExposureRo
 
 export function getUnderlyingExposureByBucket(mode: DataMode = "auto"): BucketExposure[] {
   const db = getDb();
-  const scope = mode === "schwab" ? "schwab_only" : "all_synced";
+  const scope = latestSnapshotScopeForMode(mode);
   const snapshotIdSet = new Set(latestSnapshotIds(db, scope));
 
   const snapshots = db
@@ -210,13 +212,12 @@ export function getUnderlyingExposureByBucket(mode: DataMode = "auto"): BucketEx
     )
     .all() as Array<{ account_name: string; account_nickname: string | null; account_bucket: string | null; snapshot_id: string }>;
 
-  const byBucket = new Map<"brokerage" | "retirement", Map<string, ExposureRow>>();
+  const byBucket = new Map<AnalyticsBucketKey, Map<string, ExposureRow>>();
   const priceByUnderlying = portfolioImpliedEquityPriceMap(db, mode);
 
   for (const s of snapshots) {
     if (!snapshotIdSet.has(s.snapshot_id)) continue;
     const bucket = bucketFromAccount(s.account_name, s.account_nickname, s.account_bucket);
-    if (bucket === "529") continue;
     if (!byBucket.has(bucket)) byBucket.set(bucket, new Map());
     const map = byBucket.get(bucket)!;
 
@@ -225,7 +226,7 @@ export function getUnderlyingExposureByBucket(mode: DataMode = "auto"): BucketEx
         `
         SELECT
           COALESCE(sec.symbol, 'UNKNOWN') AS symbol,
-          SUM(COALESCE(p.market_value, 0)) AS mv,
+          SUM(${POSITION_MARKET_VALUE_SQL}) AS mv,
           SUM(COALESCE(p.quantity, 0)) AS qty
         FROM positions p
         JOIN securities sec ON sec.id = p.security_id
@@ -342,6 +343,7 @@ export function getUnderlyingExposureByBucket(mode: DataMode = "auto"): BucketEx
     out.push({ bucketKey, exposure });
   }
 
-  out.sort((a, b) => (a.bucketKey === "retirement" ? -1 : 1) - (b.bucketKey === "retirement" ? -1 : 1));
+  const bucketOrder: Record<AnalyticsBucketKey, number> = { retirement: 0, brokerage: 1, "529": 2 };
+  out.sort((a, b) => bucketOrder[a.bucketKey] - bucketOrder[b.bucketKey]);
   return out;
 }

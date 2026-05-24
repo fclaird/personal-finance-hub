@@ -26,15 +26,25 @@ If you change `PORT` in the environment before launching Electron, use that port
 
 Optional: `INTERNAL_APP_BASE_URL=http://127.0.0.1:3049` (defaults are derived from `PORT`).
 
-## Local cron (replaces Vercel for dividend rollups)
+## Network bind (localhost default)
 
-[`src/instrumentation.ts`](src/instrumentation.ts) starts a lightweight scheduler when **not** on Vercel (`VERCEL !== "1"`): it `GET`s `/api/internal/dividend-models/roll` with `Authorization: Bearer <CRON_SECRET>` on an interval. Set **`CRON_SECRET`** in `.env.local` for this to run.
+Dev and desktop default to **127.0.0.1** only. To intentionally expose the dev server on your LAN (requires `FINANCE_HUB_API_KEY` — see [../../../docs/security.md](../../../docs/security.md)):
 
-The hourly Schwab sync loop in [`src/lib/scheduler.ts`](src/lib/scheduler.ts) uses `INTERNAL_APP_BASE_URL` or `http://127.0.0.1:${PORT}`.
+```bash
+FINANCE_HUB_BIND_HOST=0.0.0.0 npm run dev
+```
+
+Electron production builds still listen on `127.0.0.1:3049` via `desktop/main.cjs`.
+
+## Local scheduling (desktop / non-Vercel)
+
+When **not** on Vercel (`VERCEL !== "1"`), [`src/instrumentation.ts`](src/instrumentation.ts) registers Node instrumentation and [`src/lib/scheduler.ts`](src/lib/scheduler.ts) runs a 60s Schwab refresh tick (slow full sync ~10 min). Both use `INTERNAL_APP_BASE_URL` or `http://127.0.0.1:${PORT}`.
+
+Set **`CRON_SECRET`** in `.env.local` for internal cron routes (allocation daily close, portfolio snapshots, digest notify).
 
 ## Cold-start full data pull (market closed)
 
-On local / desktop / non-Vercel Node startup, `src/lib/coldStartupDataPull.ts` runs **once per process** (~3.5s after bootstrap) **only while US equities RTH is closed**: Schwab holdings sync, taxonomy + market-cap refresh for all holdings, transaction history sync, Schwab quotes to `price_points`, Finnhub earnings sync, weekly portfolio snapshots, allocation daily close (**both** `auto`/`schwab`), and dividend-model rollup **when `CRON_SECRET` is set**. If RTH is open, this orchestration **skips** (live terminals rely on polling during the session).
+On local / desktop / non-Vercel Node startup, [`src/lib/coldStartupDataPull.ts`](src/lib/coldStartupDataPull.ts) runs **once per process** (~3.5s after bootstrap) **only while US equities RTH is closed**: Schwab closed-bundle refresh, Finnhub earnings sync + Schwab enrich, and when `CRON_SECRET` is set — weekly portfolio snapshots and allocation daily close (`auto` + `schwab`). If RTH is open, this orchestration **skips** (live terminals rely on polling during the session).
 
 Environment overrides:
 

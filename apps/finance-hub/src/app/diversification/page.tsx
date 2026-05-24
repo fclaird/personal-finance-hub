@@ -178,12 +178,12 @@ export default function DiversificationPage() {
   const privacy = usePrivacy();
   const [rows, setRows] = useState<ExposureRow[]>([]);
   const [exposureBuckets, setExposureBuckets] = useState<
-    Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>
+    Array<{ bucketKey: "brokerage" | "retirement" | "529"; exposure: ExposureRow[] }>
   >([]);
   const [tax, setTax] = useState<Map<string, TaxonomyRow>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [category, setCategory] = useState<TaxonomyCategory>("sector");
-  const [pieView, setPieView] = useState<"net" | "retirement" | "brokerage">("net");
+  const [pieView, setPieView] = useState<"net" | "retirement" | "brokerage" | "529">("net");
   const [pieMetric, setPieMetric] = useState<PieMetric>("net");
   const [expandedSectorKeys, setExpandedSectorKeys] = useState<string[]>([]);
 
@@ -315,7 +315,8 @@ export default function DiversificationPage() {
   const categoryTitle =
     category === "sector" ? "Sector" : category === "marketCap" ? "Market cap" : "Revenue geography";
 
-  const scopeTitle = pieView === "net" ? "Net" : pieView === "brokerage" ? "Brokerage" : "Retirement";
+  const scopeTitle =
+    pieView === "net" ? "Net" : pieView === "brokerage" ? "Brokerage" : pieView === "529" ? "529" : "Retirement";
 
   const chartTitle = `${scopeTitle} · ${categoryTitle} · ${pieMetricChartSubtitle(pieMetric)}`;
 
@@ -341,6 +342,7 @@ export default function DiversificationPage() {
               { key: "net", label: "Net" },
               { key: "brokerage", label: "Brokerage" },
               { key: "retirement", label: "Retirement" },
+              { key: "529", label: "529" },
             ] as const
           ).map((v) => (
             <button key={v.key} type="button" onClick={() => setPieView(v.key)} className={controlBtnClass(pieView === v.key)}>

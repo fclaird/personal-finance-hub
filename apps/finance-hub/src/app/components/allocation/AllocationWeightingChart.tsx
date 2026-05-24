@@ -38,7 +38,7 @@ export type AllocationChartExposureRow = {
 };
 
 export type AllocationChartPieMetric = "spot" | "synthetic" | "net";
-export type AllocationChartPieView = "net" | "brokerage" | "retirement";
+export type AllocationChartPieView = "net" | "brokerage" | "retirement" | "529";
 
 type BarRow = { id: string; label: string; marketValue: number; pct: number; fill: string };
 

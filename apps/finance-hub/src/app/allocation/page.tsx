@@ -283,7 +283,7 @@ export default function AllocationPage() {
   const privacy = usePrivacy();
   const [rows, setRows] = useState<ExposureRow[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [pieView, setPieView] = useState<"net" | "retirement" | "brokerage">("net");
+  const [pieView, setPieView] = useState<"net" | "retirement" | "brokerage" | "529">("net");
   const [pieMetric, setPieMetric] = useState<PieMetric>("net");
   /** Pie + bar charts only: delta-weighted synthetic MV vs options liquidating value (contract marks). Table % / Net MV stay delta-based. */
   const [syntheticChartBasis, setSyntheticChartBasis] = useState<"delta" | "mark">("delta");
@@ -313,7 +313,7 @@ export default function AllocationPage() {
   >([]);
   const [exposureBuckets, setExposureBuckets] = useState<
     Array<{
-      bucketKey: "brokerage" | "retirement";
+      bucketKey: "brokerage" | "retirement" | "529";
       exposure: ExposureRow[];
     }>
   >([]);
@@ -365,7 +365,7 @@ export default function AllocationPage() {
       const exposureBucketResp = await fetch(`/api/exposure/buckets`);
       const expBucketJson = (await safeJson(exposureBucketResp)) as {
         ok: boolean;
-        buckets?: Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>;
+        buckets?: Array<{ bucketKey: "brokerage" | "retirement" | "529"; exposure: ExposureRow[] }>;
         error?: string;
       };
       if (!expBucketJson.ok) throw new Error(expBucketJson.error ?? "Failed to load exposure buckets");
@@ -438,8 +438,14 @@ export default function AllocationPage() {
   const showSyntheticZeroHint =
     rows.length > 0 && Math.abs(portfolioSynthMv) < 1e-6 && hasOptionContractMarks;
 
-  /** Denominator for % + pie for active metric + scope. */
+  /** Full portfolio rows for the exposure table (always all accounts). */
+  const tableRows = rows;
+
+  /** Denominator for % + pie for active metric + scope (charts only). */
   const scopedMetricTotal = useMemo(() => scopedRows.reduce((s, r) => s + sliceMv(r, pieMetric), 0), [scopedRows, pieMetric]);
+
+  /** Denominator for % column in the full exposure table. */
+  const tableMetricTotal = useMemo(() => tableRows.reduce((s, r) => s + sliceMv(r, pieMetric), 0), [tableRows, pieMetric]);
 
   const chartScopedRows = useMemo(
     () =>
@@ -462,9 +468,9 @@ export default function AllocationPage() {
   );
 
   const sortedRows = useMemo(() => {
-    const rs = [...scopedRows];
+    const rs = [...tableRows];
     const getNet = (r: ExposureRow) => r.spotMarketValue + r.syntheticMarketValue;
-    const getPct = (r: ExposureRow) => (scopedMetricTotal ? sliceMv(r, pieMetric) / scopedMetricTotal : 0);
+    const getPct = (r: ExposureRow) => (tableMetricTotal ? sliceMv(r, pieMetric) / tableMetricTotal : 0);
     rs.sort((a, b) => {
       let cmp = 0;
       switch (sortColumn) {
@@ -503,7 +509,7 @@ export default function AllocationPage() {
       return sortAsc ? cmp : -cmp;
     });
     return rs;
-  }, [scopedRows, sortColumn, sortAsc, scopedMetricTotal, pieMetric]);
+  }, [tableRows, sortColumn, sortAsc, tableMetricTotal, pieMetric]);
 
   async function ensureDetail(underlying: string) {
     const sym = (underlying ?? "").trim().toUpperCase();
@@ -563,7 +569,7 @@ export default function AllocationPage() {
   function exposureDataCell(col: SortColumn, r: ExposureRow) {
     const netMv = r.spotMarketValue + r.syntheticMarketValue;
     const netLiq = netLiquidatingMv(r);
-    const pct = scopedMetricTotal ? sliceMv(r, pieMetric) / scopedMetricTotal : 0;
+    const pct = tableMetricTotal ? sliceMv(r, pieMetric) / tableMetricTotal : 0;
     switch (col) {
       case "underlying":
         return (
@@ -665,10 +671,10 @@ export default function AllocationPage() {
           <td
             key={col}
             className={
-              "py-2 pr-4 text-right tabular-nums " + posNegClass(scopedRows.reduce((s, r) => s + r.spotMarketValue, 0))
+              "py-2 pr-4 text-right tabular-nums " + posNegClass(tableRows.reduce((s, r) => s + r.spotMarketValue, 0))
             }
           >
-            {usd2Masked(scopedRows.reduce((s, r) => s + r.spotMarketValue, 0), privacy.masked)}
+            {usd2Masked(tableRows.reduce((s, r) => s + r.spotMarketValue, 0), privacy.masked)}
           </td>
         );
       case "synthetic":
@@ -677,10 +683,10 @@ export default function AllocationPage() {
             key={col}
             className={
               "py-2 pr-4 text-right tabular-nums " +
-              posNegClass(scopedRows.reduce((s, r) => s + r.syntheticMarketValue, 0))
+              posNegClass(tableRows.reduce((s, r) => s + r.syntheticMarketValue, 0))
             }
           >
-            {usd2Masked(scopedRows.reduce((s, r) => s + r.syntheticMarketValue, 0), privacy.masked)}
+            {usd2Masked(tableRows.reduce((s, r) => s + r.syntheticMarketValue, 0), privacy.masked)}
           </td>
         );
       case "optionsLiquidating":
@@ -689,10 +695,10 @@ export default function AllocationPage() {
             key={col}
             className={
               "py-2 pr-4 text-right tabular-nums " +
-              posNegClass(scopedRows.reduce((s, r) => s + r.optionsMarkMarketValue, 0))
+              posNegClass(tableRows.reduce((s, r) => s + r.optionsMarkMarketValue, 0))
             }
           >
-            {usd2Masked(scopedRows.reduce((s, r) => s + r.optionsMarkMarketValue, 0), privacy.masked)}
+            {usd2Masked(tableRows.reduce((s, r) => s + r.optionsMarkMarketValue, 0), privacy.masked)}
           </td>
         );
       case "netLiquidating":
@@ -701,10 +707,10 @@ export default function AllocationPage() {
             key={col}
             className={
               "py-2 pr-4 text-right tabular-nums " +
-              posNegClass(scopedRows.reduce((s, r) => s + netLiquidatingMv(r), 0))
+              posNegClass(tableRows.reduce((s, r) => s + netLiquidatingMv(r), 0))
             }
           >
-            {usd2Masked(scopedRows.reduce((s, r) => s + netLiquidatingMv(r), 0), privacy.masked)}
+            {usd2Masked(tableRows.reduce((s, r) => s + netLiquidatingMv(r), 0), privacy.masked)}
           </td>
         );
       case "net":
@@ -713,10 +719,10 @@ export default function AllocationPage() {
             key={col}
             className={
               "py-2 pr-4 text-right tabular-nums " +
-              posNegClass(scopedRows.reduce((s, r) => s + r.spotMarketValue + r.syntheticMarketValue, 0))
+              posNegClass(tableRows.reduce((s, r) => s + r.spotMarketValue + r.syntheticMarketValue, 0))
             }
           >
-            {usd2Masked(scopedRows.reduce((s, r) => s + r.spotMarketValue + r.syntheticMarketValue, 0), privacy.masked)}
+            {usd2Masked(tableRows.reduce((s, r) => s + r.spotMarketValue + r.syntheticMarketValue, 0), privacy.masked)}
           </td>
         );
       case "syntheticShares":
@@ -725,10 +731,10 @@ export default function AllocationPage() {
             key={col}
             className={
               "py-2 pr-4 text-right tabular-nums " +
-              posNegClass(scopedRows.reduce((s, r) => s + (Number.isFinite(r.syntheticShares) ? r.syntheticShares : 0), 0))
+              posNegClass(tableRows.reduce((s, r) => s + (Number.isFinite(r.syntheticShares) ? r.syntheticShares : 0), 0))
             }
           >
-            {scopedRows
+            {tableRows
               .reduce((s, r) => s + (Number.isFinite(r.syntheticShares) ? r.syntheticShares : 0), 0)
               .toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </td>
@@ -738,10 +744,10 @@ export default function AllocationPage() {
           <td
             key={col}
             className={
-              "py-2 pr-4 text-right tabular-nums " + posNegClass(scopedRows.reduce((s, r) => s + (r.heldShares ?? 0), 0))
+              "py-2 pr-4 text-right tabular-nums " + posNegClass(tableRows.reduce((s, r) => s + (r.heldShares ?? 0), 0))
             }
           >
-            {scopedRows
+            {tableRows
               .reduce((s, r) => s + (r.heldShares ?? 0), 0)
               .toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </td>
@@ -752,10 +758,10 @@ export default function AllocationPage() {
             key={col}
             className={
               "py-2 pr-4 text-right tabular-nums " +
-              posNegClass(scopedRows.reduce((s, r) => s + (r.heldShares ?? 0) + (r.syntheticShares ?? 0), 0))
+              posNegClass(tableRows.reduce((s, r) => s + (r.heldShares ?? 0) + (r.syntheticShares ?? 0), 0))
             }
           >
-            {scopedRows
+            {tableRows
               .reduce((s, r) => s + (r.heldShares ?? 0) + (r.syntheticShares ?? 0), 0)
               .toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </td>
@@ -800,6 +806,9 @@ export default function AllocationPage() {
             title: "Exposure by underlying",
             children: (
               <>
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          Table shows <span className="font-medium">all accounts</span> (including external/manual). Pie and bar charts below follow the selected scope (All, Brokerage, Retirement, or 529).
+        </p>
         {error ? (
           <div className="rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">
             {error}
@@ -881,12 +890,13 @@ export default function AllocationPage() {
             renderBlock={(id) => {
               if (id === "scope") {
                 return (
-                  <div className="grid w-full max-w-full grid-cols-1 gap-1.5 sm:grid-cols-3">
+                  <div className="grid w-full max-w-full grid-cols-2 gap-1.5 sm:grid-cols-4">
                     {(
                       [
                         { key: "net", label: "All" },
                         { key: "brokerage", label: "Brokerage" },
                         { key: "retirement", label: "Retirement" },
+                        { key: "529", label: "529" },
                       ] as const
                     ).map((v) => (
                       <button
@@ -971,7 +981,14 @@ export default function AllocationPage() {
               if (id === "selection") {
                 return (
                   <div className="text-xs font-medium leading-relaxed text-zinc-700 dark:text-zinc-300">
-                    {pieView === "net" ? "All" : pieView === "brokerage" ? "Brokerage" : "Retirement"} · {PIE_METRIC_LABEL[pieMetric]}
+                    {pieView === "net"
+                      ? "All"
+                      : pieView === "brokerage"
+                        ? "Brokerage"
+                        : pieView === "529"
+                          ? "529"
+                          : "Retirement"}{" "}
+                    · {PIE_METRIC_LABEL[pieMetric]}
                     {pieMetric !== "spot" && syntheticChartBasis === "mark" ? (
                       <span className="mt-1 block text-zinc-500 dark:text-zinc-500">Charts use option contract marks</span>
                     ) : null}
@@ -985,7 +1002,15 @@ export default function AllocationPage() {
           <div className="flex min-h-[min(22rem,48vh)] w-full min-w-0 flex-1 flex-col overflow-visible rounded-xl border border-zinc-200 bg-white p-2 shadow-sm dark:border-white/15 dark:bg-zinc-950 sm:p-3 lg:min-h-0">
             <FinancePiePanel
               layout="split"
-              title={`${pieView === "net" ? "All accounts" : pieView === "retirement" ? "Retirement" : "Brokerage"} · ${pieMetricChartSubtitle(pieMetric)}`}
+              title={`${
+                pieView === "net"
+                  ? "All accounts"
+                  : pieView === "retirement"
+                    ? "Retirement"
+                    : pieView === "529"
+                      ? "529"
+                      : "Brokerage"
+              } · ${pieMetricChartSubtitle(pieMetric)}`}
               symbolColorMap={chartSymbolColors}
               emptyMessage={
                 pieMetric === "synthetic" && Math.abs(chartScopedMetricTotal) < 1e-9

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { ApiKeyProvider } from "@/app/components/ApiKeyProvider";
 import { LiveStatusBanner } from "@/app/components/LiveStatusBanner";
 import { NavigationShortcuts } from "@/app/components/NavigationShortcuts";
 import { PrivacyProvider } from "@/app/components/PrivacyProvider";
@@ -36,7 +37,8 @@ export default function RootLayout({
         suppressHydrationWarning
       >
         <PrivacyProvider>
-          <NavigationShortcuts />
+          <ApiKeyProvider>
+            <NavigationShortcuts />
           <div className="flex h-dvh overflow-hidden">
             <SidebarNav />
             <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
@@ -44,6 +46,7 @@ export default function RootLayout({
               {children}
             </main>
           </div>
+          </ApiKeyProvider>
         </PrivacyProvider>
       </body>
     </html>

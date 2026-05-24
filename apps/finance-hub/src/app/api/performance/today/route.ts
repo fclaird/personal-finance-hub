@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
-import { latestSnapshotId } from "@/lib/snapshots";
+import { latestSnapshotIds } from "@/lib/holdings/latestSnapshots";
+import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
 import { schwabMarketFetch } from "@/lib/schwab/client";
 import { schwabQuoteObjectFromEntry } from "@/lib/schwab/quoteEntry";
-import { notPosterityWhereSql } from "@/lib/posterity";
 
 function normSym(s: string) {
   return (s ?? "").trim().toUpperCase();
@@ -32,25 +32,7 @@ function quoteChangePctFromResp(resp: Record<string, unknown>, sym: string): num
 
 export async function GET() {
   const db = getDb();
-  const snaps = (db
-    .prepare(
-      `
-      SELECT hs.id AS snapshot_id
-      FROM holding_snapshots hs
-      JOIN accounts a ON a.id = hs.account_id
-      WHERE a.id LIKE 'schwab_%'
-        AND ${notPosterityWhereSql("a")}
-        AND hs.as_of = (
-          SELECT MAX(hs2.as_of) FROM holding_snapshots hs2 WHERE hs2.account_id = a.id
-        )
-      ORDER BY a.name ASC
-    `,
-    )
-    .all() as Array<{ snapshot_id: string }>)
-    .map((r) => r.snapshot_id);
-
-  const snapFallback = latestSnapshotId(db);
-  const snapshotIds = snaps.length ? snaps : snapFallback ? [snapFallback] : [];
+  const snapshotIds = latestSnapshotIds(db, "all_synced");
   if (snapshotIds.length === 0) {
     return NextResponse.json({ ok: true, snapshotId: null, portfolioPct: null, SPY: null, QQQ: null });
   }
@@ -58,7 +40,7 @@ export async function GET() {
   const rows = db
     .prepare(
       `
-      SELECT s.symbol AS symbol, SUM(COALESCE(p.market_value, 0)) AS mv
+      SELECT s.symbol AS symbol, SUM(${POSITION_MARKET_VALUE_SQL}) AS mv
       FROM positions p
       JOIN securities s ON s.id = p.security_id
       WHERE p.snapshot_id IN (SELECT value FROM json_each(@snaps))

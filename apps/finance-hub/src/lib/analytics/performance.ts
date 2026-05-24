@@ -1,7 +1,8 @@
 import { getDb } from "@/lib/db";
 import type { DataMode } from "@/lib/dataMode";
 import { bucketFromAccount } from "@/lib/accountBuckets";
-import { notPosterityWhereSql } from "@/lib/posterity";
+import { syncedBrokerAndManualWhereSql, allSyncedAccountsWhereSql } from "@/lib/holdings/latestSnapshots";
+import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
 
 export type PortfolioValuePoint = {
   asOf: string;
@@ -10,7 +11,8 @@ export type PortfolioValuePoint = {
 
 export function getPortfolioValueSeries(mode: DataMode = "auto"): PortfolioValuePoint[] {
   const db = getDb();
-  const where = mode === "schwab" ? "WHERE a.id LIKE 'schwab_%'" : "";
+  const accountWhere = mode === "schwab" ? syncedBrokerAndManualWhereSql("a") : allSyncedAccountsWhereSql("a");
+  const where = `WHERE ${accountWhere}`;
 
   if (mode === "schwab") {
     const av = db
@@ -19,8 +21,7 @@ export function getPortfolioValueSeries(mode: DataMode = "auto"): PortfolioValue
         SELECT av.as_of AS as_of, SUM(av.equity_value) AS mv
         FROM account_value_points av
         JOIN accounts a ON a.id = av.account_id
-        WHERE a.id LIKE 'schwab_%'
-          AND ${notPosterityWhereSql("a")}
+        WHERE ${syncedBrokerAndManualWhereSql("a")}
         GROUP BY av.as_of
         ORDER BY av.as_of ASC
       `,
@@ -33,13 +34,13 @@ export function getPortfolioValueSeries(mode: DataMode = "auto"): PortfolioValue
   const rows = db
     .prepare(
       `
-      SELECT hs.as_of AS as_of, SUM(COALESCE(p.market_value, 0)) AS mv
+      SELECT hs.as_of AS as_of, SUM(${POSITION_MARKET_VALUE_SQL}) AS mv
       FROM holding_snapshots hs
       JOIN accounts a ON a.id = hs.account_id
       JOIN positions p ON p.snapshot_id = hs.id
       JOIN securities s ON s.id = p.security_id
       ${where}
-        ${where ? "AND" : "WHERE"} ${where ? notPosterityWhereSql("a") + " AND" : notPosterityWhereSql("a") + " AND"} s.security_type != 'cash'
+        AND s.security_type != 'cash'
       GROUP BY hs.as_of
       ORDER BY hs.as_of ASC
     `,
@@ -55,7 +56,8 @@ export function getPortfolioValueSeriesByBucket(bucket: BucketKey, mode: DataMod
   const db = getDb();
   if (bucket === "combined") return getPortfolioValueSeries(mode);
 
-  const where = mode === "schwab" ? "WHERE a.id LIKE 'schwab_%'" : "";
+  const accountWhere = mode === "schwab" ? syncedBrokerAndManualWhereSql("a") : allSyncedAccountsWhereSql("a");
+  const where = `WHERE ${accountWhere}`;
 
   if (mode === "schwab") {
     const map = new Map<string, number>();
@@ -65,8 +67,7 @@ export function getPortfolioValueSeriesByBucket(bucket: BucketKey, mode: DataMod
         SELECT av.as_of as as_of, a.name as account_name, a.nickname as account_nickname, a.account_bucket as account_bucket, av.equity_value as mv
         FROM account_value_points av
         JOIN accounts a ON a.id = av.account_id
-        WHERE a.id LIKE 'schwab_%'
-          AND ${notPosterityWhereSql("a")}
+        WHERE ${syncedBrokerAndManualWhereSql("a")}
         ORDER BY av.as_of ASC
       `,
       )
@@ -88,13 +89,13 @@ export function getPortfolioValueSeriesByBucket(bucket: BucketKey, mode: DataMod
   const snaps = db
     .prepare(
       `
-      SELECT hs.as_of as as_of, a.name as account_name, a.nickname as account_nickname, a.account_bucket as account_bucket, SUM(COALESCE(p.market_value, 0)) AS mv
+      SELECT hs.as_of as as_of, a.name as account_name, a.nickname as account_nickname, a.account_bucket as account_bucket, SUM(${POSITION_MARKET_VALUE_SQL}) AS mv
       FROM holding_snapshots hs
       JOIN accounts a ON a.id = hs.account_id
       JOIN positions p ON p.snapshot_id = hs.id
       JOIN securities s ON s.id = p.security_id
       ${where}
-        ${where ? "AND" : "WHERE"} ${notPosterityWhereSql("a")} AND s.security_type != 'cash'
+        AND s.security_type != 'cash'
       GROUP BY hs.as_of, a.id
       ORDER BY hs.as_of ASC
     `,

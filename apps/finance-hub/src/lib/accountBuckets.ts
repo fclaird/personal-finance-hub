@@ -1,5 +1,8 @@
 export type AccountBucket = "brokerage" | "retirement" | "529";
 
+/** Bucket keys used in allocation / exposure analytics (excludes combined net). */
+export type AnalyticsBucketKey = "brokerage" | "retirement" | "529";
+
 const IRA_WORD_RE = /\bIRA\b/i;
 const RETIREMENT_RE = /\b(401\s*k|403\s*b|457|roth|sep|pension|retire)\b/i;
 const PLAN_529_RE = /\b529\b/i;

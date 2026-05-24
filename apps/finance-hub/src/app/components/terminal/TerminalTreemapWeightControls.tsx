@@ -79,6 +79,7 @@ export function TerminalTreemapWeightControls({
             { key: "net", label: "All" },
             { key: "brokerage", label: "Brokerage" },
             { key: "retirement", label: "Retirement" },
+            { key: "529", label: "529" },
           ] as const
         ).map((v) => (
           <button key={v.key} type="button" onClick={() => onScopeChange(v.key)} className={btnClass(scope === v.key, panel)}>

@@ -11,10 +11,11 @@ export async function GET() {
     | { name: string; applied_at: string }
     | undefined;
 
+  const isProd = process.env.NODE_ENV === "production";
+
   return NextResponse.json({
     ok: true,
-    dbPath: getDbPath(),
+    ...(isProd ? {} : { dbPath: getDbPath() }),
     latestMigration: row ?? null,
   });
 }
-

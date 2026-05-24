@@ -84,7 +84,7 @@ export function SidebarNav() {
                 ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
                 : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 disabled:opacity-40 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
             }
-            title={!avail.hasSchwab ? "Run Schwab sync in Connections first" : "View Schwab-synced snapshot data"}
+            title={!avail.hasSchwab ? "Run Schwab sync in Connections first" : "Schwab-synced accounts plus external/manual accounts"}
           >
             Schwab
           </button>
@@ -98,7 +98,7 @@ export function SidebarNav() {
               ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
               : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
           }
-          title="Auto = use latest snapshot regardless of source"
+          title="All synced accounts (Schwab, external/manual, and any other connections)"
         >
           Auto (latest)
         </button>

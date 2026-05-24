@@ -1,8 +1,11 @@
 # Personal Finance Hub — Codebase Audit
 
 **Generated:** 2026-05-22  
+**Last updated:** 2026-05-24 (post-remediation)  
 **Scope:** Umbrella repo `personal-finance-hub` with canonical app at `apps/finance-hub/`  
 **Purpose:** Architecture review, security posture, technical debt, and maintenance recommendations
+
+> **Note:** Sections below describe the pre-remediation baseline unless marked otherwise. See [Remediation status](#remediation-status-2026-05-24) at the end for what was completed.
 
 ---
 
@@ -10,24 +13,23 @@
 
 Finance Hub is a **local-first, single-user** personal finance dashboard built with **Next.js 16**, **React 19**, and **SQLite** (`better-sqlite3`). It integrates Charles Schwab (primary), optional Plaid, Yahoo Finance, Finnhub, SEC EDGAR, X/Twitter, and OpenAI for market data, portfolio analytics, a terminal-style UI, dividends, earnings, and alerts.
 
-| Metric | Value |
-|--------|-------|
+| Metric | Value (2026-05-24) |
+|--------|---------------------|
 | TypeScript/TSX source files | ~307 |
 | Domain library modules (`src/lib/`) | ~171 |
-| API route files | 87 |
+| API route files | 88 |
 | SQLite tables | 41 |
 | Frontend pages | 17 |
-| Unit test files | 10 |
-| Largest page | `terminal/page.tsx` (~1,558 lines) |
+| Unit test files | 15 |
+| Largest page | `terminal/page.tsx` (~1,295 lines; split into feature panels) |
 
-**Strengths:** Clear domain separation under `src/lib/`, encrypted local secrets, WAL-mode SQLite, standalone Next.js output for Electron, recent manual-account / 529 bucket work is well-factored.
+**Strengths:** Clear domain separation under `src/lib/`, encrypted local secrets, WAL-mode SQLite, standalone Next.js output for Electron, manual-account / 529 bucket work, opt-in LAN API auth, CI workflow.
 
-**Primary risks:**
-1. **No API authentication** — designed for localhost; dangerous if exposed on a network (Tailscale, LAN, Vercel).
-2. **Duplicate legacy code tree** at repo root (`src/`) alongside canonical `apps/finance-hub/src/`.
-3. **Stale deployment config** — root `vercel.json` references a removed cron route.
-4. **Low test coverage** relative to API surface (~10 unit files vs 87 route files).
-5. **Schema drift** — dividend-model tables remain in SQLite though that feature moved to an external repo.
+**Remaining risks (post-remediation):**
+1. **Opt-in API auth only** — safe on localhost by default; LAN/VPN exposure requires `FINANCE_HUB_API_KEY` (see `docs/security.md`).
+2. **Low test coverage** relative to API surface (~15 unit files vs 88 route files).
+3. **Schema drift** — dividend-model tables remain in SQLite though that feature moved to an external repo (documented as read-only).
+4. **Electron Mac build** — `hardenedRuntime: false` (Phase 5 deferred).
 
 ---
 
@@ -41,11 +43,10 @@ personal-finance-hub/
 │   ├── src/db/schema.sql      SQLite DDL
 │   ├── desktop/               Electron shell
 │   └── docs/                  App-specific docs
-├── docs/                      Repo-level architecture & migration
-├── scripts/                   Migration, digest PDF, backfill
-├── src/                       ⚠ LEGACY DUPLICATE (93 API routes, dividend-models)
-├── vercel.json                ⚠ Stale cron config
-└── package.json               ⚠ Mirrors app; extra dividend-models test scripts
+├── docs/                      Repo-level architecture, security, migration
+├── scripts/                   Migration, digest PDF, backfill (repo-level)
+├── vercel.json                Cron paths → allocation-daily-close, portfolio-snapshots/weekly
+└── package.json               Delegates dev/build/test/lint to apps/finance-hub
 ```
 
 ### Runtime data (outside git)
@@ -96,10 +97,10 @@ External APIs (Schwab, Yahoo, Finnhub, X, OpenAI) are called from server-side li
 
 ### Middleware
 
-`apps/finance-hub/src/middleware.ts` — **only matches `/`**:
-- Redirects to `/allocation` if cookie `fh_schwab_connected=1`
-- Otherwise redirects to `/connections`
-- **Not** a security gate; cookie is set after OAuth and is spoofable
+`apps/finance-hub/src/middleware.ts` matches `/` and `/api/:path*`:
+
+- **`/`** — redirects to `/allocation` if cookie `fh_schwab_connected=1`, else `/connections` (cookie is spoofable; not a security gate)
+- **`/api/*`** — when `FINANCE_HUB_API_KEY` is set, requires Bearer or `x-finance-hub-key`; OAuth callbacks and `/api/auth/config` exempt; cron routes accept `CRON_SECRET` at middleware (handler re-checks). See `docs/security.md`.
 
 ### Background scheduling
 
@@ -165,15 +166,16 @@ Single-file DDL (`src/db/schema.sql`) applied on startup, plus inline `ALTER TAB
 
 ---
 
-## API surface (87 routes)
+## API surface (88 routes)
 
 ### Auth patterns
 
 | Pattern | Routes | Notes |
 |---------|--------|-------|
-| **None (open)** | Majority of `/api/*` | Local-trust model |
-| **`authorizeCronRequest`** | `/api/internal/*`, `/api/news/ingest` | Bearer, `x-cron-secret`, or `?secret=` |
-| **OAuth callbacks** | `/api/schwab/*`, `/api/x/oauth/*` | State cookies + PKCE (X) |
+| **Open (default)** | Majority of `/api/*` | When `FINANCE_HUB_API_KEY` unset — localhost trust |
+| **`FINANCE_HUB_API_KEY`** | All `/api/*` via middleware | Opt-in LAN/VPN; UI prompts via `ApiKeyProvider` |
+| **`authorizeCronRequest`** | `/api/internal/*`, `/api/news/ingest` | Bearer or `x-cron-secret` only (no query string); also accepted at middleware when LAN auth on |
+| **OAuth callbacks** | `/api/schwab/callback`, `/api/x/oauth/callback` | Exempt from API key |
 | **JWT (report page)** | `/allocation/report?token=` | HS256 via `CRON_SECRET` / `ALLOC_REPORT_SECRET` |
 
 ### Routes by domain
@@ -181,8 +183,8 @@ Single-file DDL (`src/db/schema.sql`) applied on startup, plus inline `ALTER TAB
 #### Health & export
 | Method | Path | Auth |
 |--------|------|------|
-| GET | `/api/health` | None — exposes DB path, starts scheduler |
-| GET | `/api/export` | None — **full portfolio JSON dump** |
+| GET | `/api/health` | Starts scheduler; DB path redacted when `NODE_ENV=production` |
+| GET | `/api/export` | Full portfolio JSON dump — protect when LAN auth enabled |
 
 #### Accounts & manual
 | Method | Path |
@@ -284,14 +286,15 @@ Single-file DDL (`src/db/schema.sql`) applied on startup, plus inline `ALTER TAB
 | POST | `/api/internal/portfolio-snapshots/weekly` |
 | GET, POST | `/api/internal/x-digest/refresh` |
 
-#### Data mode
+#### Data mode & auth config
 | Method | Path |
 |--------|------|
 | GET, POST | `/api/data-mode` |
+| GET | `/api/auth/config` |
 
-### Legacy-only routes (root `src/` — not in canonical app)
+### Removed legacy routes
 
-Full `/api/dividend-models/**` tree (~10 routes) and `/api/internal/dividend-models/roll` still exist in the duplicate root tree but **not** in `apps/finance-hub/`.
+The in-app `/api/dividend-models/**` tree and root duplicate `src/` were removed in Phase 1 remediation. Dividend backtesting lives in the external Simulated Dividend Portfolio repo.
 
 ---
 
@@ -308,29 +311,24 @@ The app is built for **single-user localhost** (or Electron on `127.0.0.1:3049`)
 - AAD: `finance-hub-secrets` (`src/lib/crypto.ts`)
 - Broker app credentials (`SCHWAB_*`, `PLAID_*`) read from env at runtime
 
-### Findings
+### Findings (original audit) and remediation
 
-| Severity | Issue | Location / detail |
-|----------|-------|-------------------|
-| **Critical** | No API authentication | Any client reaching the server can read/write portfolio data |
-| **Critical** | `/api/export` unauthenticated full dump | `src/app/api/export/route.ts` |
-| **High** | Schwab/Plaid sync without auth | `POST /api/schwab/sync`, `/api/schwab/refresh`, `/api/plaid/sync` |
-| **High** | Manual account CRUD without auth | `/api/manual/*` |
-| **Medium** | X digest refresh triggers external APIs + OpenAI without cron check | `POST /api/terminal/x-digest/refresh` |
-| **Medium** | `CRON_SECRET` accepted in query string | `src/lib/internalCronAuth.ts` — log/referrer leakage |
-| **Medium** | `/api/health` exposes filesystem DB path | Information disclosure |
-| **Low** | `fh_schwab_connected` cookie spoofable | Middleware redirect only |
-| **Low** | Allocation report JWT uses shared secret | Depends on `CRON_SECRET` strength |
-| **Ops** | Electron Mac build: `hardenedRuntime: false`, `identity: null` | `package.json` `build.mac` |
+| Severity | Issue | Status |
+|----------|-------|--------|
+| **Critical** | No API authentication | **Mitigated** — opt-in `FINANCE_HUB_API_KEY` middleware (`docs/security.md`) |
+| **Critical** | `/api/export` unauthenticated full dump | **Mitigated** when LAN auth enabled (middleware gates all `/api/*`) |
+| **High** | Schwab/Plaid sync without auth | **Mitigated** when LAN auth enabled |
+| **High** | Manual account CRUD without auth | **Mitigated** when LAN auth enabled |
+| **Medium** | X digest refresh without cron check | **Open** — `POST /api/terminal/x-digest/refresh` is user-triggered |
+| **Medium** | `CRON_SECRET` in query string | **Fixed** — header-only in `internalCronAuth.ts` |
+| **Medium** | `/api/health` exposes DB path | **Fixed** — redacted in production |
+| **Low** | `fh_schwab_connected` cookie spoofable | **Open** — redirect only |
+| **Low** | Allocation report JWT uses shared secret | **Open** — depends on secret strength |
+| **Ops** | Electron Mac: `hardenedRuntime: false` | **Deferred** (Phase 5) |
 
 ### If exposing beyond localhost (Tailscale, Vercel, LAN)
 
-**Required before network exposure:**
-1. Add session or API-key auth middleware for all `/api/*` routes
-2. Protect write/sync endpoints explicitly
-3. Remove or gate `/api/export`
-4. Stop accepting cron secrets in query params
-5. Rate-limit external API trigger routes (X refresh, earnings sync)
+See **`docs/security.md`** checklist. Set `FINANCE_HUB_API_KEY` before binding to LAN/VPN. Cron jobs use `CRON_SECRET` (accepted at middleware on internal routes).
 
 ---
 
@@ -360,7 +358,7 @@ The app is built for **single-user localhost** (or Electron on `127.0.0.1:3049`)
 |-------|---------|------------|
 | `/` | Redirect only (middleware) | — |
 | `/connections` | Schwab/Plaid OAuth setup | — |
-| `/terminal` | Market dashboard (~1,558 lines) | Yes |
+| `/terminal` | Market dashboard (~1,295 lines; feature panels extracted) | Yes |
 | `/terminal/watchlists` | Watchlist management | Via terminal |
 | `/terminal/symbol/[symbol]` | Symbol detail | Via terminal |
 | `/positions` | Holdings + manual accounts | Yes |
@@ -427,23 +425,27 @@ Sidebar nav defined in `src/app/lib/sidebarNav.ts` (11 items).
 | Area | Files | Status |
 |------|-------|--------|
 | Account buckets | `accountBuckets.test.ts` | Covered |
-| Manual accounts | `manual/manualAccounts.test.ts` | Partial (helpers + schema) |
+| Manual accounts | `manual/manualAccounts.test.ts` | Covered (CRUD + delete cascade) |
+| Allocation | `analytics/allocation.test.ts` | Covered |
+| Portfolio glance | `terminal/portfolioGlance.test.ts` | Covered |
+| Latest snapshots | `holdings/latestSnapshots.test.ts` | Covered |
+| API auth | `apiAuth.test.ts` | Covered |
+| Market glance charts | `market/usMarketIndices.test.ts` | Covered |
 | Schwab refresh | `refreshOrchestrator.test.ts`, `schwabGreeksRefresh.test.ts` | Covered |
 | Dividends | 4 test files | Covered |
 | News ingest | 2 test files | Covered |
 | Format utils | `formatDate.test.ts` | Covered |
-| **API routes** | — | **Not covered** |
-| **Terminal UI** | — | **Not covered** |
-| **OAuth flows** | — | **Not covered** |
-| **Analytics (allocation, exposure)** | — | **Not covered** |
-| **Portfolio glance** | — | **Not covered** |
+| **API route handlers** | — | Not covered (integration gap) |
+| **OAuth flows** | — | Not covered |
 
 Run tests:
 ```bash
-cd apps/finance-hub
-npx tsx --test src/lib/**/*.test.ts
-npm run test:dividends  # dividends subset in package.json
+cd apps/finance-hub && npm run test
+# or from repo root:
+npm test
 ```
+
+CI: `.github/workflows/ci.yml` — build, test, lint, API route count check.
 
 ### Lint & build
 
@@ -455,10 +457,9 @@ npm run build   # Next.js production build (passes as of audit date)
 ### Code quality observations
 
 - **No TODO/FIXME** markers in application TS/TSX (clean)
-- **Large files:** `terminal/page.tsx` (~1,558 lines) — maintenance burden; consider splitting into feature components
-- **Duplicated repo tree:** Root `src/` mirrors much of `apps/finance-hub/src/` — drift risk
-- **Schema dead weight:** Dividend model tables unused by canonical app
-- **Shared snapshot helper:** `latestSnapshotIds` centralizes account scope — good recent refactor
+- **Terminal page** partially split into `src/app/components/terminal/*` panels
+- **Schema dead weight:** Dividend model tables unused by UI (documented read-only in `docs/architecture/storage.md`)
+- **Shared snapshot helper:** `latestSnapshotIds` centralizes account scope; consolidated allocation uses per-account latest snapshots
 
 ---
 
@@ -479,11 +480,17 @@ npm run build   # Next.js production build (passes as of audit date)
 
 ### Vercel / cloud
 
-Root `vercel.json`:
+Root `vercel.json` crons (post-remediation):
 ```json
-{ "crons": [{ "path": "/api/internal/dividend-models/roll", "schedule": "15 7 * * *" }] }
+{
+  "crons": [
+    { "path": "/api/internal/allocation-daily-close", "schedule": "0 21 * * 1-5" },
+    { "path": "/api/internal/portfolio-snapshots/weekly", "schedule": "0 22 * * 0" }
+  ]
+}
 ```
-**This route does not exist in the canonical app.** Cron will 404 if deployed from current tree.
+
+When deploying with `FINANCE_HUB_API_KEY`, configure Vercel cron invocations to send `Authorization: Bearer <CRON_SECRET>` (or exempt via middleware — cron secret is accepted on internal paths).
 
 Cold-start instrumentation skips Vercel by default unless `FORCE_COLD_STARTUP_PULL_ON_VERCEL=1`.
 
@@ -505,6 +512,7 @@ Cold-start instrumentation skips Vercel by default unless `FORCE_COLD_STARTUP_PU
 
 **Terminal / ops**
 - `TERMINAL_FUTURES_SYMBOLS`, `NEWS_RSS_FEEDS`
+- `FINANCE_HUB_API_KEY`, `FINANCE_HUB_BIND_HOST` (LAN/VPN — see `docs/security.md`)
 - `SCHWAB_RTH_FULL_SYNC`, `COLD_STARTUP_PULL_DELAY_MS`
 
 Template: `apps/finance-hub/.env.local.example`
@@ -540,33 +548,34 @@ Template: `apps/finance-hub/.env.local.example`
 
 ## Prioritized recommendations
 
-### P0 — Do before any network exposure
-1. Add authentication middleware for `/api/*`
-2. Remove or protect `/api/export`
-3. Audit all POST routes that trigger external API calls or data mutation
+### P0 — Do before any network exposure ✅ (2026-05-24)
+1. ~~Add authentication middleware for `/api/*`~~ — Done (`FINANCE_HUB_API_KEY`)
+2. ~~Protect `/api/export`~~ — Gated when LAN auth enabled
+3. Audit POST routes that trigger external APIs — partial; X digest refresh still user-open
 
-### P1 — Repo hygiene
-1. **Delete or archive root `src/`** — eliminate duplicate tree (93 vs 87 routes)
-2. **Fix `vercel.json`** — remove stale dividend-models cron or restore route
-3. **Align root `package.json`** with `apps/finance-hub/package.json`
-4. Document canonical path clearly in all docs (already in README; enforce in CI)
+### P1 — Repo hygiene ✅ (2026-05-24)
+1. ~~Delete root `src/`~~ — Done
+2. ~~Fix `vercel.json`~~ — Done
+3. ~~Align root `package.json`~~ — Done
+4. ~~CI API route count~~ — Done (`.github/workflows/ci.yml`)
 
-### P2 — Schema & product alignment
-1. Drop or migrate unused dividend-model tables (or document as read-only legacy)
-2. Consider formal migration files instead of inline `ALTER TABLE` patches
-3. Add 529 as first-class bucket in diversification UI (currently Positions-only section)
+### P2 — Schema & product alignment (partial)
+1. ~~Document dividend-model tables as read-only~~ — Done (`docs/architecture/storage.md`)
+2. Formal migration files — deferred
+3. ~~529 in diversification UI~~ — Done
 
-### P3 — Quality & maintainability
-1. Split `terminal/page.tsx` into feature modules
-2. Add integration tests for critical API routes (positions, allocation, schwab sync)
-3. Add tests for `portfolioGlance.ts`, `allocation.ts`, `optionsExposure.ts`
-4. Move cron secret to header-only (drop `?secret=` support)
-5. Redact DB path from `/api/health` in non-dev environments
+### P3 — Quality & maintainability (partial)
+1. ~~Split `terminal/page.tsx`~~ — Partial (quick glance panels extracted)
+2. Integration tests for API routes — deferred
+3. ~~Tests for portfolioGlance, allocation~~ — Done
+4. ~~Cron secret header-only~~ — Done
+5. ~~Redact DB path from `/api/health` in production~~ — Done
 
-### P4 — Nice to have
-1. Consolidate duplicate `usePersistedColumnOrder.ts` (root vs app)
-2. Add API route inventory to CI (count drift detection)
-3. Electron: enable hardened runtime for Mac distribution
+### P4 — Nice to have (partial)
+1. ~~Consolidate duplicate `usePersistedColumnOrder.ts`~~ — root copy removed with legacy tree
+2. ~~API route inventory in CI~~ — Done
+3. Electron hardened runtime — deferred
+4. Rate-limit mutating routes when LAN auth on — deferred
 
 ---
 
@@ -582,12 +591,22 @@ Template: `apps/finance-hub/.env.local.example`
 ## Appendix: audit methodology
 
 - Static analysis of repo structure, schema, middleware, env templates
-- Enumeration of all 87 API route files in `apps/finance-hub/src/app/api/`
-- Comparison with legacy root `src/` tree
-- Review of security-sensitive modules: `crypto.ts`, `internalCronAuth.ts`, OAuth flows
+- Enumeration of API route files in `apps/finance-hub/src/app/api/` (88 as of 2026-05-24)
+- Review of security-sensitive modules: `crypto.ts`, `internalCronAuth.ts`, `apiAuth.ts`, OAuth flows
 - Build verification: `npm run build` passes in `apps/finance-hub/`
-- Unit tests: 7 tests across 2 new files (account buckets, manual accounts) + 8 existing files
+- Unit tests: 50+ assertions across 15 test files (run via `npm run test`)
 
 ---
 
 *This document is intended for human review. Update after major refactors or before any deployment beyond localhost.*
+
+---
+
+## Remediation status (2026-05-24)
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 1 — Repo consolidation | Done | Root `src/`, `public/`, duplicate configs removed; root `package.json` delegates to `apps/finance-hub`; `vercel.json` crons fixed |
+| Phase 2 — LAN-ready security | Done | Opt-in `FINANCE_HUB_API_KEY` middleware; cron routes accept `CRON_SECRET` at middleware; cron header-only auth in handlers; production health redaction; `docs/security.md` |
+| Phase 3 — Schema + 529 UI | Done | 529 bucket in diversification/allocation/terminal; legacy dividend tables documented in `docs/architecture/storage.md` |
+| Phase 4 — Tests + CI | Done | Tests for snapshots, allocation buckets, portfolio glance, manual CRUD; terminal page split; `.github/workflows/ci.yml` |

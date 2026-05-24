@@ -1,9 +1,10 @@
 import type Database from "better-sqlite3";
 
+import type { AnalyticsBucketKey } from "@/lib/accountBuckets";
 import type { DataMode } from "@/lib/dataMode";
 import { getUnderlyingExposureByBucket } from "@/lib/analytics/optionsExposure";
 
-export type AllocationDailyScope = "net" | "brokerage" | "retirement";
+export type AllocationDailyScope = "net" | AnalyticsBucketKey;
 
 function mergeNetFromBuckets(mode: DataMode): Map<string, { spot: number; synthetic: number }> {
   const buckets = getUnderlyingExposureByBucket(mode);
@@ -21,7 +22,7 @@ function mergeNetFromBuckets(mode: DataMode): Map<string, { spot: number; synthe
   return net;
 }
 
-function mapFromBucket(mode: DataMode, scope: "brokerage" | "retirement"): Map<string, { spot: number; synthetic: number }> {
+function mapFromBucket(mode: DataMode, scope: AnalyticsBucketKey): Map<string, { spot: number; synthetic: number }> {
   const buckets = getUnderlyingExposureByBucket(mode);
   const b = buckets.find((x) => x.bucketKey === scope);
   const m = new Map<string, { spot: number; synthetic: number }>();
@@ -44,7 +45,7 @@ export function recordAllocationDailyClose(
   tradeDateEt: string,
   mode: DataMode,
 ): { rowsWritten: number } {
-  const scopes: AllocationDailyScope[] = ["net", "brokerage", "retirement"];
+  const scopes: AllocationDailyScope[] = ["net", "brokerage", "retirement", "529"];
   const upsert = db.prepare(`
     INSERT INTO allocation_daily_underlying (trade_date, data_mode, scope, symbol, spot_market_value, synthetic_market_value)
     VALUES (@trade_date, @data_mode, @scope, @symbol, @spot, @synthetic)
@@ -56,7 +57,8 @@ export function recordAllocationDailyClose(
 
   let rowsWritten = 0;
   for (const scope of scopes) {
-    const map = scope === "net" ? mergeNetFromBuckets(mode) : mapFromBucket(mode, scope);
+    const map =
+      scope === "net" ? mergeNetFromBuckets(mode) : mapFromBucket(mode, scope);
     for (const [symbol, v] of map.entries()) {
       if (Math.abs(v.spot) < 1e-9 && Math.abs(v.synthetic) < 1e-9) continue;
       upsert.run({

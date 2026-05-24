@@ -4,11 +4,16 @@ import {
   portfolioImpliedEquityPriceMap,
   syntheticEquityMvForSnapshot,
 } from "@/lib/analytics/optionsExposure";
-import { latestSnapshotId } from "@/lib/snapshots";
+import { classifyAsset, type AssetClass } from "@/lib/analytics/assetClass";
+import {
+  accountsInDataModeWhereSql,
+  latestSnapshotIds,
+  latestSnapshotScopeForMode,
+} from "@/lib/holdings/latestSnapshots";
+import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
 import type { DataMode } from "@/lib/dataMode";
+import type { AnalyticsBucketKey } from "@/lib/accountBuckets";
 import { bucketFromAccount } from "@/lib/accountBuckets";
-import { latestSnapshotIds } from "@/lib/holdings/latestSnapshots";
-import { notPosterityWhereSql } from "@/lib/posterity";
 
 export type AllocationBucket = {
   key: string;
@@ -31,53 +36,37 @@ export type AllocationByAccountRow = {
 export type AllocationBucketedResult = {
   includeSynthetic: boolean;
   buckets: Array<{
-    bucketKey: "brokerage" | "retirement";
+    bucketKey: AnalyticsBucketKey;
     totalMarketValue: number;
     byAssetClass: AllocationBucket[];
   }>;
 };
 
-type AssetClass = "equity" | "fund" | "bond" | "cash" | "option" | "other";
-
-function normalizeAssetType(raw: unknown): string {
-  return typeof raw === "string" ? raw.toUpperCase() : "";
-}
-
 function classify(securityType: string, metadataJson: string | null): AssetClass {
-  if (securityType === "option") return "option";
-  if (securityType === "equity") return "equity";
-
-  if (!metadataJson) return "other";
-  try {
-    const parsed = JSON.parse(metadataJson) as { instrument?: { assetType?: unknown } };
-    const t = normalizeAssetType(parsed?.instrument?.assetType);
-    if (t.includes("CASH")) return "cash";
-    if (t.includes("MUTUAL_FUND") || t.includes("ETF") || t.includes("FUND")) return "fund";
-    if (t.includes("FIXED_INCOME") || t.includes("BOND")) return "bond";
-    if (t.includes("EQUITY")) return "equity";
-    if (t.includes("OPTION")) return "option";
-    return "other";
-  } catch {
-    return "other";
-  }
+  return classifyAsset(securityType, metadataJson);
 }
 
 export function getConsolidatedAllocation(includeSynthetic: boolean, mode: DataMode = "auto"): AllocationResult {
   const db = getDb();
-  const snapshotId = latestSnapshotId(db, mode);
-  if (!snapshotId) return { totalMarketValue: 0, byAssetClass: [] };
+  const scope = latestSnapshotScopeForMode(mode);
+  const snapshotIds = latestSnapshotIds(db, scope);
+  if (snapshotIds.length === 0) return { totalMarketValue: 0, byAssetClass: [] };
 
   const rows = db
     .prepare(
       `
-      SELECT s.security_type, p.market_value, p.metadata_json
+      SELECT a.id AS account_id, s.symbol, s.security_type, ${POSITION_MARKET_VALUE_SQL} AS market_value, p.metadata_json
       FROM positions p
+      JOIN holding_snapshots hs ON hs.id = p.snapshot_id
+      JOIN accounts a ON a.id = hs.account_id
       JOIN securities s ON s.id = p.security_id
-      WHERE p.snapshot_id = ?
-        AND s.security_type != 'cash'
+      WHERE p.snapshot_id IN (SELECT value FROM json_each(@snaps))
+        AND (s.security_type != 'cash' OR a.id LIKE 'manual_%')
     `,
     )
-    .all(snapshotId) as Array<{
+    .all({ snaps: JSON.stringify(snapshotIds) }) as Array<{
+    account_id: string;
+    symbol: string | null;
     security_type: string;
     market_value: number | null;
     metadata_json: string | null;
@@ -125,15 +114,11 @@ export function getAllocationByAccount(includeSynthetic: boolean, mode: DataMode
       WHERE hs.as_of = (
         SELECT MAX(hs2.as_of) FROM holding_snapshots hs2 WHERE hs2.account_id = a.id
       )
-        AND (
-          @mode = 'auto'
-          OR (@mode = 'schwab' AND a.id LIKE 'schwab_%')
-        )
-        AND ${notPosterityWhereSql("a")}
+        AND ${accountsInDataModeWhereSql(mode, "a")}
       ORDER BY a.name ASC
     `,
     )
-    .all({ mode }) as Array<{ account_id: string; account_name: string; account_type: string; snapshot_id: string }>;
+    .all() as Array<{ account_id: string; account_name: string; account_type: string; snapshot_id: string }>;
 
   const out: AllocationByAccountRow[] = [];
 
@@ -141,14 +126,14 @@ export function getAllocationByAccount(includeSynthetic: boolean, mode: DataMode
     const rows = db
       .prepare(
         `
-        SELECT s.security_type, p.market_value, p.metadata_json
+        SELECT s.security_type, ${POSITION_MARKET_VALUE_SQL} AS market_value, p.metadata_json
         FROM positions p
         JOIN securities s ON s.id = p.security_id
-        WHERE p.snapshot_id = ?
-          AND s.security_type != 'cash'
+        WHERE p.snapshot_id = @snapshot_id
+          AND (s.security_type != 'cash' OR @account_id LIKE 'manual_%')
       `,
       )
-      .all(s.snapshot_id) as Array<{
+      .all({ snapshot_id: s.snapshot_id, account_id: s.account_id }) as Array<{
       security_type: string;
       market_value: number | null;
       metadata_json: string | null;
@@ -194,7 +179,7 @@ export function getAllocationByAccount(includeSynthetic: boolean, mode: DataMode
 export function getAllocationByBucket(includeSynthetic: boolean, mode: DataMode = "auto"): AllocationBucketedResult {
   const db = getDb();
   const priceByUnderlying = includeSynthetic ? portfolioImpliedEquityPriceMap(db, mode) : undefined;
-  const scope = mode === "schwab" ? "schwab_only" : "all_synced";
+  const scope = latestSnapshotScopeForMode(mode);
   const snapshotIdSet = new Set(latestSnapshotIds(db, scope));
 
   const snapshots = db
@@ -210,26 +195,25 @@ export function getAllocationByBucket(includeSynthetic: boolean, mode: DataMode 
     )
     .all() as Array<{ account_id: string; account_name: string; account_nickname: string | null; account_bucket: string | null; snapshot_id: string }>;
 
-  const byBucket = new Map<"brokerage" | "retirement", Map<AssetClass, number>>();
+  const byBucket = new Map<AnalyticsBucketKey, Map<AssetClass, number>>();
 
   for (const s of snapshots) {
     if (!snapshotIdSet.has(s.snapshot_id)) continue;
     const bucket = bucketFromAccount(s.account_name, s.account_nickname, s.account_bucket);
-    if (bucket === "529") continue;
     if (!byBucket.has(bucket)) byBucket.set(bucket, new Map());
     const buckets = byBucket.get(bucket)!;
 
     const rows = db
       .prepare(
         `
-        SELECT s.security_type, p.market_value, p.metadata_json
+        SELECT s.security_type, ${POSITION_MARKET_VALUE_SQL} AS market_value, p.metadata_json
         FROM positions p
         JOIN securities s ON s.id = p.security_id
-        WHERE p.snapshot_id = ?
-          AND s.security_type != 'cash'
+        WHERE p.snapshot_id = @snapshot_id
+          AND (s.security_type != 'cash' OR @account_id LIKE 'manual_%')
       `,
       )
-      .all(s.snapshot_id) as Array<{
+      .all({ snapshot_id: s.snapshot_id, account_id: s.account_id }) as Array<{
       security_type: string;
       market_value: number | null;
       metadata_json: string | null;
@@ -263,7 +247,8 @@ export function getAllocationByBucket(includeSynthetic: boolean, mode: DataMode 
     outBuckets.push({ bucketKey, totalMarketValue: total, byAssetClass });
   }
 
-  outBuckets.sort((a, b) => (a.bucketKey === "retirement" ? -1 : 1) - (b.bucketKey === "retirement" ? -1 : 1));
+  const bucketOrder: Record<AnalyticsBucketKey, number> = { retirement: 0, brokerage: 1, "529": 2 };
+  outBuckets.sort((a, b) => bucketOrder[a.bucketKey] - bucketOrder[b.bucketKey]);
 
   return { includeSynthetic, buckets: outBuckets };
 }

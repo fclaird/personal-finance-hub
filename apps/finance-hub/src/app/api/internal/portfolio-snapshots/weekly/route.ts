@@ -10,7 +10,7 @@ import { upsertWeekEndingPortfolioSnapshots } from "@/lib/portfolio/snapshots";
 
 /**
  * POST — refresh SPY/QQQ history if needed, then upsert week-ending portfolio snapshots for all buckets.
- * Auth: Bearer CRON_SECRET / x-cron-secret / ?secret= (same as other internal routes).
+ * Auth: Bearer CRON_SECRET / x-cron-secret header only (same as other internal routes).
  * Optional JSON body: { "mode": "auto" | "schwab" } (overrides cookie when valid).
  */
 export async function POST(req: Request) {

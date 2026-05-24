@@ -177,16 +177,18 @@ export function parseManualPositionMetadata(raw: string | null | undefined): Man
   }
 }
 
-export function createManualAccount(params: {
-  name: string;
-  nickname?: string | null;
-  accountBucket: AccountBucket;
-}): ManualAccountRecord {
+export function createManualAccountInDb(
+  db: Database.Database,
+  params: {
+    name: string;
+    nickname?: string | null;
+    accountBucket: AccountBucket;
+  },
+): ManualAccountRecord {
   const name = (params.name ?? "").trim();
   if (!name) throw new Error("Account name is required");
   if (!isValidAccountBucket(params.accountBucket)) throw new Error("Invalid account bucket");
 
-  const db = getDb();
   ensureManualConnection(db);
   const accountId = newId("manual");
   const nowIso = new Date().toISOString();
@@ -220,6 +222,14 @@ export function createManualAccount(params: {
   };
 }
 
+export function createManualAccount(params: {
+  name: string;
+  nickname?: string | null;
+  accountBucket: AccountBucket;
+}): ManualAccountRecord {
+  return createManualAccountInDb(getDb(), params);
+}
+
 export function updateManualAccount(
   accountId: string,
   params: { name?: string; nickname?: string | null; accountBucket?: AccountBucket },
@@ -245,10 +255,13 @@ export function updateManualAccount(
   return { ...existing, name, nickname, accountBucket };
 }
 
-export function deleteManualAccount(accountId: string): void {
-  const db = getDb();
+export function deleteManualAccountInDb(db: Database.Database, accountId: string): void {
   assertManualAccount(db, accountId);
   db.prepare(`DELETE FROM accounts WHERE id = ?`).run(accountId);
+}
+
+export function deleteManualAccount(accountId: string): void {
+  deleteManualAccountInDb(getDb(), accountId);
 }
 
 export function upsertManualPosition(accountId: string, input: ManualPositionInput): { positionId: string } {

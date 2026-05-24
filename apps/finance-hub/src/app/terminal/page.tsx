@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Area, AreaChart, Line, LineChart, ReferenceLine, ResponsiveContainer, YAxis } from "recharts";
+import { Line, LineChart, ResponsiveContainer } from "recharts";
 
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { useMarketAwareInterval } from "@/hooks/useMarketAwareInterval";
@@ -11,9 +11,19 @@ import { isUsEquityPreOpenFuturesPollWindow, isUsEquityRegularSessionOpen } from
 import type { NormalizedQuote as ApiNormalizedQuote } from "@/app/api/quotes/route";
 import { HeatmapGrid, type HeatmapItem } from "@/app/components/HeatmapGrid";
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
-import { NewsFeedPanel } from "@/app/components/terminal/NewsFeedPanel";
-import { TerminalPositionTreemap } from "@/app/components/terminal/TerminalPositionTreemap";
-import { TerminalTreemapWeightControls } from "@/app/components/terminal/TerminalTreemapWeightControls";
+import { type UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
+import { NewsDigestSection } from "@/app/components/terminal/NewsDigestSection";
+import {
+  OptionFlowPanel,
+  type OptionFlowPayload,
+} from "@/app/components/terminal/OptionFlowPanel";
+import { PortfolioTreemapSection } from "@/app/components/terminal/PortfolioTreemapSection";
+import {
+  readTreemapMetric,
+  readTreemapScope,
+  readTreemapSyntheticBasis,
+} from "@/app/components/terminal/terminalTreemapPrefs";
+import { UsMarketsPanel } from "@/app/components/terminal/UsMarketsPanel";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatUsd2 } from "@/lib/format";
 import {
@@ -43,154 +53,14 @@ type MoversPayload = {
   error?: string;
 };
 
-type OptionFlowPayload = {
-  ok: boolean;
-  source?: string;
-  hint?: string;
-  detail?: string;
-  scanned?: number;
-  sessionDate?: string;
-  items?: Array<{
-    symbol: string;
-    totalOptionVolume: number;
-    avgOptionVolume20?: number | null;
-    relativeVolume?: number | null;
-  }>;
-};
-
 type SortCol = "symbol" | "company" | "last" | "chgPct" | "chg" | "volume" | "volX";
 type VolumeInfo = { volume: number | null; avgVolume20: number | null; ratio: number | null; flagged: boolean };
-
-type UsMarketGlanceItem = {
-  id: string;
-  label: string;
-  symbol: string;
-  last: number | null;
-  change: number | null;
-  changePct: number | null;
-  previousClose: number | null;
-  series: Array<{ idx: number; close: number }>;
-};
 
 type TerminalCol = "symbol" | "company" | "last" | "chg" | "chgPct" | "volume" | "volX";
 
 const DEFAULT_TERMINAL_COL_ORDER: TerminalCol[] = ["symbol", "company", "last", "chg", "chgPct", "volume", "volX"];
 
-function readTreemapScope(): ExposureScope {
-  try {
-    const v = localStorage.getItem("terminal_treemap_scope_v1");
-    if (v === "net" || v === "brokerage" || v === "retirement") return v;
-  } catch {
-    // ignore
-  }
-  return "net";
-}
-
-function readTreemapMetric(): ExposurePieMetric {
-  try {
-    const v = localStorage.getItem("terminal_treemap_metric_v1");
-    if (v === "net" || v === "spot" || v === "synthetic") return v;
-  } catch {
-    // ignore
-  }
-  return "net";
-}
-
-function readTreemapSyntheticBasis(): SyntheticChartBasis {
-  try {
-    const v = localStorage.getItem("terminal_treemap_synthetic_basis_v1");
-    if (v === "delta" || v === "mark") return v;
-  } catch {
-    // ignore
-  }
-  return "delta";
-}
-
-function sparklineYDomain(series: Array<{ close: number }>, previousClose: number | null): [number, number] {
-  const vals = series.map((p) => p.close);
-  if (previousClose != null && Number.isFinite(previousClose)) vals.push(previousClose);
-  if (vals.length === 0) return [0, 1];
-  let min = Math.min(...vals);
-  let max = Math.max(...vals);
-  if (min === max) {
-    const bump = Math.max(Math.abs(min) * 0.001, 0.05);
-    min -= bump;
-    max += bump;
-  } else {
-    const pad = Math.max((max - min) * 0.12, 0.02);
-    min -= pad;
-    max += pad;
-  }
-  return [min, max];
-}
-
 const PCT2 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-function MarketGlanceCard({ item }: { item: UsMarketGlanceItem }) {
-  const pct = item.changePct;
-  const up = pct == null ? true : pct >= 0;
-  const stroke = up ? "#22c55e" : "#ef4444";
-  const gradId = `usmk-${item.id}`;
-  const chartData = item.series;
-  const prev = item.previousClose;
-  const yDomain = sparklineYDomain(chartData, prev);
-
-  return (
-    <div className="min-w-[11.5rem] flex-1 rounded-xl border border-zinc-300 bg-zinc-50 p-3 dark:border-white/15 dark:bg-zinc-900/80">
-      <div className="text-xs font-medium text-zinc-700 dark:text-zinc-200">{item.label}</div>
-      {chartData.length >= 2 ? (
-        <div className="mt-1 h-14 w-full min-w-0">
-          <ResponsiveContainer width="100%" height="100%" minWidth={64} minHeight={56}>
-            <AreaChart data={chartData} margin={{ top: 2, right: 2, left: 0, bottom: 0 }}>
-              <YAxis hide domain={yDomain} />
-              <defs>
-                <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={stroke} stopOpacity={0.35} />
-                  <stop offset="100%" stopColor={stroke} stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              {prev != null && Number.isFinite(prev) ? (
-                <ReferenceLine
-                  y={prev}
-                  stroke="currentColor"
-                  strokeDasharray="3 3"
-                  className="text-zinc-400 dark:text-zinc-500"
-                  strokeOpacity={0.55}
-                />
-              ) : null}
-              <Area
-                type="linear"
-                dataKey="close"
-                dot={false}
-                stroke={stroke}
-                fill={`url(#${gradId})`}
-                strokeWidth={1.5}
-                isAnimationActive={false}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      ) : (
-        <div className="mt-1 h-14 text-[10px] text-zinc-500">No intraday data</div>
-      )}
-      <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0">
-        <span className="text-lg font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
-          {item.last == null ? "—" : item.last.toFixed(2)}
-        </span>
-        {item.change != null ? (
-          <span className={"text-xs tabular-nums " + posNegClass(item.change)}>
-            {item.change >= 0 ? "+" : ""}
-            {item.change.toFixed(2)}
-          </span>
-        ) : null}
-      </div>
-      <div className={"text-xs tabular-nums " + posNegClass(pct)}>
-        {pct == null ? "—" : `${pct >= 0 ? "+" : ""}${PCT2.format(pct)}%`}
-      </div>
-    </div>
-  );
-}
-
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
@@ -337,7 +207,10 @@ export default function TerminalPage() {
   const bootstrapInflightKeyRef = useRef("");
   const lastPrimaryLoadAtRef = useRef(0);
   const symbolsRef = useRef(symbols);
-  symbolsRef.current = symbols;
+
+  useEffect(() => {
+    symbolsRef.current = symbols;
+  }, [symbols]);
 
   const symbolsKey = useMemo(
     () =>
@@ -878,12 +751,6 @@ export default function TerminalPage() {
     return a;
   }, [quotes, portfolioSymbolSet, sortCol, sortAsc, volumeInfo, companyBySymbol]);
 
-  const quoteBySymbol = useMemo(() => {
-    const m = new Map<string, NormalizedQuote>();
-    for (const q of quotes) m.set(q.symbol.toUpperCase(), q);
-    return m;
-  }, [quotes]);
-
   const volumeLeaders = useMemo(() => {
     const rows = quotes
       .map((q) => {
@@ -905,6 +772,12 @@ export default function TerminalPage() {
 
     return rows.slice(0, 10);
   }, [quotes, volumeInfo, volumeLeadersMode]);
+
+  const changePctBySymbol = useMemo(() => {
+    const m = new Map<string, number | null | undefined>();
+    for (const q of quotes) m.set(q.symbol.toUpperCase(), q.changePercent);
+    return m;
+  }, [quotes]);
 
   const optionFlowRows = useMemo(() => {
     const rows = (optionFlow?.items ?? []).map((it) => ({
@@ -985,52 +858,7 @@ export default function TerminalPage() {
         tiles={{
           "quick-glance": {
             title: "Quick glance (today)",
-            children: (
-              <>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          {usMarkets ? (
-            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-              <div
-                className="flex flex-wrap items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
-                title={usMarkets.session.detail}
-              >
-                <span aria-hidden className="text-amber-500">
-                  ☀
-                </span>
-                <span>{usMarkets.session.headline}</span>
-              </div>
-              {usMarkets.session.showingPriorSession && usMarkets.session.sessionLabel ? (
-                <span className="text-[11px] font-medium text-zinc-600 dark:text-zinc-300">
-                  Showing {usMarkets.session.sessionLabel}
-                </span>
-              ) : null}
-            </div>
-          ) : (
-            <div />
-          )}
-          <div className="text-xs text-zinc-600 dark:text-zinc-400">
-            {usMarkets?.updatedAt ? `Updated ${new Date(usMarkets.updatedAt).toLocaleTimeString()}` : "—"}
-          </div>
-        </div>
-
-        {usMarkets && usMarkets.items.length > 0 ? (
-          <>
-            <div className="mt-3 flex gap-3 overflow-x-auto pb-1">
-              {usMarkets.items.map((item) => (
-                <MarketGlanceCard key={item.id} item={item} />
-              ))}
-            </div>
-            <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
-              Portfolio day % uses live quotes × synced share counts (same price logic as the quote table), includes
-              cash and options, and is indexed to 100 at prior close. Index cards use ETF proxies (SPY, QQQ, IWM).
-              When markets are closed, charts replay the last completed US session.
-            </div>
-          </>
-        ) : (
-          <div className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">Loading today&apos;s glance…</div>
-        )}
-              </>
-            ),
+            children: <UsMarketsPanel usMarkets={usMarkets} />,
           },
           futures: {
             title: "Futures",
@@ -1166,43 +994,27 @@ export default function TerminalPage() {
               title: "Position treemap (size = weight, color = day %)",
               bodyClassName: "p-4",
               children: (
-                <>
-            <p className="text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
-              Same daily % scale as the heatmap; mid-range moves are stretched so small differences read more clearly.
-            </p>
-            {heatView === "portfolio" ? (
-              <TerminalTreemapWeightControls
-                scope={treemapScope}
-                onScopeChange={setTreemapScope}
-                pieMetric={treemapMetric}
-                onPieMetricChange={setTreemapMetric}
-                syntheticChartBasis={treemapSyntheticBasis}
-                onSyntheticChartBasisChange={setTreemapSyntheticBasis}
-              />
-            ) : null}
-            <div className="mt-3">
-              <TerminalPositionTreemap
-                items={heatItems}
-                mvBySymbol={heatView === "portfolio" ? treemapMvBySym : positionMvBySym}
-                heatView={heatView}
-                companyNamesBySymbol={companyBySymbol}
-                portfolioSizeCaption={heatView === "portfolio" ? treemapSizeCaption : null}
-              />
-            </div>
-                </>
+                <PortfolioTreemapSection
+                  heatView={heatView}
+                  heatItems={heatItems}
+                  companyNamesBySymbol={companyBySymbol}
+                  treemapScope={treemapScope}
+                  onScopeChange={setTreemapScope}
+                  treemapMetric={treemapMetric}
+                  onPieMetricChange={setTreemapMetric}
+                  treemapSyntheticBasis={treemapSyntheticBasis}
+                  onSyntheticChartBasisChange={setTreemapSyntheticBasis}
+                  treemapMvBySym={treemapMvBySym}
+                  positionMvBySym={positionMvBySym}
+                  portfolioSizeCaption={treemapSizeCaption}
+                />
               ),
             },
             news: {
               title: "Market news",
               bodyClassName: "p-4",
               children: (
-          <NewsFeedPanel
-            title="Market news"
-            mode="default"
-            symbols={newsFocusSymbols}
-            anomalySymbols={newsAnomalySymbols}
-            maxItems={24}
-          />
+                <NewsDigestSection symbols={newsFocusSymbols} anomalySymbols={newsAnomalySymbols} />
               ),
             },
             "quotes-table": {
@@ -1404,88 +1216,13 @@ export default function TerminalPage() {
                 </div>
               </div>
 
-              <div className="mt-5">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm font-semibold">Top option flow</div>
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setOptionFlowMode("volume")}
-                      className={
-                        "h-9 min-w-[3.25rem] whitespace-nowrap rounded-md px-3 text-sm font-semibold " +
-                        (optionFlowMode === "volume"
-                          ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
-                          : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
-                      }
-                      title="Sort by total option volume"
-                    >
-                      Vol
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setOptionFlowMode("relative")}
-                      className={
-                        "h-9 min-w-[3.25rem] whitespace-nowrap rounded-md px-3 text-sm font-semibold " +
-                        (optionFlowMode === "relative"
-                          ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
-                          : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
-                      }
-                      title="Sort by option volume vs trailing session average (Opt×)"
-                    >
-                      Opt×
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">
-                  {optionFlowMode === "volume"
-                    ? "Total option volume from Schwab chains (subset of your terminal universe)."
-                    : "Option volume vs trailing ~20 session average (from prior terminal scans)."}
-                </div>
-                {optionFlow?.source === "unavailable" && (optionFlow.hint || optionFlow.detail) ? (
-                  <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
-                    {optionFlow.hint ?? optionFlow.detail}
-                  </div>
-                ) : null}
-                <div className="mt-2 grid gap-1">
-                  {optionFlowRows.map((it) => {
-                    const q = quoteBySymbol.get(it.symbol.toUpperCase());
-                    const chgFrac = q?.changePercent ?? null;
-                    return (
-                      <SymbolLink
-                        key={it.symbol}
-                        symbol={it.symbol}
-                        style={sentimentRowBackground(chgFrac)}
-                        title="Open symbol"
-                        className="relative flex w-full items-center justify-between overflow-hidden rounded-md border border-zinc-300 bg-white/70 px-2 py-1 text-xs hover:no-underline dark:border-white/15 dark:bg-zinc-950/40"
-                      >
-                        <span className="font-semibold">{it.symbol}</span>
-                        <span className="flex items-center gap-2 tabular-nums">
-                          <span className={"w-[4.5rem] text-right " + posNegClass(chgFrac == null ? null : chgFrac * 100)}>
-                            {chgFrac == null ? "—" : `${PCT2.format(chgFrac * 100)}%`}
-                          </span>
-                          {optionFlowMode === "relative" ? (
-                            <span
-                              className={
-                                it.flagged ? "font-semibold text-amber-700 dark:text-amber-300" : "text-zinc-600 dark:text-zinc-400"
-                              }
-                            >
-                              {volRatioLabel(it.relativeVolume)}
-                            </span>
-                          ) : null}
-                          <span className="text-zinc-700 dark:text-zinc-300">
-                            {Math.round(it.totalOptionVolume).toLocaleString()} opt vol
-                          </span>
-                        </span>
-                      </SymbolLink>
-                    );
-                  })}
-                  {optionFlow?.ok && (optionFlow.items?.length ?? 0) === 0 && optionFlow.source === "schwab" ? (
-                    <div className="text-sm text-zinc-600 dark:text-zinc-400">No chain volume in the scanned set.</div>
-                  ) : null}
-                  {!optionFlow ? <div className="text-sm text-zinc-600 dark:text-zinc-400">Loading…</div> : null}
-                </div>
-              </div>
-
+              <OptionFlowPanel
+                optionFlow={optionFlow}
+                optionFlowMode={optionFlowMode}
+                onModeChange={setOptionFlowMode}
+                optionFlowRows={optionFlowRows}
+                changePctBySymbol={changePctBySymbol}
+              />
               <div className="mt-5">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-sm font-semibold">Volume leaders</div>

@@ -11,7 +11,7 @@ import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
 
 function isBucket(s: string): s is AllocationHistoryBucket {
-  return s === "net" || s === "brokerage" || s === "retirement";
+  return s === "net" || s === "brokerage" || s === "retirement" || s === "529";
 }
 
 function isMetric(s: string): s is AllocationHistoryMetric {

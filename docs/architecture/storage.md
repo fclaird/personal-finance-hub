@@ -108,3 +108,21 @@ tools/             # CLI utilities (backup, schema inspect, one-off migrations)
 ```
 
 Do not add runtime data directories inside the repo (e.g. `data/` with real SQLite files).
+
+## Legacy dividend-model tables (read-only)
+
+The schema still includes `dividend_model_*` tables from an earlier in-app dividend backtesting feature. That UI was removed; backtesting now lives in the standalone [Simulated Dividend Portfolio](https://github.com/fclaird/SimulatedDividendPortfolio) repo.
+
+| Table prefix | Status |
+|--------------|--------|
+| `dividend_model_portfolios` | Legacy — do not write from Finance Hub UI |
+| `dividend_model_holdings` | Legacy |
+| `dividend_model_symbol_fundamentals_snap` | Legacy — still read by dividend book enrichment |
+| `dividend_model_portfolio_monthly*` | Legacy |
+| `dividend_model_synthetic_holdings` | Legacy |
+| `dividend_model_drip_ledger` | Legacy |
+| `dividend_model_portfolio_forward_snap` | Legacy |
+
+**Do not drop these tables** without a migration plan — user SQLite files may contain historical data. New features should not depend on dividend-model tables unless explicitly migrating data out.
+
+Some dividend analytics (`src/lib/dividends/`) still read fundamentals snapshots for the Schwab dividend book; treat those reads as read-only compatibility, not as an invitation to expand dividend-model writes.

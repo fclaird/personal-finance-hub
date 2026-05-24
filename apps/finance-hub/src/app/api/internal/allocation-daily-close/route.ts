@@ -9,7 +9,7 @@ import { authorizeCronRequest } from "@/lib/internalCronAuth";
 
 /**
  * POST — snapshot allocation into allocation_daily_underlying for one NY trade_date (default: last NY weekday).
- * Auth: Bearer CRON_SECRET / x-cron-secret / ?secret=
+ * Auth: Bearer CRON_SECRET / x-cron-secret header only.
  * Optional JSON body: { "tradeDate": "YYYY-MM-DD", "modes": ["auto","schwab"] }
  */
 export async function POST(req: Request) {

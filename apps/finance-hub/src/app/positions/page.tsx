@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import {
   AddManualAccountDialog,
+  EditManualAccountDialog,
   ManualPositionDialog,
   type ManualPositionFormState,
 } from "@/app/components/ManualAccountDialogs";
@@ -36,7 +37,17 @@ export default function PositionsPage() {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [underPx, setUnderPx] = useState<Map<string, number>>(new Map());
   const [addAccountOpen, setAddAccountOpen] = useState(false);
+  const [editAccount, setEditAccount] = useState<{
+    id: string;
+    name: string;
+    nickname: string | null;
+    accountBucket: AccountBucket;
+  } | null>(null);
   const [positionDialog, setPositionDialog] = useState<ManualPositionFormState | null>(null);
+
+  async function refreshAccountsAndPositions() {
+    await Promise.all([load(), loadNicknames()]);
+  }
 
   async function load() {
     const resp = await fetch("/api/positions");
@@ -210,8 +221,10 @@ export default function PositionsPage() {
 
   async function deleteManualPosition(row: Row) {
     if (!confirm(`Remove ${row.symbol} from this external account?`)) return;
-    await fetch(`/api/manual/positions/${encodeURIComponent(row.positionId)}`, { method: "DELETE" });
-    await load();
+    const resp = await fetch(`/api/manual/positions/${encodeURIComponent(row.positionId)}`, { method: "DELETE" });
+    const json = (await resp.json()) as { ok: boolean; error?: string };
+    if (!json.ok) throw new Error(json.error ?? "Failed to remove holding");
+    await refreshAccountsAndPositions();
   }
 
   function openAddHolding(accountId: string) {
@@ -265,7 +278,9 @@ export default function PositionsPage() {
                 privacyMasked={privacy.masked}
                 showManualColumns={showManualColumns}
                 onEditManualPosition={openEditHolding}
-                onDeleteManualPosition={(r) => void deleteManualPosition(r)}
+                onDeleteManualPosition={(r) =>
+                  void deleteManualPosition(r).catch((e) => setError(e instanceof Error ? e.message : String(e)))
+                }
               />
             </>
           ),
@@ -333,6 +348,21 @@ export default function PositionsPage() {
                   >
                     Add holding
                   </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditAccount({
+                        id: acct.accountId,
+                        name: acct.accountName,
+                        nickname: nick.get(acct.accountId) ?? null,
+                        accountBucket:
+                          manualAccounts.find((m) => m.accountId === acct.accountId)?.accountBucket ?? "brokerage",
+                      })
+                    }
+                    className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs font-medium hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:hover:bg-white/5"
+                  >
+                    Edit account
+                  </button>
                 </>
               ) : null}
               <span aria-hidden="true">•</span>
@@ -354,7 +384,11 @@ export default function PositionsPage() {
               privacyMasked={privacy.masked}
               showManualColumns={showManualColumns}
               onEditManualPosition={isManual ? openEditHolding : undefined}
-              onDeleteManualPosition={isManual ? (r) => void deleteManualPosition(r) : undefined}
+              onDeleteManualPosition={
+                isManual
+                  ? (r) => void deleteManualPosition(r).catch((e) => setError(e instanceof Error ? e.message : String(e)))
+                  : undefined
+              }
             />
             {isManual && rs.length === 0 ? (
               <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
@@ -384,7 +418,7 @@ export default function PositionsPage() {
     underPx,
     savingNick,
     showManualColumns,
-    manualAccounts.length,
+    manualAccounts,
   ]);
 
   function toggleSort(col: SortColumn) {
@@ -487,16 +521,22 @@ export default function PositionsPage() {
         open={addAccountOpen}
         onClose={() => setAddAccountOpen(false)}
         onSaved={(account) => {
-          void loadNicknames().catch((e) => setError(e instanceof Error ? e.message : String(e)));
-          void load().catch((e) => setError(e instanceof Error ? e.message : String(e)));
+          void refreshAccountsAndPositions().catch((e) => setError(e instanceof Error ? e.message : String(e)));
           openAddHolding(account.id);
         }}
+      />
+      <EditManualAccountDialog
+        open={editAccount != null}
+        account={editAccount}
+        onClose={() => setEditAccount(null)}
+        onSaved={() => void refreshAccountsAndPositions().catch((e) => setError(e instanceof Error ? e.message : String(e)))}
+        onDeleted={() => void refreshAccountsAndPositions().catch((e) => setError(e instanceof Error ? e.message : String(e)))}
       />
       <ManualPositionDialog
         open={positionDialog != null}
         initial={positionDialog}
         onClose={() => setPositionDialog(null)}
-        onSaved={() => void load().catch((e) => setError(e instanceof Error ? e.message : String(e)))}
+        onSaved={() => void refreshAccountsAndPositions().catch((e) => setError(e instanceof Error ? e.message : String(e)))}
       />
     </div>
   );

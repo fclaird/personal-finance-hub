@@ -4,8 +4,8 @@ import { cookies } from "next/headers";
 import { getDb } from "@/lib/db";
 import { DATA_MODE_COOKIE, parseDataMode } from "@/lib/dataMode";
 import { portfolioImpliedEquityPrice } from "@/lib/analytics/optionsExposure";
+import { accountsInDataModeWhereSql } from "@/lib/holdings/latestSnapshots";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
-import { notPosterityWhereSql } from "@/lib/posterity";
 
 function normSym(s: string) {
   return (s ?? "").trim().toUpperCase();
@@ -23,10 +23,7 @@ export async function GET(req: Request) {
   const impliedPrice =
     underlying === "CASH" ? 1 : portfolioImpliedEquityPrice(db, mode, underlying);
 
-  const where =
-    mode === "schwab"
-      ? `a.id LIKE 'schwab_%' AND ${notPosterityWhereSql("a")}`
-      : `a.id NOT LIKE 'demo_%' AND ${notPosterityWhereSql("a")}`;
+  const where = accountsInDataModeWhereSql(mode, "a");
 
   const snaps = db
     .prepare(

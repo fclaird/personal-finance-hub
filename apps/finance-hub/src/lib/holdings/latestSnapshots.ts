@@ -1,19 +1,35 @@
 import type Database from "better-sqlite3";
 
+import type { DataMode } from "@/lib/dataMode";
 import { notPosterityWhereSql } from "@/lib/posterity";
 
 export type LatestSnapshotScope = "all_synced" | "schwab_only";
 
+/** All synced accounts: Schwab, manual, Plaid, etc. (excludes posterity + demo). */
+export function allSyncedAccountsWhereSql(alias = "a"): string {
+  return `${alias}.id NOT LIKE 'demo_%' AND ${notPosterityWhereSql(alias)}`;
+}
+
+/** Schwab broker + manual external accounts (excludes posterity + demo). Used for REAL data mode. */
+export function syncedBrokerAndManualWhereSql(alias = "a"): string {
+  return `(${alias}.id LIKE 'schwab_%' OR ${alias}.id LIKE 'manual_%') AND ${alias}.id NOT LIKE 'demo_%' AND ${notPosterityWhereSql(alias)}`;
+}
+
+export function latestSnapshotScopeForMode(mode: DataMode): LatestSnapshotScope {
+  return mode === "schwab" ? "schwab_only" : "all_synced";
+}
+
+export function accountsInDataModeWhereSql(mode: DataMode, alias = "a"): string {
+  return mode === "schwab" ? syncedBrokerAndManualWhereSql(alias) : allSyncedAccountsWhereSql(alias);
+}
+
 /**
  * Latest holding_snapshot id per account (one row per account).
  * `all_synced`: Schwab, manual, Plaid, etc. (excludes posterity + demo).
- * `schwab_only`: legacy Schwab-only filter.
+ * `schwab_only`: Schwab + manual external accounts (REAL data mode; excludes posterity + demo).
  */
 export function latestSnapshotIds(db: Database.Database, scope: LatestSnapshotScope = "all_synced"): string[] {
-  const accountFilter =
-    scope === "schwab_only"
-      ? `a.id LIKE 'schwab_%' AND ${notPosterityWhereSql("a")}`
-      : `a.id NOT LIKE 'demo_%' AND ${notPosterityWhereSql("a")}`;
+  const accountFilter = scope === "schwab_only" ? syncedBrokerAndManualWhereSql("a") : allSyncedAccountsWhereSql("a");
 
   return (
     db
