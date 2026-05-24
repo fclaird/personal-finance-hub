@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   name TEXT NOT NULL,
   nickname TEXT,
   schwab_account_hash TEXT,
+  account_bucket TEXT NOT NULL DEFAULT 'brokerage', -- 'brokerage' | 'retirement' | '529'
   type TEXT NOT NULL,
   currency TEXT NOT NULL DEFAULT 'USD',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -529,3 +530,14 @@ CREATE TABLE IF NOT EXISTS news_feed_items (
 CREATE INDEX IF NOT EXISTS idx_news_feed_items_published ON news_feed_items(published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_feed_items_source ON news_feed_items(source, published_at DESC);
 
+-- Daily total option chain volume per underlying (for relative option-flow scoring).
+CREATE TABLE IF NOT EXISTS option_flow_daily (
+  provider TEXT NOT NULL DEFAULT 'schwab',
+  symbol TEXT NOT NULL,
+  session_date TEXT NOT NULL,
+  total_volume REAL NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (provider, symbol, session_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_option_flow_daily_symbol_date ON option_flow_daily(symbol, session_date DESC);

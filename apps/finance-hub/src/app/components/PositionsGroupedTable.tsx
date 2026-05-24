@@ -15,6 +15,7 @@ export type Row = {
   accountId: string;
   accountName: string;
   accountType: string;
+  accountBucket?: string | null;
   symbol: string;
   securityName: string;
   securityType: string;
@@ -32,6 +33,8 @@ export type Row = {
   dte: number | null;
   intrinsic: number | null;
   extrinsic: number | null;
+  isManual?: boolean;
+  purchaseDate?: string | null;
 };
 
 function usd2Masked(v: number, masked: boolean) {
@@ -55,6 +58,7 @@ export type SortColumn =
   | "quantity"
   | "price"
   | "marketValue"
+  | "purchaseDate"
   | "delta"
   | "gamma"
   | "theta"
@@ -70,6 +74,7 @@ const POSITIONS_COL_ORDER_NO_ACCOUNT: readonly SortColumn[] = [
   "quantity",
   "price",
   "marketValue",
+  "purchaseDate",
   "delta",
   "gamma",
   "theta",
@@ -86,8 +91,9 @@ const POSITIONS_COL_ORDER_WITH_ACCOUNT: readonly PositionsTableColumnId[] = [
 const SORT_COLUMN_LABEL: Record<SortColumn, string> = {
   symbol: "Symbol",
   quantity: "Qty",
-  price: "Price",
+  price: "Cost/share",
   marketValue: "Market\u00A0value",
+  purchaseDate: "Purchased",
   delta: "Delta",
   gamma: "Gamma",
   theta: "Theta",
@@ -123,6 +129,12 @@ function compareRows(a: Row, b: Row, col: SortColumn, asc: boolean): number {
       return compareNullableNumber(a.price, b.price, asc);
     case "marketValue":
       return compareNullableNumber(a.marketValue, b.marketValue, asc);
+    case "purchaseDate": {
+      const av = a.purchaseDate ?? "";
+      const bv = b.purchaseDate ?? "";
+      const cmp = av.localeCompare(bv);
+      return asc ? cmp : -cmp;
+    }
     case "delta":
       return compareNullableNumber(a.delta, b.delta, asc);
     case "gamma":
@@ -170,6 +182,9 @@ export function GroupedTable({
   collapsed,
   toggleCollapsed,
   privacyMasked,
+  showManualColumns = false,
+  onEditManualPosition,
+  onDeleteManualPosition,
 }: {
   accountId: string;
   viewMode: ViewMode;
@@ -182,6 +197,9 @@ export function GroupedTable({
   collapsed: Set<string>;
   toggleCollapsed: (accountId: string, underlying: string) => void;
   privacyMasked: boolean;
+  showManualColumns?: boolean;
+  onEditManualPosition?: (row: Row) => void;
+  onDeleteManualPosition?: (row: Row) => void;
 }) {
   function isCollapsed(underlying: string) {
     return collapsed.has(`${viewMode}:${accountId}:${underlying}`);
@@ -189,7 +207,10 @@ export function GroupedTable({
 
   const columnStorageKey = showAccountCol ? "positions:grouped:v1:withAccount" : "positions:grouped:v1:noAccount";
   const columnDefaultOrder = showAccountCol ? POSITIONS_COL_ORDER_WITH_ACCOUNT : POSITIONS_COL_ORDER_NO_ACCOUNT;
-  const { order: columnOrder, moveColumn } = usePersistedColumnOrder(columnStorageKey, columnDefaultOrder);
+  const { order: columnOrderRaw, moveColumn } = usePersistedColumnOrder(columnStorageKey, columnDefaultOrder);
+  const columnOrder = showManualColumns
+    ? columnOrderRaw
+    : columnOrderRaw.filter((c) => c !== "purchaseDate");
 
   const grab = " " + DRAGGABLE_COLUMN_HEADER_GRAB_CLASS;
 
@@ -270,6 +291,8 @@ export function GroupedTable({
             {usd2Masked(g.netMarketValue, privacyMasked)}
           </td>
         );
+      case "purchaseDate":
+        return groupEmDashTd(colId);
       case "delta":
       case "gamma":
       case "theta":
@@ -293,13 +316,44 @@ export function GroupedTable({
       case "symbol":
         return (
           <td key={colId} className="whitespace-nowrap py-2 pr-6 font-medium">
-            <SymbolLink symbol={symbolPageTargetFromInstrument(r)} className="inline-block pl-6">
-              {r.securityType === "option" ? (
-                <span className={r.quantity < 0 ? "text-red-400" : "text-emerald-400"}>{formatOptionSymbol(r)}</span>
-              ) : (
-                <span>{r.symbol}</span>
-              )}
-            </SymbolLink>
+            <span className="inline-flex items-center gap-2 pl-6">
+              <SymbolLink symbol={symbolPageTargetFromInstrument(r)} className="inline-block">
+                {r.securityType === "option" ? (
+                  <span className={r.quantity < 0 ? "text-red-400" : "text-emerald-400"}>{formatOptionSymbol(r)}</span>
+                ) : (
+                  <span>{r.symbol}</span>
+                )}
+              </SymbolLink>
+              {r.isManual ? (
+                <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
+                  External
+                </span>
+              ) : null}
+              {r.isManual && onEditManualPosition && onDeleteManualPosition ? (
+                <span className="inline-flex gap-1">
+                  <button
+                    type="button"
+                    className="rounded border border-zinc-300 px-1.5 py-0.5 text-[10px] font-medium hover:bg-zinc-100 dark:border-white/20 dark:hover:bg-white/10"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onEditManualPosition(r);
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded border border-red-300 px-1.5 py-0.5 text-[10px] font-medium text-red-700 hover:bg-red-50 dark:border-red-900/50 dark:text-red-300 dark:hover:bg-red-950/30"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteManualPosition(r);
+                    }}
+                  >
+                    Del
+                  </button>
+                </span>
+              ) : null}
+            </span>
           </td>
         );
       case "quantity":
@@ -323,6 +377,12 @@ export function GroupedTable({
             }
           >
             {r.marketValue == null ? "-" : usd2Masked(r.marketValue, privacyMasked)}
+          </td>
+        );
+      case "purchaseDate":
+        return (
+          <td key={colId} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums text-zinc-700 dark:text-zinc-300">
+            {r.purchaseDate ?? "—"}
           </td>
         );
       case "delta":

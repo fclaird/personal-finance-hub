@@ -5,6 +5,11 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import {
+  AddManualAccountDialog,
+  ManualPositionDialog,
+  type ManualPositionFormState,
+} from "@/app/components/ManualAccountDialogs";
+import {
   GroupedTable,
   computeUnderlyingGroups,
   type Row,
@@ -13,7 +18,8 @@ import {
 } from "@/app/components/PositionsGroupedTable";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator";
-import { bucketFromDisplayName } from "@/lib/accountBuckets";
+import { bucketFromAccount, type AccountBucket } from "@/lib/accountBuckets";
+import { isManualAccountId } from "@/lib/manual/manualAccounts";
 
 export default function PositionsPage() {
   const privacy = usePrivacy();
@@ -26,6 +32,8 @@ export default function PositionsPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("perAccount");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [underPx, setUnderPx] = useState<Map<string, number>>(new Map());
+  const [addAccountOpen, setAddAccountOpen] = useState(false);
+  const [positionDialog, setPositionDialog] = useState<ManualPositionFormState | null>(null);
 
   async function load() {
     const resp = await fetch("/api/positions");
@@ -100,12 +108,13 @@ export default function PositionsPage() {
   }, [rows]);
 
   const grouped = useMemo(() => {
-    const byAccount = new Map<string, { accountName: string; accountType: string | null; rows: Row[] }>();
+    const byAccount = new Map<string, { accountName: string; accountType: string | null; accountBucket: AccountBucket | null; rows: Row[] }>();
     for (const r of rows) {
       if (!byAccount.has(r.accountId)) {
         byAccount.set(r.accountId, {
           accountName: r.accountName ?? r.accountId,
           accountType: r.accountType ?? null,
+          accountBucket: (r.accountBucket as AccountBucket | null) ?? null,
           rows: [],
         });
       }
@@ -123,8 +132,10 @@ export default function PositionsPage() {
     const joint: Group[] = [];
     const brokerage: Group[] = [];
     const retirement: Group[] = [];
+    const plan529: Group[] = [];
 
     for (const g of all) {
+      const meta = byAccount.get(g.accountId);
       const nickname = (nick.get(g.accountId) ?? "").trim();
       const displayName = (nickname || g.accountName || g.accountId).trim();
       const isJoint = /\bjoint\b/i.test(nickname);
@@ -132,8 +143,9 @@ export default function PositionsPage() {
         joint.push(g);
         continue;
       }
-      const bucket = isRetirementAccountType(g.accountType) ? "retirement" : bucketFromDisplayName(displayName);
-      if (bucket === "retirement") retirement.push(g);
+      const bucket = bucketFromAccount(g.accountName, nick.get(g.accountId) ?? null, meta?.accountBucket);
+      if (bucket === "529") plan529.push(g);
+      else if (bucket === "retirement" || isRetirementAccountType(g.accountType)) retirement.push(g);
       else brokerage.push(g);
     }
 
@@ -146,8 +158,9 @@ export default function PositionsPage() {
     joint.sort(displaySort);
     brokerage.sort(displaySort);
     retirement.sort(displaySort);
+    plan529.sort(displaySort);
 
-    return { joint, brokerage, retirement };
+    return { joint, brokerage, retirement, plan529 };
   }, [rows, nick]);
 
   function isRetirementAccountType(accountType: string | null | undefined): boolean {
@@ -158,14 +171,50 @@ export default function PositionsPage() {
 
   const allGroups = useMemo(() => computeUnderlyingGroups(rows, sortColumn, sortAsc, underPx), [rows, sortColumn, sortAsc, underPx]);
 
+  const showManualColumns = useMemo(() => rows.some((r) => r.isManual), [rows]);
+
   const positionsTileOrder = useMemo(() => {
     if (viewMode === "allAccounts") return ["all-accounts"] as const;
     return [
       ...grouped.joint.map((a) => `acct-${a.accountId}`),
       ...grouped.brokerage.map((a) => `acct-${a.accountId}`),
       ...grouped.retirement.map((a) => `acct-${a.accountId}`),
+      ...grouped.plan529.map((a) => `acct-${a.accountId}`),
     ];
   }, [viewMode, grouped]);
+
+  async function deleteManualPosition(row: Row) {
+    if (!confirm(`Remove ${row.symbol} from this external account?`)) return;
+    await fetch(`/api/manual/positions/${encodeURIComponent(row.positionId)}`, { method: "DELETE" });
+    await load();
+  }
+
+  function openAddHolding(accountId: string) {
+    setPositionDialog({
+      accountId,
+      symbol: "",
+      securityType: "equity",
+      quantity: "",
+      purchasePrice: "",
+      marketValue: "",
+      purchaseDate: "",
+      notes: "",
+    });
+  }
+
+  function openEditHolding(row: Row) {
+    setPositionDialog({
+      positionId: row.positionId,
+      accountId: row.accountId,
+      symbol: row.symbol,
+      securityType: row.securityType === "cash" ? "cash" : row.securityType === "fund" ? "fund" : "equity",
+      quantity: String(row.quantity),
+      purchasePrice: row.price == null ? "" : String(row.price),
+      marketValue: row.marketValue == null ? "" : String(row.marketValue),
+      purchaseDate: row.purchaseDate ?? "",
+      notes: "",
+    });
+  }
 
   const positionsTiles = useMemo(() => {
     if (viewMode === "allAccounts") {
@@ -189,6 +238,9 @@ export default function PositionsPage() {
                 collapsed={collapsed}
                 toggleCollapsed={toggleCollapsed}
                 privacyMasked={privacy.masked}
+                showManualColumns={showManualColumns}
+                onEditManualPosition={openEditHolding}
+                onDeleteManualPosition={(r) => void deleteManualPosition(r)}
               />
             </>
           ),
@@ -199,15 +251,22 @@ export default function PositionsPage() {
     const tiles: Record<string, { title: string; children: ReactNode }> = {};
     const addAccount = (
       acct: { accountId: string; accountName: string; rows: Row[] },
-      bucket: "joint" | "brokerage" | "retirement",
+      bucket: "joint" | "brokerage" | "retirement" | "529",
     ) => {
       const rs = acct.rows;
       const groups = computeUnderlyingGroups(rs, sortColumn, sortAsc, underPx);
       const displayName = (nick.get(acct.accountId) ?? "").trim() || acct.accountName;
+      const isManual = isManualAccountId(acct.accountId);
       const prefix =
-        bucket === "joint" ? "" : bucket === "brokerage" ? "Brokerage · " : "Retirement · ";
+        bucket === "joint"
+          ? ""
+          : bucket === "brokerage"
+            ? "Brokerage · "
+            : bucket === "retirement"
+              ? "Retirement · "
+              : "529 · ";
       tiles[`acct-${acct.accountId}`] = {
-        title: `${prefix}${displayName}`,
+        title: `${prefix}${displayName}${isManual ? " (external)" : ""}`,
         children: (
           <>
             <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
@@ -239,6 +298,18 @@ export default function PositionsPage() {
                 />
               </label>
               {savingNick === acct.accountId ? <span className="text-zinc-500">Saving…</span> : null}
+              {isManual ? (
+                <>
+                  <span aria-hidden="true">•</span>
+                  <button
+                    type="button"
+                    onClick={() => openAddHolding(acct.accountId)}
+                    className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs font-medium hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:hover:bg-white/5"
+                  >
+                    Add holding
+                  </button>
+                </>
+              ) : null}
               <span aria-hidden="true">•</span>
               <span>
                 {rs.length} position{rs.length === 1 ? "" : "s"} • {groups.length} underlying
@@ -256,6 +327,9 @@ export default function PositionsPage() {
               collapsed={collapsed}
               toggleCollapsed={toggleCollapsed}
               privacyMasked={privacy.masked}
+              showManualColumns={showManualColumns}
+              onEditManualPosition={isManual ? openEditHolding : undefined}
+              onDeleteManualPosition={isManual ? (r) => void deleteManualPosition(r) : undefined}
             />
           </>
         ),
@@ -265,6 +339,7 @@ export default function PositionsPage() {
     for (const acct of grouped.joint) addAccount(acct, "joint");
     for (const acct of grouped.brokerage) addAccount(acct, "brokerage");
     for (const acct of grouped.retirement) addAccount(acct, "retirement");
+    for (const acct of grouped.plan529) addAccount(acct, "529");
     return tiles;
   }, [
     viewMode,
@@ -278,6 +353,7 @@ export default function PositionsPage() {
     privacy.masked,
     underPx,
     savingNick,
+    showManualColumns,
   ]);
 
   function toggleSort(col: SortColumn) {
@@ -308,10 +384,17 @@ export default function PositionsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Positions</h1>
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Individual holdings and option positions from the latest snapshot.
+            Individual holdings from Schwab sync and manually entered external accounts.
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setAddAccountOpen(true)}
+            className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
+          >
+            Add external account
+          </button>
           <Link
             href="/connections"
             className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
@@ -357,9 +440,9 @@ export default function PositionsPage() {
         </div>
       </div>
 
-      {grouped.joint.length + grouped.brokerage.length + grouped.retirement.length === 0 ? (
+      {grouped.joint.length + grouped.brokerage.length + grouped.retirement.length + grouped.plan529.length === 0 ? (
         <div className="text-sm text-zinc-600 dark:text-zinc-400">
-          No positions yet. Run Schwab sync on Connections.
+          No positions yet. Connect Schwab on Connections or add an external account.
         </div>
       ) : (
         <DraggableTileLayout
@@ -368,6 +451,18 @@ export default function PositionsPage() {
           tiles={positionsTiles}
         />
       )}
+
+      <AddManualAccountDialog
+        open={addAccountOpen}
+        onClose={() => setAddAccountOpen(false)}
+        onSaved={() => void load().catch((e) => setError(e instanceof Error ? e.message : String(e)))}
+      />
+      <ManualPositionDialog
+        open={positionDialog != null}
+        initial={positionDialog}
+        onClose={() => setPositionDialog(null)}
+        onSaved={() => void load().catch((e) => setError(e instanceof Error ? e.message : String(e)))}
+      />
     </div>
   );
 }

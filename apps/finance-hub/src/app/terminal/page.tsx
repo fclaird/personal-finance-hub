@@ -49,7 +49,13 @@ type OptionFlowPayload = {
   hint?: string;
   detail?: string;
   scanned?: number;
-  items?: Array<{ symbol: string; totalOptionVolume: number }>;
+  sessionDate?: string;
+  items?: Array<{
+    symbol: string;
+    totalOptionVolume: number;
+    avgOptionVolume20?: number | null;
+    relativeVolume?: number | null;
+  }>;
 };
 
 type SortCol = "symbol" | "company" | "last" | "chgPct" | "chg" | "volume" | "volX";
@@ -128,7 +134,6 @@ function MarketGlanceCard({ item }: { item: UsMarketGlanceItem }) {
   const chartData = item.series;
   const prev = item.previousClose;
   const yDomain = sparklineYDomain(chartData, prev);
-  const isPortfolio = item.id === "portfolio";
 
   return (
     <div className="min-w-[11.5rem] flex-1 rounded-xl border border-zinc-300 bg-zinc-50 p-3 dark:border-white/15 dark:bg-zinc-900/80">
@@ -171,7 +176,6 @@ function MarketGlanceCard({ item }: { item: UsMarketGlanceItem }) {
       <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0">
         <span className="text-lg font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
           {item.last == null ? "—" : item.last.toFixed(2)}
-          {isPortfolio ? <span className="ml-1 text-[10px] font-normal text-zinc-500">idx</span> : null}
         </span>
         {item.change != null ? (
           <span className={"text-xs tabular-nums " + posNegClass(item.change)}>
@@ -299,6 +303,7 @@ export default function TerminalPage() {
   const [colOrder, setColOrder] = useState<TerminalCol[]>(DEFAULT_TERMINAL_COL_ORDER);
   const [companyBySymbol, setCompanyBySymbol] = useState<Map<string, string>>(new Map());
   const [volumeLeadersMode, setVolumeLeadersMode] = useState<"volume" | "volX">("volume");
+  const [optionFlowMode, setOptionFlowMode] = useState<"volume" | "relative">("volume");
   const [heatView, setHeatView] = useState<"portfolio" | "spy" | "qqq">("portfolio");
   const [heatItems, setHeatItems] = useState<HeatmapItem[]>([]);
   const [positionMvBySym, setPositionMvBySym] = useState<Map<string, number>>(() => new Map());
@@ -901,6 +906,27 @@ export default function TerminalPage() {
     return rows.slice(0, 10);
   }, [quotes, volumeInfo, volumeLeadersMode]);
 
+  const optionFlowRows = useMemo(() => {
+    const rows = (optionFlow?.items ?? []).map((it) => ({
+      ...it,
+      relativeVolume: it.relativeVolume ?? null,
+      flagged: it.relativeVolume != null && it.relativeVolume >= 2.5,
+    }));
+
+    rows.sort((a, b) => {
+      if (optionFlowMode === "relative") {
+        const cmp = (a.relativeVolume ?? -Infinity) - (b.relativeVolume ?? -Infinity);
+        if (cmp !== 0) return -cmp;
+        return b.totalOptionVolume - a.totalOptionVolume || a.symbol.localeCompare(b.symbol);
+      }
+      const cmp = b.totalOptionVolume - a.totalOptionVolume;
+      if (cmp !== 0) return cmp;
+      return ((b.relativeVolume ?? -Infinity) - (a.relativeVolume ?? -Infinity)) || a.symbol.localeCompare(b.symbol);
+    });
+
+    return rows.slice(0, 10);
+  }, [optionFlow, optionFlowMode]);
+
   const updatedLabel = useMemo(() => {
     if (!lastUpdatedAt) return "—";
     const ms = nowMs - new Date(lastUpdatedAt).getTime();
@@ -995,8 +1021,9 @@ export default function TerminalPage() {
               ))}
             </div>
             <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
-              Portfolio is MV-weighted from your holdings’ 5-minute bars (indexed to 100 at session open). Index cards
-              use ETF proxies (SPY, QQQ, IWM). When markets are closed, charts replay the last completed US session.
+              Portfolio day % uses live quotes × synced share counts (same price logic as the quote table), includes
+              cash and options, and is indexed to 100 at prior close. Index cards use ETF proxies (SPY, QQQ, IWM).
+              When markets are closed, charts replay the last completed US session.
             </div>
           </>
         ) : (
@@ -1378,9 +1405,41 @@ export default function TerminalPage() {
               </div>
 
               <div className="mt-5">
-                <div className="text-sm font-semibold">Top option flow</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-semibold">Top option flow</div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setOptionFlowMode("volume")}
+                      className={
+                        "h-9 min-w-[3.25rem] whitespace-nowrap rounded-md px-3 text-sm font-semibold " +
+                        (optionFlowMode === "volume"
+                          ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
+                          : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
+                      }
+                      title="Sort by total option volume"
+                    >
+                      Vol
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOptionFlowMode("relative")}
+                      className={
+                        "h-9 min-w-[3.25rem] whitespace-nowrap rounded-md px-3 text-sm font-semibold " +
+                        (optionFlowMode === "relative"
+                          ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
+                          : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
+                      }
+                      title="Sort by option volume vs trailing session average (Opt×)"
+                    >
+                      Opt×
+                    </button>
+                  </div>
+                </div>
                 <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">
-                  Total option volume from Schwab chains (subset of your terminal universe).
+                  {optionFlowMode === "volume"
+                    ? "Total option volume from Schwab chains (subset of your terminal universe)."
+                    : "Option volume vs trailing ~20 session average (from prior terminal scans)."}
                 </div>
                 {optionFlow?.source === "unavailable" && (optionFlow.hint || optionFlow.detail) ? (
                   <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
@@ -1388,7 +1447,7 @@ export default function TerminalPage() {
                   </div>
                 ) : null}
                 <div className="mt-2 grid gap-1">
-                  {(optionFlow?.items ?? []).slice(0, 10).map((it) => {
+                  {optionFlowRows.map((it) => {
                     const q = quoteBySymbol.get(it.symbol.toUpperCase());
                     const chgFrac = q?.changePercent ?? null;
                     return (
@@ -1404,6 +1463,15 @@ export default function TerminalPage() {
                           <span className={"w-[4.5rem] text-right " + posNegClass(chgFrac == null ? null : chgFrac * 100)}>
                             {chgFrac == null ? "—" : `${PCT2.format(chgFrac * 100)}%`}
                           </span>
+                          {optionFlowMode === "relative" ? (
+                            <span
+                              className={
+                                it.flagged ? "font-semibold text-amber-700 dark:text-amber-300" : "text-zinc-600 dark:text-zinc-400"
+                              }
+                            >
+                              {volRatioLabel(it.relativeVolume)}
+                            </span>
+                          ) : null}
                           <span className="text-zinc-700 dark:text-zinc-300">
                             {Math.round(it.totalOptionVolume).toLocaleString()} opt vol
                           </span>

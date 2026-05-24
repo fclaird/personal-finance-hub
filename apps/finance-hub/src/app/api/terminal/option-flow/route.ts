@@ -3,11 +3,18 @@ import { NextResponse } from "next/server";
 
 import { schwabMarketFetch } from "@/lib/schwab/client";
 import { DATA_MODE_COOKIE, parseDataMode } from "@/lib/dataMode";
+import {
+  optionFlowSessionDate,
+  recordOptionFlowVolumes,
+  trailingAvgOptionVolume,
+} from "@/lib/terminal/optionFlowHistory";
 import { getTerminalUniverseSymbols } from "@/lib/terminal/universe";
 
 export type OptionFlowItem = {
   symbol: string;
   totalOptionVolume: number;
+  avgOptionVolume20: number | null;
+  relativeVolume: number | null;
 };
 
 function normSym(s: string) {
@@ -86,8 +93,16 @@ export async function GET(req: Request) {
       await Promise.all(batch.map((s) => fetchChain(s).catch(() => null)));
     }
 
+    const sessionDate = optionFlowSessionDate();
+    recordOptionFlowVolumes(volumes, sessionDate);
+
     const items: OptionFlowItem[] = Array.from(volumes.entries())
-      .map(([symbol, totalOptionVolume]) => ({ symbol, totalOptionVolume }))
+      .map(([symbol, totalOptionVolume]) => {
+        const avgOptionVolume20 = trailingAvgOptionVolume(symbol, sessionDate);
+        const relativeVolume =
+          avgOptionVolume20 != null && avgOptionVolume20 > 0 ? totalOptionVolume / avgOptionVolume20 : null;
+        return { symbol, totalOptionVolume, avgOptionVolume20, relativeVolume };
+      })
       .filter((x) => x.totalOptionVolume > 0)
       .sort((a, b) => b.totalOptionVolume - a.totalOptionVolume)
       .slice(0, 10);
@@ -97,6 +112,7 @@ export async function GET(req: Request) {
       source: "schwab" as const,
       items,
       scanned: symbols.length,
+      sessionDate,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

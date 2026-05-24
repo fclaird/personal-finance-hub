@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/db";
 import type { DataMode } from "@/lib/dataMode";
-import { notPosterityWhereSql } from "@/lib/posterity";
+import { latestSnapshotIds } from "@/lib/holdings/latestSnapshots";
 
 function normSym(s: string) {
   return (s ?? "").trim().toUpperCase();
@@ -21,31 +21,14 @@ export type TerminalUniverseParams = {
 export function getTerminalUniverseSymbols(params: TerminalUniverseParams = {}): string[] {
   const db = getDb();
   const mode = params.mode ?? "auto";
-  const where =
-    mode === "schwab"
-      ? `a.id LIKE 'schwab_%' AND ${notPosterityWhereSql("a")}`
-      : `a.id NOT LIKE 'demo_%' AND ${notPosterityWhereSql("a")}`;
 
-  const snaps = db
+  const scope = mode === "schwab" ? "schwab_only" : "all_synced";
+  const snapshotIds = latestSnapshotIds(db, scope);
+  if (snapshotIds.length === 0) return [];
+
+  const rows = db
     .prepare(
       `
-      SELECT hs.id AS snapshot_id
-      FROM accounts a
-      JOIN holding_snapshots hs ON hs.account_id = a.id
-      WHERE ${where}
-        AND hs.as_of = (
-          SELECT MAX(hs2.as_of) FROM holding_snapshots hs2 WHERE hs2.account_id = a.id
-        )
-    `,
-    )
-    .all() as Array<{ snapshot_id: string }>;
-  const snapshotIds = snaps.map((r) => r.snapshot_id);
-
-  const out = new Set<string>();
-  if (snapshotIds.length) {
-    const rows = db
-      .prepare(
-        `
         SELECT DISTINCT
           CASE
             WHEN s.security_type = 'option' THEN COALESCE(us.symbol, s.symbol)
@@ -58,14 +41,14 @@ export function getTerminalUniverseSymbols(params: TerminalUniverseParams = {}):
           AND s.security_type != 'cash'
           AND sym IS NOT NULL
       `,
-      )
-      .all({ snaps: JSON.stringify(snapshotIds) }) as Array<{ sym: string | null }>;
+    )
+    .all({ snaps: JSON.stringify(snapshotIds) }) as Array<{ sym: string | null }>;
 
-    for (const r of rows) {
+  const out = new Set<string>();
+  for (const r of rows) {
       const s = normSym(r.sym ?? "");
-      if (!s || s === "CASH") continue;
-      out.add(s);
-    }
+    if (!s || s === "CASH") continue;
+    out.add(s);
   }
 
   const watchlistId = (params.includeWatchlistId ?? "").trim();

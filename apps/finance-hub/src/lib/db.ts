@@ -44,6 +44,7 @@ function migrate(db: Database.Database) {
   if (hasAccounts) {
     ensureColumn(db, "accounts", "nickname", "nickname TEXT");
     ensureColumn(db, "accounts", "schwab_account_hash", "schwab_account_hash TEXT");
+    ensureColumn(db, "accounts", "account_bucket", "account_bucket TEXT NOT NULL DEFAULT 'brokerage'");
   }
   const hasSecurities = db
     .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='securities' LIMIT 1`)

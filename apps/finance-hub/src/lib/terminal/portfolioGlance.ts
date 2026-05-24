@@ -7,28 +7,35 @@ import {
   schwabIntradayWindowForGlance,
   yahooIntradayRangeForGlance,
 } from "@/lib/market/glanceSession";
+import { schwabQuoteDisplayPrice } from "@/lib/market/schwabQuoteDisplay";
 import { fetchYahooIntradayChart } from "@/lib/market/yahooChartFetch";
 import type { UsMarketIndexCard } from "@/lib/market/usMarketIndices";
 import { normalizeSeriesForChart } from "@/lib/market/usMarketIndices";
 import { notPosterityWhereSql } from "@/lib/posterity";
-import { schwabMarketFetch } from "@/lib/schwab/client";
 import { schwabQuoteObjectFromEntry } from "@/lib/schwab/quoteEntry";
 import { ensureCandles, getCachedCandles } from "@/lib/terminal/ohlcv";
+import { latestSnapshotIds } from "@/lib/holdings/latestSnapshots";
 import { latestSnapshotId } from "@/lib/snapshots";
 
 const PORTFOLIO_INDEX_BASE = 100;
 const REFERENCE_SYMBOL = "SPY";
-const MAX_HOLDINGS = 48;
+const QUOTE_BATCH = 100;
+const CANDLE_CONCURRENCY = 8;
 
 export type PortfolioGlanceCard = Omit<UsMarketIndexCard, "id"> & { id: "portfolio" };
 
 type TimedClose = { tsMs: number; close: number };
 
-type PortfolioLeg = {
-  prevMv: number;
+type QuotePrices = { last: number; close: number };
+
+/** Priced leg: shares/contracts × live or intraday price. */
+type PricedLeg = {
+  quantity: number;
   prevClose: number;
   last: number;
   bars: TimedClose[];
+  /** Fallback flat MV when intraday bars are missing (keeps weight in totals). */
+  flatMv: number;
 };
 
 function normSym(s: string) {
@@ -70,6 +77,36 @@ function priceAtOrBefore(bars: TimedClose[], tsMs: number, fallback: number): nu
   return best >= 0 ? bars[best]!.close : fallback;
 }
 
+function quotePricesFromObject(q: Record<string, unknown> | null): QuotePrices | null {
+  if (!q) return null;
+  const rawLast = asNum(q.lastPrice);
+  const mark = asNum(q.mark);
+  const close = asNum(q.closePrice);
+  const last = schwabQuoteDisplayPrice(rawLast, mark, close);
+  if (last == null || close == null || close === 0) return null;
+  return { last, close };
+}
+
+async function fetchSchwabQuoteObjects(symbols: string[]): Promise<Map<string, Record<string, unknown>>> {
+  const out = new Map<string, Record<string, unknown>>();
+  const uniq = [...new Set(symbols.map(normSym).filter(Boolean))];
+  for (let i = 0; i < uniq.length; i += QUOTE_BATCH) {
+    const batch = uniq.slice(i, i + QUOTE_BATCH);
+    try {
+      const resp = await schwabMarketFetch<Record<string, unknown>>(
+        `/quotes?symbols=${encodeURIComponent(batch.join(","))}`,
+      );
+      for (const sym of batch) {
+        const q = schwabQuoteObjectFromEntry(resp[sym] ?? resp[sym.toUpperCase()]);
+        if (q) out.set(sym, q);
+      }
+    } catch (e) {
+      logError("portfolio_glance_quotes_batch", e);
+    }
+  }
+  return out;
+}
+
 async function fetchReferenceSessionGrid(
   sessionYmd: string,
   now: Date,
@@ -105,53 +142,55 @@ async function fetchReferenceSessionGrid(
   };
 }
 
-function mvBySymbolFromDb(): Map<string, number> {
+type PositionRow = {
+  security_type: string;
+  symbol: string | null;
+  quantity: number;
+  market_value: number;
+};
+
+function latestSnapshotIdsForPortfolio(): string[] {
   const db = getDb();
-  const snaps = (
-    db
-      .prepare(
-        `
-      SELECT hs.id AS snapshot_id
-      FROM holding_snapshots hs
-      JOIN accounts a ON a.id = hs.account_id
-      WHERE a.id LIKE 'schwab_%'
-        AND ${notPosterityWhereSql("a")}
-        AND hs.as_of = (
-          SELECT MAX(hs2.as_of) FROM holding_snapshots hs2 WHERE hs2.account_id = a.id
-        )
-      ORDER BY a.name ASC
-    `,
-      )
-      .all() as Array<{ snapshot_id: string }>
-  ).map((r) => r.snapshot_id);
-
+  const snaps = latestSnapshotIds(db, "all_synced");
   const snapFallback = latestSnapshotId(db);
-  const snapshotIds = snaps.length ? snaps : snapFallback ? [snapFallback] : [];
-  if (snapshotIds.length === 0) return new Map();
+  return snaps.length ? snaps : snapFallback ? [snapFallback] : [];
+}
 
-  const rows = db
+function loadPositionRows(snapshotIds: string[]): PositionRow[] {
+  const db = getDb();
+  return db
     .prepare(
       `
-      SELECT s.symbol AS symbol, SUM(COALESCE(p.market_value, 0)) AS mv
+      SELECT
+        s.security_type AS security_type,
+        s.symbol AS symbol,
+        SUM(p.quantity) AS quantity,
+        SUM(COALESCE(p.market_value, 0)) AS market_value
       FROM positions p
       JOIN securities s ON s.id = p.security_id
       WHERE p.snapshot_id IN (SELECT value FROM json_each(@snaps))
-        AND s.security_type != 'cash'
-        AND s.symbol IS NOT NULL
-      GROUP BY s.symbol
+      GROUP BY s.id, s.security_type, s.symbol
     `,
     )
-    .all({ snaps: JSON.stringify(snapshotIds) }) as Array<{ symbol: string; mv: number }>;
+    .all({ snaps: JSON.stringify(snapshotIds) }) as PositionRow[];
+}
 
-  const mvBySym = new Map<string, number>();
-  for (const r of rows) {
-    const sym = normSym(r.symbol);
-    if (!sym || sym === "CASH") continue;
-    const mv = r.mv;
-    if (!Number.isFinite(mv) || mv === 0) continue;
-    mvBySym.set(sym, (mvBySym.get(sym) ?? 0) + mv);
+function legPrevCloseValue(leg: PricedLeg): number {
+  if (leg.quantity !== 0 && leg.prevClose > 0) return leg.quantity * leg.prevClose;
+  return leg.flatMv;
+}
+
+function legLastValue(leg: PricedLeg): number {
+  if (leg.quantity !== 0 && leg.last > 0) return leg.quantity * leg.last;
+  return leg.flatMv;
+}
+
+function legValueAt(leg: PricedLeg, tsMs: number): number {
+  if (leg.quantity !== 0) {
+    const px = priceAtOrBefore(leg.bars, tsMs, leg.prevClose);
+    return leg.quantity * px;
   }
-  return mvBySym;
+  return leg.flatMv;
 }
 
 function emptyPortfolioCard(): PortfolioGlanceCard {
@@ -168,82 +207,132 @@ function emptyPortfolioCard(): PortfolioGlanceCard {
   };
 }
 
-/** MV-weighted portfolio intraday path (indexed to 100 at session start). */
+/** Holdings-weighted intraday path (indexed to 100 at prior close). */
 export async function fetchPortfolioGlanceCard(now: Date = new Date()): Promise<PortfolioGlanceCard> {
   try {
     const sessionYmd = glanceSessionYmd(now);
     const schwabWindow = schwabIntradayWindowForGlance(now);
-    const mvBySym = mvBySymbolFromDb();
-    if (mvBySym.size === 0) return emptyPortfolioCard();
+    const snapshotIds = latestSnapshotIdsForPortfolio();
+    if (snapshotIds.length === 0) return emptyPortfolioCard();
 
-    const ranked = [...mvBySym.entries()].sort((a, b) => b[1] - a[1]).slice(0, MAX_HOLDINGS);
-    const symbols = ranked.map(([sym]) => sym);
+    const rows = loadPositionRows(snapshotIds);
+    if (rows.length === 0) return emptyPortfolioCard();
+
+    const equityQty = new Map<string, number>();
+    const equitySyncedMv = new Map<string, number>();
+    const optionRows: Array<{ symbol: string; quantity: number; syncedMv: number }> = [];
+    let flatMv = 0;
+
+    for (const row of rows) {
+      const mv = row.market_value;
+      if (!Number.isFinite(mv) || mv === 0) continue;
+      const qty = row.quantity;
+      const type = (row.security_type ?? "").toLowerCase();
+
+      if (type === "cash") {
+        flatMv += mv;
+        continue;
+      }
+
+      const sym = normSym(row.symbol ?? "");
+      if (!sym || sym === "CASH") {
+        flatMv += mv;
+        continue;
+      }
+
+      if (type === "equity" || type === "fund") {
+        equityQty.set(sym, (equityQty.get(sym) ?? 0) + qty);
+        equitySyncedMv.set(sym, (equitySyncedMv.get(sym) ?? 0) + mv);
+        continue;
+      }
+
+      if (type === "option") {
+        optionRows.push({ symbol: sym, quantity: qty, syncedMv: mv });
+        continue;
+      }
+
+      flatMv += mv;
+    }
+
+    const quoteSymbols = [
+      ...equityQty.keys(),
+      ...optionRows.map((o) => o.symbol),
+    ];
+    if (quoteSymbols.length === 0 && flatMv <= 0) return emptyPortfolioCard();
 
     await Promise.all([
       ensureCandles(REFERENCE_SYMBOL, "5m", schwabWindow).catch((e) =>
         logError("portfolio_glance_spy_candles", e),
       ),
-      ...symbols.map((sym) =>
-        ensureCandles(sym, "5m", schwabWindow).catch((e) => logError(`portfolio_glance_candles_${sym}`, e)),
-      ),
     ]);
 
-    const resp = await schwabMarketFetch<Record<string, unknown>>(
-      `/quotes?symbols=${encodeURIComponent(symbols.join(","))}`,
-    );
+    const quotes = await fetchSchwabQuoteObjects(quoteSymbols);
 
-    const legs: PortfolioLeg[] = [];
-    for (const [sym, mv] of ranked) {
-      const entry = resp[sym] ?? resp[sym.toUpperCase()];
-      const q = schwabQuoteObjectFromEntry(entry);
-      if (!q) continue;
-
-      const last = asNum(q.lastPrice) ?? asNum(q.mark);
-      const prevClose = asNum(q.closePrice);
-      if (last == null || prevClose == null || prevClose === 0) continue;
-
-      const prevMv = mv / (last / prevClose);
-      if (!Number.isFinite(prevMv) || prevMv <= 0) continue;
-
-      legs.push({
-        prevMv,
-        prevClose,
-        last,
-        bars: timedSessionBars(sym, sessionYmd, schwabWindow),
-      });
+    const equitySymbols = [...equityQty.keys()];
+    for (let i = 0; i < equitySymbols.length; i += CANDLE_CONCURRENCY) {
+      const batch = equitySymbols.slice(i, i + CANDLE_CONCURRENCY);
+      await Promise.all(
+        batch.map((sym) =>
+          ensureCandles(sym, "5m", schwabWindow).catch((e) => logError(`portfolio_glance_candles_${sym}`, e)),
+        ),
+      );
     }
 
-    if (legs.length === 0) return emptyPortfolioCard();
+    const legs: PricedLeg[] = [];
+
+    for (const [sym, qty] of equityQty.entries()) {
+      const syncedMv = equitySyncedMv.get(sym) ?? 0;
+      const prices = quotePricesFromObject(quotes.get(sym) ?? null);
+      if (prices && qty !== 0) {
+        legs.push({
+          quantity: qty,
+          prevClose: prices.close,
+          last: prices.last,
+          bars: timedSessionBars(sym, sessionYmd, schwabWindow),
+          flatMv: syncedMv,
+        });
+      } else if (syncedMv > 0) {
+        flatMv += syncedMv;
+      }
+    }
+
+    for (const opt of optionRows) {
+      const prices = quotePricesFromObject(quotes.get(opt.symbol) ?? null);
+      if (prices && opt.quantity !== 0) {
+        legs.push({
+          quantity: opt.quantity,
+          prevClose: prices.close,
+          last: prices.last,
+          bars: [],
+          flatMv: opt.syncedMv,
+        });
+      } else if (opt.syncedMv > 0) {
+        flatMv += opt.syncedMv;
+      }
+    }
+
+    if (legs.length === 0 && flatMv <= 0) return emptyPortfolioCard();
+
+    const prevCloseTotal = flatMv + legs.reduce((sum, leg) => sum + legPrevCloseValue(leg), 0);
+    const lastTotal = flatMv + legs.reduce((sum, leg) => sum + legLastValue(leg), 0);
+    if (prevCloseTotal <= 0) return emptyPortfolioCard();
 
     const { grid, dataSource: gridSource } = await fetchReferenceSessionGrid(sessionYmd, now, schwabWindow);
-    if (grid.length < 2) return emptyPortfolioCard();
 
-    const sessionStartTotal = legs.reduce((sum, leg) => sum + leg.prevMv, 0);
-    const rawValues: number[] = [];
-    for (const point of grid) {
-      let total = 0;
-      for (const leg of legs) {
-        const px = priceAtOrBefore(leg.bars, point.tsMs, leg.prevClose);
-        total += leg.prevMv * (px / leg.prevClose);
-      }
-      rawValues.push(total);
+    let series: Array<{ idx: number; close: number }> = [];
+    if (grid.length >= 2 && legs.some((leg) => leg.quantity !== 0)) {
+      const rawValues = grid.map((point) => flatMv + legs.reduce((sum, leg) => sum + legValueAt(leg, point.tsMs), 0));
+      series = rawValues.map((value, idx) => ({
+        idx,
+        close: PORTFOLIO_INDEX_BASE * (value / prevCloseTotal),
+      }));
     }
 
-    const base = sessionStartTotal > 0 ? sessionStartTotal : rawValues[0] ?? 1;
-    const series = rawValues.map((value, idx) => ({
-      idx,
-      close: PORTFOLIO_INDEX_BASE * (value / base),
-    }));
-
-    let quoteTotal = 0;
-    for (const leg of legs) {
-      quoteTotal += leg.prevMv * (leg.last / leg.prevClose);
-    }
     const previousClose = PORTFOLIO_INDEX_BASE;
-    const last = sessionStartTotal > 0 ? PORTFOLIO_INDEX_BASE * (quoteTotal / sessionStartTotal) : previousClose;
+    const last = PORTFOLIO_INDEX_BASE * (lastTotal / prevCloseTotal);
     const normalizedSeries = normalizeSeriesForChart(series, previousClose, last);
     const change = last - previousClose;
-    const changePct = previousClose !== 0 ? (change / previousClose) * 100 : null;
+    const changePct = (change / previousClose) * 100;
 
     return {
       id: "portfolio",

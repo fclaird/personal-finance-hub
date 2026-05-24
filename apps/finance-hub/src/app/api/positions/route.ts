@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
+import { isManualAccountId, parseManualPositionMetadata } from "@/lib/manual/manualAccounts";
 import { isPosterityAccountId, notPosterityWhereSql } from "@/lib/posterity";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
+import { latestSnapshotIds as latestSyncedSnapshotIds } from "@/lib/holdings/latestSnapshots";
 import { latestSnapshotId } from "@/lib/snapshots";
 
 type ParsedOption = {
@@ -75,6 +77,7 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
         a.id AS accountId,
         a.name AS accountName,
         a.type AS accountType,
+        a.account_bucket AS accountBucket,
         s.symbol AS symbol,
         s.name AS securityName,
         s.security_type AS securityType,
@@ -82,6 +85,7 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
         p.quantity AS quantity,
         p.price AS price,
         p.market_value AS marketValue,
+        p.metadata_json AS metadataJson,
         og.delta AS delta,
         og.gamma AS gamma,
         og.theta AS theta
@@ -92,7 +96,7 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
       LEFT JOIN securities us ON us.id = s.underlying_security_id
       LEFT JOIN option_greeks og ON og.position_id = p.id
       WHERE p.snapshot_id IN (SELECT value FROM json_each(@snapshots_json))
-        AND s.security_type != 'cash'
+        AND (s.security_type != 'cash' OR a.id LIKE 'manual_%')
       ORDER BY a.name ASC, s.security_type DESC, s.symbol ASC
     `,
     )
@@ -102,6 +106,7 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
     accountId: string;
     accountName: string;
     accountType: string;
+    accountBucket: string | null;
     symbol: string | null;
     securityName: string | null;
     securityType: string;
@@ -109,6 +114,7 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
     quantity: number;
     price: number | null;
     marketValue: number | null;
+    metadataJson: string | null;
     delta: number | null;
     gamma: number | null;
     theta: number | null;
@@ -138,12 +144,37 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
   }
 
   const out = rows.map((r) => {
+    const manualMeta = parseManualPositionMetadata(r.metadataJson);
+    const isManual = isManualAccountId(r.accountId) || manualMeta != null;
+
+    if (r.securityType === "cash") {
+      return {
+        ...r,
+        symbol: "CASH",
+        securityName: "Cash",
+        effectiveUnderlyingSymbol: "CASH",
+        price: 1,
+        marketValue: r.marketValue ?? r.quantity,
+        optionExpiration: null,
+        optionRight: null,
+        optionStrike: null,
+        dte: null,
+        intrinsic: null,
+        extrinsic: null,
+        isManual,
+        purchaseDate: manualMeta?.purchaseDate ?? null,
+      };
+    }
+
     if (r.securityType !== "option") {
       const sym = (r.symbol ?? "").toUpperCase();
       const qpx = sym ? px.get(sym) ?? null : null;
       const price = qpx ?? r.price;
-      const marketValue =
+      let marketValue =
         price != null && Number.isFinite(price) ? price * (r.quantity ?? 0) : r.marketValue;
+      if (isManual && r.marketValue != null && qpx == null) {
+        marketValue = r.marketValue;
+      }
       return {
         ...r,
         symbol: r.symbol ?? "",
@@ -157,6 +188,8 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
         dte: null,
         intrinsic: null,
         extrinsic: null,
+        isManual,
+        purchaseDate: manualMeta?.purchaseDate ?? null,
       };
     }
 
@@ -200,6 +233,8 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
       dte,
       intrinsic,
       extrinsic,
+      isManual,
+      purchaseDate: manualMeta?.purchaseDate ?? null,
     };
   });
 
@@ -236,22 +271,7 @@ export async function GET(req: Request) {
       snaps = [snapshotId];
       responseSnapshotLabel = snapshotId;
     } else {
-      snaps =
-        (db
-          .prepare(
-            `
-              SELECT hs.id AS snapshot_id
-              FROM holding_snapshots hs
-              JOIN accounts a ON a.id = hs.account_id
-              WHERE a.id LIKE 'schwab_%'
-                AND ${notPosterityWhereSql("a")}
-                AND hs.as_of = (
-                  SELECT MAX(hs2.as_of) FROM holding_snapshots hs2 WHERE hs2.account_id = a.id
-                )
-              ORDER BY a.name ASC
-            `,
-          )
-          .all() as Array<{ snapshot_id: string }>).map((r) => r.snapshot_id);
+      snaps = latestSyncedSnapshotIds(db, "all_synced");
       responseSnapshotLabel = latest ?? null;
     }
 
