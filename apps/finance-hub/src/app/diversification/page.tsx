@@ -191,7 +191,7 @@ export default function DiversificationPage() {
     void (async () => {
       setError(null);
       try {
-        const [expResp, bucketResp] = await Promise.all([fetch("/api/exposure"), fetch("/api/exposure/buckets")]);
+        const expResp = await fetch("/api/exposure", { cache: "no-store" });
         async function safeJson(resp: Response) {
           const text = await resp.text();
           try {
@@ -201,35 +201,36 @@ export default function DiversificationPage() {
             throw new Error(`Non-JSON response (${resp.status}) from ${url}: ${text ? text.slice(0, 300) : "(empty body)"}`);
           }
         }
-        const expJson = (await safeJson(expResp)) as { ok: boolean; exposure?: ExposureRow[]; error?: string };
-        if (!expJson.ok) throw new Error(expJson.error ?? "Failed to load exposure");
-        setRows(expJson.exposure ?? []);
-
-        const syms = Array.from(new Set((expJson.exposure ?? []).map((r) => r.underlyingSymbol).filter(Boolean)));
-        if (syms.length) {
-          try {
-            await fetch("/api/taxonomy/sync", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ symbols: syms }),
-            });
-            const txResp = await fetch(`/api/taxonomy?symbols=${encodeURIComponent(syms.join(","))}`, { cache: "no-store" });
-            const txJson = (await txResp.json()) as { ok: boolean; taxonomy?: Record<string, TaxonomyRow> };
-            const m = new Map<string, TaxonomyRow>();
-            for (const [k, v] of Object.entries(txJson.taxonomy ?? {})) m.set(k.toUpperCase(), v as TaxonomyRow);
-            setTax(m);
-          } catch {
-            // taxonomy is optional for first paint
-          }
-        }
-
-        const bJson = (await safeJson(bucketResp)) as {
+        const expJson = (await safeJson(expResp)) as {
           ok: boolean;
-          buckets?: Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>;
+          exposure?: ExposureRow[];
+          buckets?: Array<{ bucketKey: "brokerage" | "retirement" | "529"; exposure: ExposureRow[] }>;
           error?: string;
         };
-        if (!bJson.ok) throw new Error(bJson.error ?? "Failed to load exposure buckets");
-        setExposureBuckets(bJson.buckets ?? []);
+        if (!expJson.ok) throw new Error(expJson.error ?? "Failed to load exposure");
+        const exposure = expJson.exposure ?? [];
+        setRows(exposure);
+        setExposureBuckets(expJson.buckets ?? []);
+
+        const syms = Array.from(new Set(exposure.map((r) => r.underlyingSymbol).filter(Boolean)));
+        if (syms.length) {
+          void (async () => {
+            try {
+              await fetch("/api/taxonomy/sync", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ symbols: syms }),
+              });
+              const txResp = await fetch(`/api/taxonomy?symbols=${encodeURIComponent(syms.join(","))}`, { cache: "no-store" });
+              const txJson = (await txResp.json()) as { ok: boolean; taxonomy?: Record<string, TaxonomyRow> };
+              const m = new Map<string, TaxonomyRow>();
+              for (const [k, v] of Object.entries(txJson.taxonomy ?? {})) m.set(k.toUpperCase(), v as TaxonomyRow);
+              setTax(m);
+            } catch {
+              // taxonomy is optional for first paint
+            }
+          })();
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }

@@ -130,22 +130,17 @@ export function DividendBookDashboard({ dashboard, masked }: Props) {
     let cancelled = false;
     void (async () => {
       try {
-        const [pageResp, bucketResp] = await Promise.all([
-          fetch("/api/allocation/page-data?synthetic=1", { cache: "no-store" }),
-          fetch("/api/exposure/buckets", { cache: "no-store" }),
-        ]);
-        const pageJson = (await pageResp.json()) as { ok: boolean; exposure?: ExposureRow[] };
-        const bucketJson = (await bucketResp.json()) as {
+        const pageResp = await fetch("/api/allocation/page-data?synthetic=1&lite=1", { cache: "no-store" });
+        const pageJson = (await pageResp.json()) as {
           ok: boolean;
+          exposure?: ExposureRow[];
           buckets?: Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>;
         };
         if (cancelled) return;
         if (pageJson.ok) {
           setExposureRows((pageJson.exposure ?? []).map(normalizeExposureRow));
-        }
-        if (bucketJson.ok) {
           setExposureBuckets(
-            (bucketJson.buckets ?? []).map((b) => ({
+            (pageJson.buckets ?? []).map((b) => ({
               ...b,
               exposure: (b.exposure ?? []).map(normalizeExposureRow),
             })),

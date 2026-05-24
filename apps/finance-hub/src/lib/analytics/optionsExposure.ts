@@ -2,7 +2,7 @@ import { getDb } from "@/lib/db";
 import type { DataMode } from "@/lib/dataMode";
 import type { AnalyticsBucketKey } from "@/lib/accountBuckets";
 import { bucketFromAccount } from "@/lib/accountBuckets";
-import { latestSnapshotIds, latestSnapshotScopeForMode } from "@/lib/holdings/latestSnapshots";
+import { latestSnapshotIds, latestSnapshotScopeForMode, accountsInDataModeWhereSql } from "@/lib/holdings/latestSnapshots";
 import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
 
@@ -165,10 +165,9 @@ export function syntheticEquityMvForSnapshot(
   return sum;
 }
 
-export function getUnderlyingExposureRollup(mode: DataMode = "auto"): ExposureRow[] {
-  // Reuse the bucketed exposure implementation and merge buckets back into a combined rollup.
+export function rollupExposureBuckets(buckets: BucketExposure[]): ExposureRow[] {
   const bySym = new Map<string, ExposureRow>();
-  for (const b of getUnderlyingExposureByBucket(mode)) {
+  for (const b of buckets) {
     for (const r of b.exposure) {
       const prev = bySym.get(r.underlyingSymbol) ?? {
         underlyingSymbol: r.underlyingSymbol,
@@ -194,140 +193,157 @@ export function getUnderlyingExposureRollup(mode: DataMode = "auto"): ExposureRo
   return out;
 }
 
+export function getUnderlyingExposureRollup(mode: DataMode = "auto"): ExposureRow[] {
+  return rollupExposureBuckets(getUnderlyingExposureByBucket(mode));
+}
+
 export function getUnderlyingExposureByBucket(mode: DataMode = "auto"): BucketExposure[] {
   const db = getDb();
   const scope = latestSnapshotScopeForMode(mode);
-  const snapshotIdSet = new Set(latestSnapshotIds(db, scope));
+  const snapshotIds = latestSnapshotIds(db, scope);
+  if (snapshotIds.length === 0) return [];
+
+  const snapshotIdSet = new Set(snapshotIds);
+  const snapsJson = JSON.stringify(snapshotIds);
 
   const snapshots = db
     .prepare(
       `
       SELECT a.name AS account_name, a.nickname AS account_nickname, a.account_bucket AS account_bucket, hs.id AS snapshot_id
-      FROM accounts a
-      JOIN holding_snapshots hs ON hs.account_id = a.id
-      WHERE hs.as_of = (
-        SELECT MAX(hs2.as_of) FROM holding_snapshots hs2 WHERE hs2.account_id = a.id
-      )
+      FROM holding_snapshots hs
+      JOIN accounts a ON a.id = hs.account_id
+      WHERE hs.id IN (SELECT value FROM json_each(@snaps))
+        AND ${accountsInDataModeWhereSql(mode, "a")}
     `,
     )
-    .all() as Array<{ account_name: string; account_nickname: string | null; account_bucket: string | null; snapshot_id: string }>;
+    .all({ snaps: snapsJson }) as Array<{ account_name: string; account_nickname: string | null; account_bucket: string | null; snapshot_id: string }>;
 
-  const byBucket = new Map<AnalyticsBucketKey, Map<string, ExposureRow>>();
-  const priceByUnderlying = portfolioImpliedEquityPriceMap(db, mode);
-
+  const snapshotToBucket = new Map<string, AnalyticsBucketKey>();
   for (const s of snapshots) {
     if (!snapshotIdSet.has(s.snapshot_id)) continue;
-    const bucket = bucketFromAccount(s.account_name, s.account_nickname, s.account_bucket);
+    snapshotToBucket.set(
+      s.snapshot_id,
+      bucketFromAccount(s.account_name, s.account_nickname, s.account_bucket),
+    );
+  }
+  if (snapshotToBucket.size === 0) return [];
+
+  const byBucket = new Map<AnalyticsBucketKey, Map<string, ExposureRow>>();
+
+  function rowFor(bucket: AnalyticsBucketKey, sym: string): ExposureRow {
     if (!byBucket.has(bucket)) byBucket.set(bucket, new Map());
     const map = byBucket.get(bucket)!;
+    const prev = map.get(sym) ?? {
+      underlyingSymbol: sym,
+      spotMarketValue: 0,
+      heldShares: 0,
+      syntheticMarketValue: 0,
+      syntheticShares: 0,
+      optionsMarkMarketValue: 0,
+    };
+    return prev;
+  }
 
-    const spot = db
-      .prepare(
-        `
+  function commit(bucket: AnalyticsBucketKey, sym: string, row: ExposureRow) {
+    byBucket.get(bucket)!.set(sym, row);
+  }
+
+  const spot = db
+    .prepare(
+      `
         SELECT
+          p.snapshot_id,
           COALESCE(sec.symbol, 'UNKNOWN') AS symbol,
           SUM(${POSITION_MARKET_VALUE_SQL}) AS mv,
           SUM(COALESCE(p.quantity, 0)) AS qty
         FROM positions p
         JOIN securities sec ON sec.id = p.security_id
-        WHERE p.snapshot_id = ?
+        WHERE p.snapshot_id IN (SELECT value FROM json_each(@snaps))
           AND sec.security_type != 'option'
           AND sec.security_type != 'cash'
-        GROUP BY COALESCE(sec.symbol, 'UNKNOWN')
+        GROUP BY p.snapshot_id, COALESCE(sec.symbol, 'UNKNOWN')
       `,
-      )
-      .all(s.snapshot_id) as Array<{ symbol: string; mv: number; qty: number }>;
+    )
+    .all({ snaps: snapsJson }) as Array<{ snapshot_id: string; symbol: string; mv: number; qty: number }>;
 
-    const syntheticRows = db
-      .prepare(
-        `
+  for (const r of spot) {
+    const bucket = snapshotToBucket.get(r.snapshot_id);
+    if (!bucket) continue;
+    const symKey = (r.symbol ?? "").trim().toUpperCase();
+    if (symKey === "CASH") continue;
+    const prev = rowFor(bucket, symKey);
+    prev.spotMarketValue += r.mv;
+    prev.heldShares += r.qty ?? 0;
+    commit(bucket, symKey, prev);
+  }
+
+  const syntheticRows = db
+    .prepare(
+      `
         SELECT
+          p.snapshot_id,
           us.symbol AS us_symbol,
           sec.symbol AS option_symbol,
-          p.quantity * ? * (${EFFECTIVE_OPTION_DELTA_SQL}) AS synthetic_shares
+          p.quantity * @mult * (${EFFECTIVE_OPTION_DELTA_SQL}) AS synthetic_shares
         FROM positions p
         JOIN holding_snapshots hs ON hs.id = p.snapshot_id
         JOIN securities sec ON sec.id = p.security_id
         LEFT JOIN securities us ON us.id = sec.underlying_security_id
         LEFT JOIN option_greeks og ON og.position_id = p.id
-        WHERE p.snapshot_id = ?
+        WHERE p.snapshot_id IN (SELECT value FROM json_each(@snaps))
           AND sec.security_type = 'option'
       `,
-      )
-      .all(DEFAULT_CONTRACT_MULTIPLIER, s.snapshot_id) as Array<{
-      us_symbol: string | null;
-      option_symbol: string | null;
-      synthetic_shares: number;
-    }>;
+    )
+    .all({ snaps: snapsJson, mult: DEFAULT_CONTRACT_MULTIPLIER }) as Array<{
+    snapshot_id: string;
+    us_symbol: string | null;
+    option_symbol: string | null;
+    synthetic_shares: number;
+  }>;
 
-    const optionMarkRows = db
-      .prepare(
-        `
+  for (const row of syntheticRows) {
+    const bucket = snapshotToBucket.get(row.snapshot_id);
+    if (!bucket) continue;
+    const sym = normalizeOptionUnderlying(row.us_symbol, row.option_symbol);
+    if (sym === "CASH") continue;
+    const prev = rowFor(bucket, sym);
+    prev.syntheticShares += row.synthetic_shares ?? 0;
+    commit(bucket, sym, prev);
+  }
+
+  const optionMarkRows = db
+    .prepare(
+      `
         SELECT
+          p.snapshot_id,
           us.symbol AS us_symbol,
           sec.symbol AS option_symbol,
           COALESCE(p.market_value, 0) AS mv
         FROM positions p
         JOIN securities sec ON sec.id = p.security_id
         LEFT JOIN securities us ON us.id = sec.underlying_security_id
-        WHERE p.snapshot_id = ?
+        WHERE p.snapshot_id IN (SELECT value FROM json_each(@snaps))
           AND sec.security_type = 'option'
       `,
-      )
-      .all(s.snapshot_id) as Array<{
-      us_symbol: string | null;
-      option_symbol: string | null;
-      mv: number;
-    }>;
+    )
+    .all({ snaps: snapsJson }) as Array<{
+    snapshot_id: string;
+    us_symbol: string | null;
+    option_symbol: string | null;
+    mv: number;
+  }>;
 
-    for (const r of spot) {
-      const symKey = (r.symbol ?? "").trim().toUpperCase();
-      if (symKey === "CASH") continue;
-      const prev = map.get(symKey) ?? {
-        underlyingSymbol: symKey,
-        spotMarketValue: 0,
-        heldShares: 0,
-        syntheticMarketValue: 0,
-        syntheticShares: 0,
-        optionsMarkMarketValue: 0,
-      };
-      prev.spotMarketValue += r.mv;
-      prev.heldShares += r.qty ?? 0;
-      map.set(symKey, prev);
-    }
-
-    for (const row of optionMarkRows) {
-      const sym = normalizeOptionUnderlying(row.us_symbol, row.option_symbol);
-      if (sym === "CASH") continue;
-      const prev = map.get(sym) ?? {
-        underlyingSymbol: sym,
-        spotMarketValue: 0,
-        heldShares: 0,
-        syntheticMarketValue: 0,
-        syntheticShares: 0,
-        optionsMarkMarketValue: 0,
-      };
-      prev.optionsMarkMarketValue += row.mv ?? 0;
-      map.set(sym, prev);
-    }
-
-    for (const row of syntheticRows) {
-      const sym = normalizeOptionUnderlying(row.us_symbol, row.option_symbol);
-      if (sym === "CASH") continue;
-      const prev = map.get(sym) ?? {
-        underlyingSymbol: sym,
-        spotMarketValue: 0,
-        heldShares: 0,
-        syntheticMarketValue: 0,
-        syntheticShares: 0,
-        optionsMarkMarketValue: 0,
-      };
-      const sh = row.synthetic_shares ?? 0;
-      prev.syntheticShares += sh;
-      map.set(sym, prev);
-    }
+  for (const row of optionMarkRows) {
+    const bucket = snapshotToBucket.get(row.snapshot_id);
+    if (!bucket) continue;
+    const sym = normalizeOptionUnderlying(row.us_symbol, row.option_symbol);
+    if (sym === "CASH") continue;
+    const prev = rowFor(bucket, sym);
+    prev.optionsMarkMarketValue += row.mv ?? 0;
+    commit(bucket, sym, prev);
   }
 
+  const priceByUnderlying = portfolioImpliedEquityPriceMap(db, mode);
   for (const m of byBucket.values()) {
     for (const row of m.values()) {
       const px = priceByUnderlying.get(row.underlyingSymbol);

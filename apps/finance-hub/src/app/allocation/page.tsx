@@ -341,6 +341,7 @@ export default function AllocationPage() {
     const pageDataJson = (await safeJson(pageDataResp)) as {
       ok: boolean;
       exposure?: ExposureRow[];
+      buckets?: Array<{ bucketKey: "brokerage" | "retirement" | "529"; exposure: ExposureRow[] }>;
       byAssetClass?: Array<{ key: string; marketValue: number; weight: number }>;
       accounts?: Array<{
         accountId: string;
@@ -360,25 +361,15 @@ export default function AllocationPage() {
 
     setAssetClass(pageDataJson.byAssetClass ?? []);
     setAccounts(pageDataJson.accounts ?? []);
-
-    void (async () => {
-      const exposureBucketResp = await fetch(`/api/exposure/buckets`);
-      const expBucketJson = (await safeJson(exposureBucketResp)) as {
-        ok: boolean;
-        buckets?: Array<{ bucketKey: "brokerage" | "retirement" | "529"; exposure: ExposureRow[] }>;
-        error?: string;
-      };
-      if (!expBucketJson.ok) throw new Error(expBucketJson.error ?? "Failed to load exposure buckets");
-      setExposureBuckets(
-        (expBucketJson.buckets ?? []).map((b) => ({
-          ...b,
-          exposure: (b.exposure ?? []).map((r) => ({
-            ...r,
-            optionsMarkMarketValue: typeof r.optionsMarkMarketValue === "number" ? r.optionsMarkMarketValue : 0,
-          })),
+    setExposureBuckets(
+      (pageDataJson.buckets ?? []).map((b) => ({
+        ...b,
+        exposure: (b.exposure ?? []).map((r) => ({
+          ...r,
+          optionsMarkMarketValue: typeof r.optionsMarkMarketValue === "number" ? r.optionsMarkMarketValue : 0,
         })),
-      );
-    })().catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      })),
+    );
   }
 
   useSchwabRefreshCoordinator({

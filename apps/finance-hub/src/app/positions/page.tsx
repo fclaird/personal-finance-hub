@@ -46,14 +46,47 @@ export default function PositionsPage() {
   const [positionDialog, setPositionDialog] = useState<ManualPositionFormState | null>(null);
 
   async function refreshAccountsAndPositions() {
-    await Promise.all([load(), loadNicknames()]);
+    await load();
+  }
+
+  async function applyAccounts(
+    accounts: Array<{ id: string; nickname: string | null; name: string; accountBucket: string | null }> | undefined,
+  ) {
+    const m = new Map<string, string | null>();
+    const manual: Array<{ accountId: string; accountName: string; accountBucket: AccountBucket }> = [];
+    for (const a of accounts ?? []) {
+      m.set(a.id, a.nickname ?? null);
+      if (isManualAccountId(a.id)) {
+        const bucket = (a.accountBucket ?? "brokerage") as AccountBucket;
+        manual.push({ accountId: a.id, accountName: a.name, accountBucket: bucket });
+      }
+    }
+    setNick(m);
+    setManualAccounts(manual);
   }
 
   async function load() {
-    const resp = await fetch("/api/positions");
-    const json = (await resp.json()) as { ok: boolean; positions?: Row[]; error?: string };
+    const resp = await fetch("/api/positions", { cache: "no-store" });
+    const json = (await resp.json()) as {
+      ok: boolean;
+      positions?: Row[];
+      accounts?: Array<{ id: string; nickname: string | null; name: string; accountBucket: string | null }>;
+      error?: string;
+    };
     if (!json.ok) throw new Error(json.error ?? "Failed to load positions");
     setRows(json.positions ?? []);
+    await applyAccounts(json.accounts);
+  }
+
+  async function loadNicknames() {
+    const resp = await fetch("/api/accounts", { cache: "no-store" });
+    const json = (await resp.json()) as {
+      ok: boolean;
+      accounts?: Array<{ id: string; nickname: string | null; name: string; accountBucket: string | null }>;
+      error?: string;
+    };
+    if (!json.ok) throw new Error(json.error ?? "Failed to load accounts");
+    await applyAccounts(json.accounts);
   }
 
   async function loadUnderlyingPrices(rs: Row[]) {
@@ -90,32 +123,8 @@ export default function PositionsPage() {
     setUnderPx(m);
   }
 
-  async function loadNicknames() {
-    const resp = await fetch("/api/accounts", { cache: "no-store" });
-    const json = (await resp.json()) as {
-      ok: boolean;
-      accounts?: Array<{ id: string; nickname: string | null; name: string; accountBucket: string | null }>;
-      error?: string;
-    };
-    if (!json.ok) throw new Error(json.error ?? "Failed to load accounts");
-    const m = new Map<string, string | null>();
-    const manual: Array<{ accountId: string; accountName: string; accountBucket: AccountBucket }> = [];
-    for (const a of json.accounts ?? []) {
-      m.set(a.id, a.nickname ?? null);
-      if (isManualAccountId(a.id)) {
-        const bucket = (a.accountBucket ?? "brokerage") as AccountBucket;
-        manual.push({ accountId: a.id, accountName: a.name, accountBucket: bucket });
-      }
-    }
-    setNick(m);
-    setManualAccounts(manual);
-  }
-
   useEffect(() => {
-    (async () => {
-      await load();
-      await loadNicknames();
-    })().catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    void load().catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
 
   useSchwabRefreshCoordinator({

@@ -276,7 +276,7 @@ export async function GET(req: Request) {
     }
 
     if (snaps.length === 0 && !latest && !accountIdParam) {
-      return NextResponse.json({ ok: true, snapshotId: null, positions: [] });
+      return NextResponse.json({ ok: true, snapshotId: null, positions: [], accounts: [] });
     }
 
     if (snaps.length === 0) {
@@ -285,16 +285,35 @@ export async function GET(req: Request) {
         snapshotId: responseSnapshotLabel,
         snapshots: [],
         positions: [],
+        accounts: [],
       });
     }
 
     const out = await buildPositionsForSnapshots(db, snaps);
+
+    const accounts = db
+      .prepare(
+        `
+        SELECT id, name, nickname, type, connection_id, account_bucket AS accountBucket
+        FROM accounts
+        ORDER BY name ASC
+      `,
+      )
+      .all() as Array<{
+      id: string;
+      name: string;
+      nickname: string | null;
+      type: string;
+      connection_id: string;
+      accountBucket: string | null;
+    }>;
 
     return NextResponse.json({
       ok: true,
       snapshotId: snapshotId ?? responseSnapshotLabel ?? latest ?? null,
       snapshots: snaps,
       positions: out,
+      accounts,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

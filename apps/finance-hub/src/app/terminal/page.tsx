@@ -179,7 +179,7 @@ export default function TerminalPage() {
   const [positionMvBySym, setPositionMvBySym] = useState<Map<string, number>>(() => new Map());
   const [exposureRows, setExposureRows] = useState<ExposureRow[]>([]);
   const [exposureBuckets, setExposureBuckets] = useState<
-    Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>
+    Array<{ bucketKey: "brokerage" | "retirement" | "529"; exposure: ExposureRow[] }>
   >([]);
   const [treemapScope, setTreemapScope] = useState<ExposureScope>("net");
   const [treemapMetric, setTreemapMetric] = useState<ExposurePieMetric>("net");
@@ -248,24 +248,16 @@ export default function TerminalPage() {
 
   async function loadExposureWeighting() {
     try {
-      const [pageResp, bucketResp] = await Promise.all([
-        fetch("/api/allocation/page-data?synthetic=1", { cache: "no-store" }),
-        fetch("/api/exposure/buckets", { cache: "no-store" }),
-      ]);
-      const pageJson = await terminalFetchJson<{ ok: boolean; exposure?: ExposureRow[] }>(
-        pageResp,
-        "allocation page-data",
-      );
-      const bucketJson = await terminalFetchJson<{
+      const pageResp = await fetch("/api/allocation/page-data?synthetic=1&lite=1", { cache: "no-store" });
+      const pageJson = await terminalFetchJson<{
         ok: boolean;
-        buckets?: Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>;
-      }>(bucketResp, "exposure buckets");
+        exposure?: ExposureRow[];
+        buckets?: Array<{ bucketKey: "brokerage" | "retirement" | "529"; exposure: ExposureRow[] }>;
+      }>(pageResp, "allocation page-data");
       if (pageJson.ok) {
         setExposureRows((pageJson.exposure ?? []).map(normalizeExposureRow));
-      }
-      if (bucketJson.ok) {
         setExposureBuckets(
-          (bucketJson.buckets ?? []).map((b) => ({
+          (pageJson.buckets ?? []).map((b) => ({
             ...b,
             exposure: (b.exposure ?? []).map(normalizeExposureRow),
           })),
@@ -395,8 +387,7 @@ export default function TerminalPage() {
   async function refreshAll(nextWatchlistId: string | null) {
     setError(null);
     try {
-      await loadWatchlists().catch(() => null);
-      await loadUniverse(nextWatchlistId);
+      await Promise.all([loadWatchlists().catch(() => null), loadUniverse(nextWatchlistId)]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -524,7 +515,11 @@ export default function TerminalPage() {
 
   useEffect(() => {
     const t = setTimeout(() => {
-      void refreshAll(watchlistId);
+      void Promise.all([
+        refreshAll(watchlistId),
+        loadExposureWeighting(),
+        loadUsMarkets(),
+      ]);
     }, 0);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -554,11 +549,6 @@ export default function TerminalPage() {
     },
     resetKey: marketPollResetKey,
   });
-
-  useEffect(() => {
-    void loadExposureWeighting();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   useEffect(() => {
     setTreemapScope(readTreemapScope());
@@ -634,13 +624,10 @@ export default function TerminalPage() {
 
   useEffect(() => {
     if (!symbolsKey) return;
-    const t = setTimeout(() => {
-      void runTerminalPrimaryLoad(symbolsRef.current, watchlistId).catch((e) => {
-        if (isAbortError(e)) return;
-        setError(e instanceof Error ? e.message : String(e));
-      });
-    }, 150);
-    return () => clearTimeout(t);
+    void runTerminalPrimaryLoad(symbolsRef.current, watchlistId).catch((e) => {
+      if (isAbortError(e)) return;
+      setError(e instanceof Error ? e.message : String(e));
+    });
   }, [symbolsKey, watchlistId]);
 
   useEffect(() => {

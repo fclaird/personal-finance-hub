@@ -66,6 +66,8 @@ CREATE TABLE IF NOT EXISTS holding_snapshots (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE INDEX IF NOT EXISTS idx_holding_snapshots_account_as_of ON holding_snapshots(account_id, as_of DESC);
+
 CREATE TABLE IF NOT EXISTS positions (
   id TEXT PRIMARY KEY,
   snapshot_id TEXT NOT NULL REFERENCES holding_snapshots(id) ON DELETE CASCADE,
@@ -76,6 +78,8 @@ CREATE TABLE IF NOT EXISTS positions (
   metadata_json TEXT, -- connector-specific details
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE INDEX IF NOT EXISTS idx_positions_snapshot_id ON positions(snapshot_id);
 
 CREATE TABLE IF NOT EXISTS option_greeks (
   id TEXT PRIMARY KEY,

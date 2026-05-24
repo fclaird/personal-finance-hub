@@ -5,6 +5,18 @@ import { notPosterityWhereSql } from "@/lib/posterity";
 
 export type LatestSnapshotScope = "all_synced" | "schwab_only";
 
+/**
+ * Fast join to each account's latest holding_snapshot (by max as_of).
+ * Avoids a correlated MAX subquery that scans holding_snapshots once per account row.
+ */
+export function latestSnapshotPerAccountJoinSql(hsAlias = "hs"): string {
+  return `JOIN (
+    SELECT account_id, MAX(as_of) AS max_as_of
+    FROM holding_snapshots
+    GROUP BY account_id
+  ) _latest_snap ON _latest_snap.account_id = ${hsAlias}.account_id AND _latest_snap.max_as_of = ${hsAlias}.as_of`;
+}
+
 /** All synced accounts: Schwab, manual, Plaid, etc. (excludes posterity + demo). */
 export function allSyncedAccountsWhereSql(alias = "a"): string {
   return `${alias}.id NOT LIKE 'demo_%' AND ${notPosterityWhereSql(alias)}`;
@@ -38,10 +50,8 @@ export function latestSnapshotIds(db: Database.Database, scope: LatestSnapshotSc
       SELECT hs.id AS snapshot_id
       FROM holding_snapshots hs
       JOIN accounts a ON a.id = hs.account_id
+      ${latestSnapshotPerAccountJoinSql("hs")}
       WHERE ${accountFilter}
-        AND hs.as_of = (
-          SELECT MAX(hs2.as_of) FROM holding_snapshots hs2 WHERE hs2.account_id = a.id
-        )
       ORDER BY a.name ASC
     `,
       )
