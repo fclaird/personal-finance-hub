@@ -81,7 +81,7 @@ export function AddManualAccountDialog({
 }: {
   open: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (account: { id: string; name: string; accountBucket: AccountBucket }) => void;
 }) {
   const [name, setName] = useState("");
   const [nickname, setNickname] = useState("");
@@ -108,9 +108,13 @@ export function AddManualAccountDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, nickname: nickname || null, accountBucket }),
       });
-      const json = (await resp.json()) as { ok: boolean; error?: string };
-      if (!json.ok) throw new Error(json.error ?? "Failed to create account");
-      onSaved();
+      const json = (await resp.json()) as {
+        ok: boolean;
+        error?: string;
+        account?: { id: string; name: string; accountBucket: AccountBucket };
+      };
+      if (!json.ok || !json.account) throw new Error(json.error ?? "Failed to create account");
+      onSaved(json.account);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -177,12 +181,14 @@ export function ManualPositionDialog({
 
   if (!open || !form) return null;
 
+  const positionForm = form;
+
   function setField<K extends keyof ManualPositionFormState>(key: K, value: ManualPositionFormState[K]) {
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
   }
 
   async function refreshMv() {
-    const sym = form.securityType === "cash" ? null : form.symbol.trim().toUpperCase();
+    const sym = positionForm.securityType === "cash" ? null : positionForm.symbol.trim().toUpperCase();
     if (!sym) return;
     const resp = await fetch("/api/quotes", {
       method: "POST",
@@ -196,7 +202,7 @@ export function ManualPositionDialog({
     if (!json.ok) return;
     const q = json.quotes?.[0];
     const px = q?.last ?? q?.mark ?? q?.close;
-    const qty = Number(form.quantity);
+    const qty = Number(positionForm.quantity);
     if (px != null && Number.isFinite(px) && Number.isFinite(qty)) {
       setField("marketValue", String(px * qty));
     }
@@ -206,18 +212,18 @@ export function ManualPositionDialog({
     setSaving(true);
     setError(null);
     try {
-      const resp = await fetch(`/api/manual/accounts/${encodeURIComponent(form.accountId)}/positions`, {
+      const resp = await fetch(`/api/manual/accounts/${encodeURIComponent(positionForm.accountId)}/positions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          positionId: form.positionId,
-          symbol: form.securityType === "cash" ? "CASH" : form.symbol,
-          securityType: form.securityType,
-          quantity: Number(form.quantity),
-          purchasePrice: form.purchasePrice.trim() === "" ? null : Number(form.purchasePrice),
-          marketValue: form.marketValue.trim() === "" ? null : Number(form.marketValue),
-          purchaseDate: form.purchaseDate.trim() || null,
-          notes: form.notes.trim() || null,
+          positionId: positionForm.positionId,
+          symbol: positionForm.securityType === "cash" ? "CASH" : positionForm.symbol,
+          securityType: positionForm.securityType,
+          quantity: Number(positionForm.quantity),
+          purchasePrice: positionForm.purchasePrice.trim() === "" ? null : Number(positionForm.purchasePrice),
+          marketValue: positionForm.marketValue.trim() === "" ? null : Number(positionForm.marketValue),
+          purchaseDate: positionForm.purchaseDate.trim() || null,
+          notes: positionForm.notes.trim() || null,
         }),
       });
       const json = (await resp.json()) as { ok: boolean; error?: string };
@@ -232,11 +238,11 @@ export function ManualPositionDialog({
   }
 
   return (
-    <ModalShell title={form.positionId ? "Edit holding" : "Add holding"} onClose={onClose}>
+    <ModalShell title={positionForm.positionId ? "Edit holding" : "Add holding"} onClose={onClose}>
       <Field label="Type">
         <select
           className={inputClass}
-          value={form.securityType}
+          value={positionForm.securityType}
           onChange={(e) => setField("securityType", e.target.value as ManualPositionFormState["securityType"])}
         >
           <option value="equity">Stock / ETF</option>
@@ -244,23 +250,23 @@ export function ManualPositionDialog({
           <option value="cash">Cash</option>
         </select>
       </Field>
-      {form.securityType !== "cash" ? (
+      {positionForm.securityType !== "cash" ? (
         <Field label="Symbol">
-          <input className={inputClass} value={form.symbol} onChange={(e) => setField("symbol", e.target.value.toUpperCase())} />
+          <input className={inputClass} value={positionForm.symbol} onChange={(e) => setField("symbol", e.target.value.toUpperCase())} />
         </Field>
       ) : null}
-      <Field label={form.securityType === "cash" ? "Cash balance ($)" : "Quantity"}>
-        <input className={inputClass} value={form.quantity} onChange={(e) => setField("quantity", e.target.value)} inputMode="decimal" />
+      <Field label={positionForm.securityType === "cash" ? "Cash balance ($)" : "Quantity"}>
+        <input className={inputClass} value={positionForm.quantity} onChange={(e) => setField("quantity", e.target.value)} inputMode="decimal" />
       </Field>
-      {form.securityType !== "cash" ? (
+      {positionForm.securityType !== "cash" ? (
         <>
           <Field label="Purchase date">
-            <input className={inputClass} type="date" value={form.purchaseDate} onChange={(e) => setField("purchaseDate", e.target.value)} />
+            <input className={inputClass} type="date" value={positionForm.purchaseDate} onChange={(e) => setField("purchaseDate", e.target.value)} />
           </Field>
           <Field label="Purchase price (per share)">
             <input
               className={inputClass}
-              value={form.purchasePrice}
+              value={positionForm.purchasePrice}
               onChange={(e) => setField("purchasePrice", e.target.value)}
               inputMode="decimal"
             />
@@ -269,7 +275,7 @@ export function ManualPositionDialog({
             <div className="flex gap-2">
               <input
                 className={inputClass}
-                value={form.marketValue}
+                value={positionForm.marketValue}
                 onChange={(e) => setField("marketValue", e.target.value)}
                 inputMode="decimal"
               />
@@ -285,7 +291,7 @@ export function ManualPositionDialog({
         </>
       ) : null}
       <Field label="Notes (optional)">
-        <input className={inputClass} value={form.notes} onChange={(e) => setField("notes", e.target.value)} />
+        <input className={inputClass} value={positionForm.notes} onChange={(e) => setField("notes", e.target.value)} />
       </Field>
       {error ? <div className="text-sm text-red-600 dark:text-red-400">{error}</div> : null}
       <button

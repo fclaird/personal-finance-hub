@@ -19,7 +19,7 @@ import {
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator";
 import { bucketFromAccount, type AccountBucket } from "@/lib/accountBuckets";
-import { isManualAccountId } from "@/lib/manual/manualAccounts";
+import { isManualAccountId } from "@/lib/manual/isManualAccountId";
 
 export default function PositionsPage() {
   const privacy = usePrivacy();
@@ -28,6 +28,9 @@ export default function PositionsPage() {
   const [sortColumn, setSortColumn] = useState<SortColumn>("symbol");
   const [sortAsc, setSortAsc] = useState(true);
   const [nick, setNick] = useState<Map<string, string | null>>(new Map());
+  const [manualAccounts, setManualAccounts] = useState<
+    Array<{ accountId: string; accountName: string; accountBucket: AccountBucket }>
+  >([]);
   const [savingNick, setSavingNick] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("perAccount");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -80,13 +83,21 @@ export default function PositionsPage() {
     const resp = await fetch("/api/accounts", { cache: "no-store" });
     const json = (await resp.json()) as {
       ok: boolean;
-      accounts?: Array<{ id: string; nickname: string | null }>;
+      accounts?: Array<{ id: string; nickname: string | null; name: string; accountBucket: string | null }>;
       error?: string;
     };
     if (!json.ok) throw new Error(json.error ?? "Failed to load accounts");
     const m = new Map<string, string | null>();
-    for (const a of json.accounts ?? []) m.set(a.id, a.nickname ?? null);
+    const manual: Array<{ accountId: string; accountName: string; accountBucket: AccountBucket }> = [];
+    for (const a of json.accounts ?? []) {
+      m.set(a.id, a.nickname ?? null);
+      if (isManualAccountId(a.id)) {
+        const bucket = (a.accountBucket ?? "brokerage") as AccountBucket;
+        manual.push({ accountId: a.id, accountName: a.name, accountBucket: bucket });
+      }
+    }
     setNick(m);
+    setManualAccounts(manual);
   }
 
   useEffect(() => {
@@ -119,6 +130,17 @@ export default function PositionsPage() {
         });
       }
       byAccount.get(r.accountId)!.rows.push(r);
+    }
+
+    for (const ma of manualAccounts) {
+      if (!byAccount.has(ma.accountId)) {
+        byAccount.set(ma.accountId, {
+          accountName: ma.accountName,
+          accountType: "manual",
+          accountBucket: ma.accountBucket,
+          rows: [],
+        });
+      }
     }
 
     type Group = { accountId: string; accountName: string; accountType: string | null; rows: Row[] };
@@ -161,7 +183,7 @@ export default function PositionsPage() {
     plan529.sort(displaySort);
 
     return { joint, brokerage, retirement, plan529 };
-  }, [rows, nick]);
+  }, [rows, nick, manualAccounts]);
 
   function isRetirementAccountType(accountType: string | null | undefined): boolean {
     const s = (accountType ?? "").trim().toLowerCase();
@@ -171,7 +193,10 @@ export default function PositionsPage() {
 
   const allGroups = useMemo(() => computeUnderlyingGroups(rows, sortColumn, sortAsc, underPx), [rows, sortColumn, sortAsc, underPx]);
 
-  const showManualColumns = useMemo(() => rows.some((r) => r.isManual), [rows]);
+  const showManualColumns = useMemo(
+    () => rows.some((r) => r.isManual) || manualAccounts.length > 0,
+    [rows, manualAccounts],
+  );
 
   const positionsTileOrder = useMemo(() => {
     if (viewMode === "allAccounts") return ["all-accounts"] as const;
@@ -331,6 +356,11 @@ export default function PositionsPage() {
               onEditManualPosition={isManual ? openEditHolding : undefined}
               onDeleteManualPosition={isManual ? (r) => void deleteManualPosition(r) : undefined}
             />
+            {isManual && rs.length === 0 ? (
+              <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
+                No holdings yet. Click <span className="font-medium">Add holding</span> above to enter your first position.
+              </p>
+            ) : null}
           </>
         ),
       };
@@ -354,6 +384,7 @@ export default function PositionsPage() {
     underPx,
     savingNick,
     showManualColumns,
+    manualAccounts.length,
   ]);
 
   function toggleSort(col: SortColumn) {
@@ -455,7 +486,11 @@ export default function PositionsPage() {
       <AddManualAccountDialog
         open={addAccountOpen}
         onClose={() => setAddAccountOpen(false)}
-        onSaved={() => void load().catch((e) => setError(e instanceof Error ? e.message : String(e)))}
+        onSaved={(account) => {
+          void loadNicknames().catch((e) => setError(e instanceof Error ? e.message : String(e)));
+          void load().catch((e) => setError(e instanceof Error ? e.message : String(e)));
+          openAddHolding(account.id);
+        }}
       />
       <ManualPositionDialog
         open={positionDialog != null}

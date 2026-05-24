@@ -7,6 +7,7 @@ import {
 import { latestSnapshotId } from "@/lib/snapshots";
 import type { DataMode } from "@/lib/dataMode";
 import { bucketFromAccount } from "@/lib/accountBuckets";
+import { latestSnapshotIds } from "@/lib/holdings/latestSnapshots";
 import { notPosterityWhereSql } from "@/lib/posterity";
 
 export type AllocationBucket = {
@@ -193,11 +194,13 @@ export function getAllocationByAccount(includeSynthetic: boolean, mode: DataMode
 export function getAllocationByBucket(includeSynthetic: boolean, mode: DataMode = "auto"): AllocationBucketedResult {
   const db = getDb();
   const priceByUnderlying = includeSynthetic ? portfolioImpliedEquityPriceMap(db, mode) : undefined;
+  const scope = mode === "schwab" ? "schwab_only" : "all_synced";
+  const snapshotIdSet = new Set(latestSnapshotIds(db, scope));
 
   const snapshots = db
     .prepare(
       `
-      SELECT a.id AS account_id, a.name AS account_name, a.nickname AS account_nickname, hs.id AS snapshot_id
+      SELECT a.id AS account_id, a.name AS account_name, a.nickname AS account_nickname, a.account_bucket AS account_bucket, hs.id AS snapshot_id
       FROM accounts a
       JOIN holding_snapshots hs ON hs.account_id = a.id
       WHERE hs.as_of = (
@@ -205,12 +208,14 @@ export function getAllocationByBucket(includeSynthetic: boolean, mode: DataMode 
       )
     `,
     )
-    .all() as Array<{ account_id: string; account_name: string; account_nickname: string | null; snapshot_id: string }>;
+    .all() as Array<{ account_id: string; account_name: string; account_nickname: string | null; account_bucket: string | null; snapshot_id: string }>;
 
   const byBucket = new Map<"brokerage" | "retirement", Map<AssetClass, number>>();
 
   for (const s of snapshots) {
-    const bucket = bucketFromAccount(s.account_name, s.account_nickname);
+    if (!snapshotIdSet.has(s.snapshot_id)) continue;
+    const bucket = bucketFromAccount(s.account_name, s.account_nickname, s.account_bucket);
+    if (bucket === "529") continue;
     if (!byBucket.has(bucket)) byBucket.set(bucket, new Map());
     const buckets = byBucket.get(bucket)!;
 

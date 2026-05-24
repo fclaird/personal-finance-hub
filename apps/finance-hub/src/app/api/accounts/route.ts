@@ -7,12 +7,12 @@ export async function GET() {
   const rows = db
     .prepare(
       `
-      SELECT id, name, nickname, type, connection_id
+      SELECT id, name, nickname, type, connection_id, account_bucket AS accountBucket
       FROM accounts
       ORDER BY name ASC
     `,
     )
-    .all() as Array<{ id: string; name: string; nickname: string | null; type: string; connection_id: string }>;
+    .all() as Array<{ id: string; name: string; nickname: string | null; type: string; connection_id: string; accountBucket: string | null }>;
 
   return NextResponse.json({ ok: true, accounts: rows });
 }

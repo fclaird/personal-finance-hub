@@ -4,6 +4,9 @@ import type { AccountBucket } from "@/lib/accountBuckets";
 import { isValidAccountBucket } from "@/lib/accountBuckets";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
+import { isManualAccountId } from "@/lib/manual/isManualAccountId";
+
+export { isManualAccountId } from "@/lib/manual/isManualAccountId";
 
 export const MANUAL_CONNECTION_ID = "conn_manual";
 
@@ -56,10 +59,6 @@ export function ensureManualConnection(db: Database.Database): void {
       updated_at = excluded.updated_at
   `,
   ).run({ id: MANUAL_CONNECTION_ID });
-}
-
-export function isManualAccountId(accountId: string): boolean {
-  return accountId.startsWith("manual_");
 }
 
 function assertManualAccount(db: Database.Database, accountId: string): ManualAccountRecord {

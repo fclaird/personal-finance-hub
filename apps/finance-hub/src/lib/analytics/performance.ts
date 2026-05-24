@@ -62,7 +62,7 @@ export function getPortfolioValueSeriesByBucket(bucket: BucketKey, mode: DataMod
     const pts = db
       .prepare(
         `
-        SELECT av.as_of as as_of, a.name as account_name, a.nickname as account_nickname, av.equity_value as mv
+        SELECT av.as_of as as_of, a.name as account_name, a.nickname as account_nickname, a.account_bucket as account_bucket, av.equity_value as mv
         FROM account_value_points av
         JOIN accounts a ON a.id = av.account_id
         WHERE a.id LIKE 'schwab_%'
@@ -70,10 +70,10 @@ export function getPortfolioValueSeriesByBucket(bucket: BucketKey, mode: DataMod
         ORDER BY av.as_of ASC
       `,
       )
-      .all() as Array<{ as_of: string; account_name: string; account_nickname: string | null; mv: number }>;
+      .all() as Array<{ as_of: string; account_name: string; account_nickname: string | null; account_bucket: string | null; mv: number }>;
     if (pts.length > 0) {
       for (const r of pts) {
-        const b = bucketFromAccount(r.account_name, r.account_nickname);
+        const b = bucketFromAccount(r.account_name, r.account_nickname, r.account_bucket);
         if (b !== bucket) continue;
         map.set(r.as_of, (map.get(r.as_of) ?? 0) + r.mv);
       }
@@ -88,7 +88,7 @@ export function getPortfolioValueSeriesByBucket(bucket: BucketKey, mode: DataMod
   const snaps = db
     .prepare(
       `
-      SELECT hs.as_of as as_of, a.name as account_name, a.nickname as account_nickname, SUM(COALESCE(p.market_value, 0)) AS mv
+      SELECT hs.as_of as as_of, a.name as account_name, a.nickname as account_nickname, a.account_bucket as account_bucket, SUM(COALESCE(p.market_value, 0)) AS mv
       FROM holding_snapshots hs
       JOIN accounts a ON a.id = hs.account_id
       JOIN positions p ON p.snapshot_id = hs.id
@@ -99,10 +99,10 @@ export function getPortfolioValueSeriesByBucket(bucket: BucketKey, mode: DataMod
       ORDER BY hs.as_of ASC
     `,
     )
-    .all() as Array<{ as_of: string; account_name: string; account_nickname: string | null; mv: number }>;
+    .all() as Array<{ as_of: string; account_name: string; account_nickname: string | null; account_bucket: string | null; mv: number }>;
 
   for (const r of snaps) {
-    const b = bucketFromAccount(r.account_name, r.account_nickname);
+    const b = bucketFromAccount(r.account_name, r.account_nickname, r.account_bucket);
     if (b !== bucket) continue;
     map.set(r.as_of, (map.get(r.as_of) ?? 0) + r.mv);
   }

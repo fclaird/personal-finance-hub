@@ -1,8 +1,8 @@
 import { getDb } from "@/lib/db";
 import type { DataMode } from "@/lib/dataMode";
 import { bucketFromAccount } from "@/lib/accountBuckets";
+import { latestSnapshotIds } from "@/lib/holdings/latestSnapshots";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
-import { notPosterityWhereSql } from "@/lib/posterity";
 
 /**
  * Portfolio-wide implied equity price for an underlying (non-option positions only),
@@ -17,25 +17,8 @@ export function portfolioImpliedEquityPrice(
 }
 
 export function portfolioImpliedEquityPriceMap(db: ReturnType<typeof getDb>, mode: DataMode): Map<string, number> {
-  const where =
-    mode === "schwab"
-      ? `a.id LIKE 'schwab_%' AND ${notPosterityWhereSql("a")}`
-      : `a.id NOT LIKE 'demo_%' AND ${notPosterityWhereSql("a")}`;
-
-  const snaps = db
-    .prepare(
-      `
-      SELECT hs.id AS snapshot_id
-      FROM accounts a
-      JOIN holding_snapshots hs ON hs.account_id = a.id
-      WHERE ${where}
-        AND hs.as_of = (
-          SELECT MAX(hs2.as_of) FROM holding_snapshots hs2 WHERE hs2.account_id = a.id
-        )
-    `,
-    )
-    .all() as Array<{ snapshot_id: string }>;
-  const snapshotIds = snaps.map((r) => r.snapshot_id);
+  const scope = mode === "schwab" ? "schwab_only" : "all_synced";
+  const snapshotIds = latestSnapshotIds(db, scope);
   if (snapshotIds.length === 0) return new Map();
 
   const rows = db
@@ -211,30 +194,29 @@ export function getUnderlyingExposureRollup(mode: DataMode = "auto"): ExposureRo
 
 export function getUnderlyingExposureByBucket(mode: DataMode = "auto"): BucketExposure[] {
   const db = getDb();
-  const where =
-    mode === "schwab"
-      ? `a.id LIKE 'schwab_%' AND ${notPosterityWhereSql("a")}`
-      : "1=1";
+  const scope = mode === "schwab" ? "schwab_only" : "all_synced";
+  const snapshotIdSet = new Set(latestSnapshotIds(db, scope));
 
   const snapshots = db
     .prepare(
       `
-      SELECT a.name AS account_name, a.nickname AS account_nickname, hs.id AS snapshot_id
+      SELECT a.name AS account_name, a.nickname AS account_nickname, a.account_bucket AS account_bucket, hs.id AS snapshot_id
       FROM accounts a
       JOIN holding_snapshots hs ON hs.account_id = a.id
-      WHERE ${where}
-        AND hs.as_of = (
+      WHERE hs.as_of = (
         SELECT MAX(hs2.as_of) FROM holding_snapshots hs2 WHERE hs2.account_id = a.id
       )
     `,
     )
-    .all() as Array<{ account_name: string; account_nickname: string | null; snapshot_id: string }>;
+    .all() as Array<{ account_name: string; account_nickname: string | null; account_bucket: string | null; snapshot_id: string }>;
 
   const byBucket = new Map<"brokerage" | "retirement", Map<string, ExposureRow>>();
   const priceByUnderlying = portfolioImpliedEquityPriceMap(db, mode);
 
   for (const s of snapshots) {
-    const bucket = bucketFromAccount(s.account_name, s.account_nickname);
+    if (!snapshotIdSet.has(s.snapshot_id)) continue;
+    const bucket = bucketFromAccount(s.account_name, s.account_nickname, s.account_bucket);
+    if (bucket === "529") continue;
     if (!byBucket.has(bucket)) byBucket.set(bucket, new Map());
     const map = byBucket.get(bucket)!;
 
