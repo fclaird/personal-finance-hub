@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, Treemap, XAxis, YAxis } from "recharts";
 
 import { TerminalTreemapWeightControls } from "@/app/components/terminal/TerminalTreemapWeightControls";
@@ -99,17 +99,24 @@ type Props = {
 export function DividendBookDashboard({ dashboard, masked }: Props) {
   const [treemapLabelMode, setTreemapLabelMode] = useState<TreemapLabelMode>("dollars");
   const [cumRange, setCumRange] = useState<CumulativeDividendsRange>("lifetime");
-  const [treemapScope, setTreemapScope] = useState<ExposureScope>(() => readTreemapScope());
-  const [treemapMetric, setTreemapMetric] = useState<ExposurePieMetric>(() => readTreemapMetric());
-  const [treemapSyntheticBasis, setTreemapSyntheticBasis] = useState<SyntheticChartBasis>(() =>
-    readTreemapSyntheticBasis(),
-  );
+  const [treemapScope, setTreemapScope] = useState<ExposureScope>("net");
+  const [treemapMetric, setTreemapMetric] = useState<ExposurePieMetric>("net");
+  const [treemapSyntheticBasis, setTreemapSyntheticBasis] = useState<SyntheticChartBasis>("delta");
+  const treemapPrefsHydratedRef = useRef(false);
   const [exposureRows, setExposureRows] = useState<ExposureRow[]>([]);
   const [exposureBuckets, setExposureBuckets] = useState<
     Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>
   >([]);
 
   useEffect(() => {
+    setTreemapScope(readTreemapScope());
+    setTreemapMetric(readTreemapMetric());
+    setTreemapSyntheticBasis(readTreemapSyntheticBasis());
+    treemapPrefsHydratedRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!treemapPrefsHydratedRef.current) return;
     try {
       localStorage.setItem("dividends_treemap_scope_v1", treemapScope);
       localStorage.setItem("dividends_treemap_metric_v1", treemapMetric);

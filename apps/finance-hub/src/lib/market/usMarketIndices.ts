@@ -1,5 +1,13 @@
 import { logError } from "@/lib/log";
-import { ensureCandles, getCachedCandles } from "@/lib/terminal/ohlcv";
+import {
+  filterYahooClosesToSession,
+  glanceSessionYmd,
+  isoDateInUsEastern,
+  schwabIntradayWindowForGlance,
+  toIndexedSeries,
+  yahooIntradayRangeForGlance,
+} from "@/lib/market/glanceSession";
+import { ensureCandles, getCachedCandles, type CandleWindow } from "@/lib/terminal/ohlcv";
 import { fetchYahooIntradayChart, yahooChartSymbol } from "@/lib/market/yahooChartFetch";
 import { ensureBenchmarkHistory, getCachedBenchmarkSeries } from "@/lib/market/benchmarks";
 import { schwabQuoteDisplayPrice } from "@/lib/market/schwabQuoteDisplay";
@@ -11,7 +19,6 @@ export type UsMarketIndexId = "sp500" | "nasdaq" | "russell2000";
 export type UsMarketIndexDefinition = {
   id: UsMarketIndexId;
   label: string;
-  /** ETF proxy quoted on Schwab/Yahoo (SPY, QQQ, IWM). */
   symbol: string;
 };
 
@@ -38,37 +45,92 @@ function asNum(v: unknown): number | null {
   return null;
 }
 
-function parseYahooIntraday(result: Record<string, unknown>): {
+function computeDayChange(last: number | null, previousClose: number | null): { change: number | null; changePct: number | null } {
+  if (last == null || previousClose == null || previousClose === 0) {
+    return { change: null, changePct: null };
+  }
+  const change = last - previousClose;
+  return { change, changePct: (change / previousClose) * 100 };
+}
+
+function seriesPriceRange(series: Array<{ close: number }>): number {
+  if (series.length === 0) return 0;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const p of series) {
+    min = Math.min(min, p.close);
+    max = Math.max(max, p.close);
+  }
+  return max - min;
+}
+
+function seriesIsFlat(series: Array<{ close: number }>, refPrice: number | null): boolean {
+  if (series.length < 2) return true;
+  const ref = Math.max(Math.abs(refPrice ?? series[0]!.close ?? 1), 1e-9);
+  return seriesPriceRange(series) / ref < 0.00005;
+}
+
+export function normalizeSeriesForChart(
+  series: Array<{ idx: number; close: number }>,
+  previousClose: number | null,
+  last: number | null,
+): Array<{ idx: number; close: number }> {
+  let out = series.map((p, i) => ({ idx: i, close: p.close }));
+
+  if (out.length === 0 && previousClose != null && last != null) {
+    return [
+      { idx: 0, close: previousClose },
+      { idx: 1, close: last },
+    ];
+  }
+
+  if (previousClose != null && out.length > 0) {
+    const head = out[0]!.close;
+    const ref = Math.max(Math.abs(previousClose), 1e-9);
+    if (Math.abs(head - previousClose) / ref > 0.00005) {
+      out = [{ idx: 0, close: previousClose }, ...out.map((p, i) => ({ idx: i + 1, close: p.close }))];
+    }
+  }
+
+  if (last != null && out.length > 0) {
+    const tail = out[out.length - 1]!.close;
+    const ref = Math.max(Math.abs(last), 1e-9);
+    if (Math.abs(tail - last) / ref > 0.00005) {
+      out = [...out, { idx: out.length, close: last }];
+    }
+  }
+
+  if (out.length === 1 && previousClose != null && last != null) {
+    return [
+      { idx: 0, close: previousClose },
+      { idx: 1, close: last },
+    ];
+  }
+
+  return out.map((p, i) => ({ idx: i, close: p.close }));
+}
+
+function parseYahooIntraday(
+  result: Record<string, unknown>,
+  sessionYmd: string,
+): {
   last: number | null;
   previousClose: number | null;
   series: Array<{ idx: number; close: number }>;
 } {
   const meta = result.meta as Record<string, unknown> | undefined;
-  const quote = (result.indicators as Record<string, unknown> | undefined)?.quote as
-    | Array<Record<string, unknown>>
-    | undefined;
-  const q0 = quote?.[0];
-  const closes = (q0?.close as Array<number | null> | undefined) ?? [];
-  const timestamps = (result.timestamp as number[] | undefined) ?? [];
+  const series = filterYahooClosesToSession(result, sessionYmd);
+  const lastFromSeries = series.length > 0 ? series[series.length - 1]!.close : null;
 
-  const points: Array<{ idx: number; close: number }> = [];
-  for (let i = 0; i < closes.length; i++) {
-    const c = closes[i];
-    if (c == null || !Number.isFinite(c)) continue;
-    points.push({ idx: points.length, close: c });
-  }
-
-  const lastFromSeries = points.length > 0 ? points[points.length - 1]!.close : null;
-  const last =
-    asNum(meta?.regularMarketPrice) ??
-    asNum(meta?.regularMarketPreviousClose) ??
-    lastFromSeries;
-  const previousClose =
-    asNum(meta?.chartPreviousClose) ??
-    asNum(meta?.previousClose) ??
-    (points.length > 1 ? points[0]!.close : null);
-
-  return { last, previousClose, series: points };
+  return {
+    last: lastFromSeries ?? asNum(meta?.regularMarketPrice),
+    previousClose:
+      asNum(meta?.chartPreviousClose) ??
+      asNum(meta?.previousClose) ??
+      asNum(meta?.regularMarketPreviousClose) ??
+      null,
+    series,
+  };
 }
 
 async function schwabQuoteForSymbol(symbol: string): Promise<{
@@ -99,90 +161,95 @@ async function schwabQuoteForSymbol(symbol: string): Promise<{
   }
 }
 
-async function schwabIntradaySeries(symbol: string): Promise<Array<{ idx: number; close: number }>> {
+async function schwabIntradaySeries(
+  symbol: string,
+  sessionYmd: string,
+  window: CandleWindow,
+): Promise<Array<{ idx: number; close: number }>> {
   try {
-    await ensureCandles(symbol, "5m", "1D");
-    const since = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    await ensureCandles(symbol, "5m", window);
+    const since = Date.now() - (window === "5D" ? 8 : 2) * 24 * 60 * 60 * 1000;
     const candles = getCachedCandles(symbol, "5m", since);
     if (candles.length >= 2) {
-      return candles.map((c, idx) => ({ idx, close: c.close }));
+      const session = candles.filter((c) => isoDateInUsEastern(c.tsMs) === sessionYmd);
+      const use = session.length >= 2 ? session : candles.slice(-78);
+      return toIndexedSeries(use.map((c) => c.close));
     }
     await ensureBenchmarkHistory(symbol);
-    const daily = getCachedBenchmarkSeries(symbol).slice(-30);
-    return daily.map((d, idx) => ({ idx, close: d.close }));
+    const daily = getCachedBenchmarkSeries(symbol).slice(-10);
+    const sessionDaily = daily.filter((d) => d.date === sessionYmd);
+    const useDaily = sessionDaily.length >= 1 ? sessionDaily : daily.slice(-1);
+    return toIndexedSeries(useDaily.map((d) => d.close));
   } catch (e) {
     logError(`us_market_schwab_series_${symbol}`, e);
     return [];
   }
 }
 
-async function buildIndexCard(def: UsMarketIndexDefinition): Promise<UsMarketIndexCard> {
+async function buildIndexCard(def: UsMarketIndexDefinition, sessionYmd: string, now: Date): Promise<UsMarketIndexCard> {
   const sym = def.symbol.toUpperCase();
   let last: number | null = null;
-  let change: number | null = null;
-  let changePct: number | null = null;
   let previousClose: number | null = null;
   let series: Array<{ idx: number; close: number }> = [];
   let dataSource: UsMarketIndexCard["dataSource"] = "yahoo";
 
-  const yahoo = await fetchYahooIntradayChart(sym);
+  const yahooRange = yahooIntradayRangeForGlance(now);
+  const schwabWindow = schwabIntradayWindowForGlance(now);
+
+  const yahoo = await fetchYahooIntradayChart(sym, yahooRange);
   if (yahoo?.result) {
-    const parsed = parseYahooIntraday(yahoo.result);
+    const parsed = parseYahooIntraday(yahoo.result, sessionYmd);
     last = parsed.last;
     previousClose = parsed.previousClose;
     series = parsed.series;
-    if (last != null && previousClose != null && previousClose !== 0) {
-      change = last - previousClose;
-      changePct = (change / previousClose) * 100;
+  }
+
+  const schwabQ = await schwabQuoteForSymbol(sym);
+  if (last == null) last = schwabQ.last;
+  if (previousClose == null) previousClose = schwabQ.previousClose;
+
+  if (series.length === 0 || seriesIsFlat(series, previousClose ?? last)) {
+    const schwabSeries = await schwabIntradaySeries(sym, sessionYmd, schwabWindow);
+    if (!seriesIsFlat(schwabSeries, previousClose ?? last)) {
+      series = schwabSeries;
+      dataSource = yahoo?.result ? "mixed" : "schwab";
     }
   }
 
-  if (last == null || series.length < 2) {
-    const schwabQ = await schwabQuoteForSymbol(sym);
-    if (last == null) {
-      last = schwabQ.last;
-      change = schwabQ.change;
-      changePct = schwabQ.changePercent == null ? null : schwabQ.changePercent * 100;
-      previousClose = schwabQ.previousClose;
-      dataSource = series.length >= 2 ? "mixed" : "schwab";
-    } else {
-      dataSource = "mixed";
-    }
-    if (series.length < 2) {
-      const schwabSeries = await schwabIntradaySeries(sym);
-      if (schwabSeries.length >= 2) {
-        series = schwabSeries;
-      }
-    }
+  if (last == null && schwabQ.last != null) {
+    last = schwabQ.last;
+    dataSource = "schwab";
   }
 
-  if (change == null && last != null && previousClose != null && previousClose !== 0) {
-    change = last - previousClose;
-    changePct = (change / previousClose) * 100;
+  if (last == null && series.length > 0) {
+    last = series[series.length - 1]!.close;
   }
+
+  series = normalizeSeriesForChart(series, previousClose, last);
+  const dayChange = computeDayChange(last, previousClose);
 
   return {
     id: def.id,
     label: def.label,
     symbol: yahooChartSymbol(sym),
     last,
-    change,
-    changePct,
+    change: dayChange.change,
+    changePct: dayChange.changePct,
     previousClose,
     series,
     dataSource,
   };
 }
 
-export async function fetchUsMarketIndexCards(): Promise<UsMarketIndexCard[]> {
+export async function fetchUsMarketIndexCards(now: Date = new Date()): Promise<UsMarketIndexCard[]> {
+  const sessionYmd = glanceSessionYmd(now);
   const cards: UsMarketIndexCard[] = [];
   for (const def of US_MARKET_INDEXES) {
-    cards.push(await buildIndexCard(def));
+    cards.push(await buildIndexCard(def, sessionYmd, now));
   }
   return cards;
 }
 
-/** Warm Schwab daily history for index ETF proxies (backup path). */
 export async function ensureUsMarketIndexBenchmarks(): Promise<void> {
   for (const def of US_MARKET_INDEXES) {
     try {
@@ -191,4 +258,13 @@ export async function ensureUsMarketIndexBenchmarks(): Promise<void> {
       logError(`us_market_benchmark_${def.symbol}`, e);
     }
   }
+}
+
+export function indexChangePctFromCards(cards: UsMarketIndexCard[], symbol: string): number | null {
+  const sym = symbol.trim().toUpperCase();
+  const card = cards.find((c) => {
+    const def = US_MARKET_INDEXES.find((d) => d.id === c.id);
+    return c.symbol.toUpperCase() === sym || def?.symbol === sym;
+  });
+  return card?.changePct ?? null;
 }

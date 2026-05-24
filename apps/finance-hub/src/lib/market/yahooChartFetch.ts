@@ -146,6 +146,7 @@ export async function fetchYahooChartResult(
 /** Intraday session chart (no dividend events) for index/ETF sparklines. */
 export async function fetchYahooIntradayChart(
   symbol: string,
+  range: "1d" | "5d" = "1d",
 ): Promise<{ result: Record<string, unknown>; meta: YahooChartFetchMeta } | null> {
-  return fetchYahooChartUrl(symbol, { interval: "5m", range: "1d" });
+  return fetchYahooChartUrl(symbol, { interval: "5m", range });
 }

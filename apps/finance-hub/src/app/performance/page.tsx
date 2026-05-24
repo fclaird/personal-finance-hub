@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
+import { filletLinearCurve } from "@/lib/charts/curveFilletLinear";
 import { formatDisplayDate } from "@/lib/formatDate";
 
 type HistoryChartRow = {
@@ -42,6 +43,54 @@ type ChartRow = {
 function formatPct(v: number) {
   const sign = v >= 0 ? "+" : "";
   return `${sign}${v.toFixed(2)}%`;
+}
+
+const TRACKING_START_FALLBACK = "2026-05-08";
+
+function trackingStartMs(iso: string | null | undefined): number {
+  const d = iso ?? TRACKING_START_FALLBACK;
+  const [y, m, day] = d.split("-").map(Number);
+  if (!y || !m || !day) return Date.parse(`${TRACKING_START_FALLBACK}T12:00:00`);
+  return new Date(y, m - 1, day).getTime();
+}
+
+function formatTrackingElapsed(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(totalSec / 86400);
+  const hours = Math.floor((totalSec % 86400) / 3600);
+  const minutes = Math.floor((totalSec % 3600) / 60);
+  const seconds = totalSec % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+
+  if (days > 0) return `${days}d ${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+}
+
+function TrackingDurationClock({ startIso }: { startIso: string | null | undefined }) {
+  const [elapsed, setElapsed] = useState<string | null>(null);
+
+  useEffect(() => {
+    const startMs = trackingStartMs(startIso);
+    const tick = () => setElapsed(formatTrackingElapsed(Date.now() - startMs));
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [startIso]);
+
+  return (
+    <div
+      className="shrink-0 text-right"
+      aria-live="polite"
+      aria-label={elapsed ? `Performance tracked for ${elapsed}` : "Performance tracking duration loading"}
+    >
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-teal-700 dark:text-teal-300/90">
+        Tracked
+      </div>
+      <div className="mt-0.5 min-w-[7.5rem] font-mono text-lg font-semibold tabular-nums tracking-tight text-teal-950 dark:text-teal-50">
+        {elapsed ?? "00:00:00"}
+      </div>
+    </div>
+  );
 }
 
 async function safeJson(resp: Response) {
@@ -110,7 +159,7 @@ export default function PerformancePage() {
   } as const;
 
   const trackingStart = hist?.ok ? hist.meta?.tracking_start : null;
-  const trackingStartLabel = trackingStart ? formatDisplayDate(trackingStart) : "May 8, 2026";
+  const trackingStartLabel = trackingStart ? formatDisplayDate(trackingStart) : formatDisplayDate(TRACKING_START_FALLBACK);
 
   const benchWarn =
     hist?.ok && (hist.meta?.benchmark_spy_rows ?? 0) === 0
@@ -126,21 +175,12 @@ export default function PerformancePage() {
 
   return (
     <div className="flex w-full max-w-[108rem] flex-1 flex-col gap-8 py-10 pl-5 pr-6 sm:pl-6 sm:pr-8">
-      <div
-        className="rounded-xl border border-teal-200 bg-teal-50 px-4 py-3 text-sm leading-relaxed text-teal-950 dark:border-teal-900/50 dark:bg-teal-950/30 dark:text-teal-100"
-        role="status"
-      >
-        Performance logging began on{" "}
-        <span className="font-semibold">{trackingStartLabel}</span>, when the program was initiated. All series below
-        show cumulative % change from that first trading day — a straight comparison of relative performance.
-      </div>
-
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Performance</h1>
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
             Cumulative % change from the first tracked trading day (weekdays only). Portfolio vs SPY and QQQ on the
-            same scale. Lines connect trading days with straight segments — no smoothing.
+            same scale. Straight segments between trading days with a very small corner radius at each point.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -165,32 +205,47 @@ export default function PerformancePage() {
         tiles={{
           controls: {
             title: "Bucket & range",
+            bodyClassName: "p-0",
             children: (
               <>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="text-sm font-medium">Bucket</div>
-            {(["combined", "retirement", "brokerage"] as const).map((b) => (
-              <button
-                key={b}
-                type="button"
-                onClick={() => setBucket(b)}
-                className={
-                  "rounded-full px-4 py-2 text-sm font-medium " +
-                  (bucket === b
-                    ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
-                    : "border border-zinc-300 bg-white text-zinc-900 shadow-sm hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
-                }
-              >
-                {b === "combined" ? "Combined" : b === "retirement" ? "Retirement" : "Brokerage"}
-              </button>
-            ))}
+        <div
+          className="space-y-3 border-b border-teal-200/80 bg-teal-50 px-4 py-3 text-sm text-teal-950 dark:border-teal-900/50 dark:bg-teal-950/30 dark:text-teal-100"
+          role="status"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <p className="min-w-0 flex-1 leading-relaxed">
+              Performance logging began on{" "}
+              <span className="font-semibold">{trackingStartLabel}</span>, when the program was initiated. All series
+              below show cumulative % change from that first trading day.
+            </p>
+            <TrackingDurationClock startIso={trackingStart} />
           </div>
-          <div className="text-sm text-zinc-600 dark:text-zinc-400">
-            Range: <span className="font-medium text-zinc-800 dark:text-zinc-200">All history (to date)</span>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="text-sm font-medium text-teal-900 dark:text-teal-100">Bucket</div>
+              {(["combined", "retirement", "brokerage"] as const).map((b) => (
+                <button
+                  key={b}
+                  type="button"
+                  onClick={() => setBucket(b)}
+                  className={
+                    "rounded-full px-4 py-2 text-sm font-medium " +
+                    (bucket === b
+                      ? "bg-teal-800 text-white shadow-sm dark:bg-teal-200 dark:text-teal-950"
+                      : "border border-teal-300/80 bg-white/80 text-teal-950 shadow-sm hover:bg-white dark:border-teal-800/60 dark:bg-teal-950/40 dark:text-teal-50 dark:hover:bg-teal-950/60")
+                  }
+                >
+                  {b === "combined" ? "Combined" : b === "retirement" ? "Retirement" : "Brokerage"}
+                </button>
+              ))}
+            </div>
+            <div className="text-sm text-teal-800 dark:text-teal-200/90">
+              Range: <span className="font-medium text-teal-950 dark:text-teal-50">All history (to date)</span>
+            </div>
           </div>
         </div>
 
+        <div className="px-4 py-3">
         <div className="mb-3 flex flex-wrap items-center gap-4 text-sm text-zinc-600 dark:text-zinc-400">
           <div className="inline-flex items-center gap-2">
             <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: COLORS.portfolio }} />
@@ -219,6 +274,7 @@ export default function PerformancePage() {
             {hist.error}
           </div>
         ) : null}
+        </div>
               </>
             ),
           },
@@ -278,7 +334,7 @@ export default function PerformancePage() {
                   }}
                 />
                 <Line
-                  type="linear"
+                  type={filletLinearCurve}
                   dataKey="Portfolio"
                   name="Portfolio"
                   strokeWidth={2}
@@ -287,7 +343,7 @@ export default function PerformancePage() {
                   isAnimationActive={false}
                 />
                 <Line
-                  type="linear"
+                  type={filletLinearCurve}
                   dataKey="SPY"
                   name="SPY"
                   strokeWidth={2}
@@ -297,7 +353,7 @@ export default function PerformancePage() {
                   isAnimationActive={false}
                 />
                 <Line
-                  type="linear"
+                  type={filletLinearCurve}
                   dataKey="QQQ"
                   name="QQQ"
                   strokeWidth={2}

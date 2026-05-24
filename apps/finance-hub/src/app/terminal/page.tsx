@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Area, AreaChart, Line, LineChart, ReferenceLine, ResponsiveContainer } from "recharts";
+import { Area, AreaChart, Line, LineChart, ReferenceLine, ResponsiveContainer, YAxis } from "recharts";
 
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { useMarketAwareInterval } from "@/hooks/useMarketAwareInterval";
@@ -54,12 +54,6 @@ type OptionFlowPayload = {
 
 type SortCol = "symbol" | "company" | "last" | "chgPct" | "chg" | "volume" | "volX";
 type VolumeInfo = { volume: number | null; avgVolume20: number | null; ratio: number | null; flagged: boolean };
-type QuickGlance = {
-  portfolioPct: number | null;
-  spyPct: number | null;
-  qqqPct: number | null;
-  updatedAt: string;
-};
 
 type UsMarketGlanceItem = {
   id: string;
@@ -106,7 +100,92 @@ function readTreemapSyntheticBasis(): SyntheticChartBasis {
   return "delta";
 }
 
+function sparklineYDomain(series: Array<{ close: number }>, previousClose: number | null): [number, number] {
+  const vals = series.map((p) => p.close);
+  if (previousClose != null && Number.isFinite(previousClose)) vals.push(previousClose);
+  if (vals.length === 0) return [0, 1];
+  let min = Math.min(...vals);
+  let max = Math.max(...vals);
+  if (min === max) {
+    const bump = Math.max(Math.abs(min) * 0.001, 0.05);
+    min -= bump;
+    max += bump;
+  } else {
+    const pad = Math.max((max - min) * 0.12, 0.02);
+    min -= pad;
+    max += pad;
+  }
+  return [min, max];
+}
+
 const PCT2 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function MarketGlanceCard({ item }: { item: UsMarketGlanceItem }) {
+  const pct = item.changePct;
+  const up = pct == null ? true : pct >= 0;
+  const stroke = up ? "#22c55e" : "#ef4444";
+  const gradId = `usmk-${item.id}`;
+  const chartData = item.series;
+  const prev = item.previousClose;
+  const yDomain = sparklineYDomain(chartData, prev);
+  const isPortfolio = item.id === "portfolio";
+
+  return (
+    <div className="min-w-[11.5rem] flex-1 rounded-xl border border-zinc-300 bg-zinc-50 p-3 dark:border-white/15 dark:bg-zinc-900/80">
+      <div className="text-xs font-medium text-zinc-700 dark:text-zinc-200">{item.label}</div>
+      {chartData.length >= 2 ? (
+        <div className="mt-1 h-14 w-full min-w-0">
+          <ResponsiveContainer width="100%" height="100%" minWidth={64} minHeight={56}>
+            <AreaChart data={chartData} margin={{ top: 2, right: 2, left: 0, bottom: 0 }}>
+              <YAxis hide domain={yDomain} />
+              <defs>
+                <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={stroke} stopOpacity={0.35} />
+                  <stop offset="100%" stopColor={stroke} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              {prev != null && Number.isFinite(prev) ? (
+                <ReferenceLine
+                  y={prev}
+                  stroke="currentColor"
+                  strokeDasharray="3 3"
+                  className="text-zinc-400 dark:text-zinc-500"
+                  strokeOpacity={0.55}
+                />
+              ) : null}
+              <Area
+                type="linear"
+                dataKey="close"
+                dot={false}
+                stroke={stroke}
+                fill={`url(#${gradId})`}
+                strokeWidth={1.5}
+                isAnimationActive={false}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        <div className="mt-1 h-14 text-[10px] text-zinc-500">No intraday data</div>
+      )}
+      <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0">
+        <span className="text-lg font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
+          {item.last == null ? "—" : item.last.toFixed(2)}
+          {isPortfolio ? <span className="ml-1 text-[10px] font-normal text-zinc-500">idx</span> : null}
+        </span>
+        {item.change != null ? (
+          <span className={"text-xs tabular-nums " + posNegClass(item.change)}>
+            {item.change >= 0 ? "+" : ""}
+            {item.change.toFixed(2)}
+          </span>
+        ) : null}
+      </div>
+      <div className={"text-xs tabular-nums " + posNegClass(pct)}>
+        {pct == null ? "—" : `${pct >= 0 ? "+" : ""}${PCT2.format(pct)}%`}
+      </div>
+    </div>
+  );
+}
 
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
@@ -227,17 +306,22 @@ export default function TerminalPage() {
   const [exposureBuckets, setExposureBuckets] = useState<
     Array<{ bucketKey: "brokerage" | "retirement"; exposure: ExposureRow[] }>
   >([]);
-  const [treemapScope, setTreemapScope] = useState<ExposureScope>(() => readTreemapScope());
-  const [treemapMetric, setTreemapMetric] = useState<ExposurePieMetric>(() => readTreemapMetric());
-  const [treemapSyntheticBasis, setTreemapSyntheticBasis] = useState<SyntheticChartBasis>(() =>
-    readTreemapSyntheticBasis(),
-  );
-  const [quick, setQuick] = useState<QuickGlance | null>(null);
+  const [treemapScope, setTreemapScope] = useState<ExposureScope>("net");
+  const [treemapMetric, setTreemapMetric] = useState<ExposurePieMetric>("net");
+  const [treemapSyntheticBasis, setTreemapSyntheticBasis] = useState<SyntheticChartBasis>("delta");
+  const treemapPrefsHydratedRef = useRef(false);
   const [futuresItems, setFuturesItems] = useState<
     Array<{ symbol: string; quote: NormalizedQuote; series: Array<{ date: string; close: number }> }>
   >([]);
   const [usMarkets, setUsMarkets] = useState<{
-    session: { headline: string; detail: string; isOpen: boolean };
+    session: {
+      headline: string;
+      detail: string;
+      isOpen: boolean;
+      sessionYmd?: string;
+      sessionLabel?: string;
+      showingPriorSession?: boolean;
+    };
     items: UsMarketGlanceItem[];
     updatedAt: string | null;
   } | null>(null);
@@ -538,7 +622,14 @@ export default function TerminalPage() {
       const resp = await fetch("/api/terminal/us-markets", { cache: "no-store" });
       const json = await terminalFetchJson<{
         ok: boolean;
-        session?: { headline: string; detail: string; isOpen: boolean };
+        session?: {
+          headline: string;
+          detail: string;
+          isOpen: boolean;
+          sessionYmd?: string;
+          sessionLabel?: string;
+          showingPriorSession?: boolean;
+        };
         items?: UsMarketGlanceItem[];
         updatedAt?: string;
       }>(resp, "us-markets");
@@ -592,6 +683,14 @@ export default function TerminalPage() {
   }, []);
 
   useEffect(() => {
+    setTreemapScope(readTreemapScope());
+    setTreemapMetric(readTreemapMetric());
+    setTreemapSyntheticBasis(readTreemapSyntheticBasis());
+    treemapPrefsHydratedRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!treemapPrefsHydratedRef.current) return;
     try {
       localStorage.setItem("terminal_treemap_scope_v1", treemapScope);
       localStorage.setItem("terminal_treemap_metric_v1", treemapMetric);
@@ -691,24 +790,6 @@ export default function TerminalPage() {
 
           setPositionMvBySym(mvBySym);
           void loadExposureWeighting();
-
-          const qMap = new Map<string, NormalizedQuote>();
-          for (const q of quotes) qMap.set(q.symbol.toUpperCase(), q);
-
-          let cur = 0;
-          let prev = 0;
-          for (const [sym, mv] of mvBySym.entries()) {
-            const q = qMap.get(sym);
-            const pct = q?.changePercent ?? null;
-            if (pct == null || !Number.isFinite(pct)) continue;
-            cur += mv;
-            prev += mv / (1 + pct);
-          }
-
-          const portfolioPct = prev > 0 ? (cur / prev - 1) * 100 : null;
-          const spyPct = qMap.get("SPY")?.changePercent == null ? null : qMap.get("SPY")!.changePercent! * 100;
-          const qqqPct = qMap.get("QQQ")?.changePercent == null ? null : qMap.get("QQQ")!.changePercent! * 100;
-          setQuick({ portfolioPct, spyPct, qqqPct, updatedAt: new Date().toISOString() });
         } catch {
           // ignore
         }
@@ -880,120 +961,47 @@ export default function TerminalPage() {
             title: "Quick glance (today)",
             children: (
               <>
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          <div className="text-xs text-zinc-600 dark:text-zinc-400">{quick ? `Updated ${new Date(quick.updatedAt).toLocaleTimeString()}` : "—"}</div>
-        </div>
-        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-          {(
-            [
-              { key: "portfolio", label: "Portfolio", pct: quick?.portfolioPct ?? null },
-              { key: "SPY", label: "SPY", pct: quick?.spyPct ?? null },
-              { key: "QQQ", label: "QQQ", pct: quick?.qqqPct ?? null },
-            ] as const
-          ).map((r) => {
-            const v = r.pct;
-            const cls = posNegClass(v);
-            return (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {usMarkets ? (
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
               <div
-                key={r.key}
-                style={pctToTileStyle(v)}
-                className="rounded-xl border border-zinc-300 bg-white/60 px-4 py-3 dark:border-white/20 dark:bg-transparent"
+                className="flex flex-wrap items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
+                title={usMarkets.session.detail}
               >
-                <div className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{r.label}</div>
-                <div className={"mt-1 text-lg font-semibold tabular-nums " + cls}>{v == null ? "—" : `${PCT2.format(v)}%`}</div>
+                <span aria-hidden className="text-amber-500">
+                  ☀
+                </span>
+                <span>{usMarkets.session.headline}</span>
               </div>
-            );
-          })}
-        </div>
-        <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
-          Portfolio today % is computed from latest synced position market values weighted by each symbol’s % change (proxy).
+              {usMarkets.session.showingPriorSession && usMarkets.session.sessionLabel ? (
+                <span className="text-[11px] font-medium text-zinc-600 dark:text-zinc-300">
+                  Showing {usMarkets.session.sessionLabel}
+                </span>
+              ) : null}
+            </div>
+          ) : (
+            <div />
+          )}
+          <div className="text-xs text-zinc-600 dark:text-zinc-400">
+            {usMarkets?.updatedAt ? `Updated ${new Date(usMarkets.updatedAt).toLocaleTimeString()}` : "—"}
+          </div>
         </div>
 
         {usMarkets && usMarkets.items.length > 0 ? (
-          <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-white/10">
-            <div
-              className="flex flex-wrap items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
-              title={usMarkets.session.detail}
-            >
-              <span aria-hidden className="text-amber-500">
-                ☀
-              </span>
-              <span>{usMarkets.session.headline}</span>
-            </div>
+          <>
             <div className="mt-3 flex gap-3 overflow-x-auto pb-1">
-              {usMarkets.items.map((item) => {
-                const pct = item.changePct;
-                const up = pct == null ? true : pct >= 0;
-                const stroke = up ? "#22c55e" : "#ef4444";
-                const gradId = `usmk-${item.id}`;
-                const chartData = item.series;
-                const prev = item.previousClose;
-                return (
-                  <div
-                    key={item.id}
-                    className="min-w-[11.5rem] flex-1 rounded-xl border border-zinc-300 bg-zinc-50 p-3 dark:border-white/15 dark:bg-zinc-900/80"
-                  >
-                    <div className="text-xs font-medium text-zinc-700 dark:text-zinc-200">{item.label}</div>
-                    {chartData.length >= 2 ? (
-                      <div className="mt-1 h-14 w-full min-w-0">
-                        <ResponsiveContainer width="100%" height="100%" minWidth={64} minHeight={56}>
-                          <AreaChart data={chartData} margin={{ top: 2, right: 2, left: 0, bottom: 0 }}>
-                            <defs>
-                              <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stopColor={stroke} stopOpacity={0.35} />
-                                <stop offset="100%" stopColor={stroke} stopOpacity={0} />
-                              </linearGradient>
-                            </defs>
-                            {prev != null && Number.isFinite(prev) ? (
-                              <ReferenceLine
-                                y={prev}
-                                stroke="currentColor"
-                                strokeDasharray="3 3"
-                                className="text-zinc-400 dark:text-zinc-500"
-                                strokeOpacity={0.55}
-                              />
-                            ) : null}
-                            <Area
-                              type="monotone"
-                              dataKey="close"
-                              dot={false}
-                              stroke={stroke}
-                              fill={`url(#${gradId})`}
-                              strokeWidth={1.5}
-                              isAnimationActive={false}
-                            />
-                          </AreaChart>
-                        </ResponsiveContainer>
-                      </div>
-                    ) : (
-                      <div className="mt-1 h-14 text-[10px] text-zinc-500">No intraday data</div>
-                    )}
-                    <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0">
-                      <span className="text-lg font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
-                        {item.last == null ? "—" : item.last.toFixed(2)}
-                      </span>
-                      {item.change != null ? (
-                        <span className={"text-xs tabular-nums " + posNegClass(item.change)}>
-                          {item.change >= 0 ? "+" : ""}
-                          {item.change.toFixed(2)}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className={"text-xs tabular-nums " + posNegClass(pct)}>
-                      {pct == null ? "—" : `${pct >= 0 ? "+" : ""}${PCT2.format(pct)}%`}
-                    </div>
-                  </div>
-                );
-              })}
+              {usMarkets.items.map((item) => (
+                <MarketGlanceCard key={item.id} item={item} />
+              ))}
             </div>
-            {usMarkets.updatedAt ? (
-              <div className="mt-2 text-[10px] text-zinc-500 dark:text-zinc-500">
-                Index proxies ({usMarkets.items.map((i) => i.symbol).join(", ")}) via Yahoo Finance; Schwab when unavailable.
-                Updated {new Date(usMarkets.updatedAt).toLocaleTimeString()}.
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+            <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
+              Portfolio is MV-weighted from your holdings’ 5-minute bars (indexed to 100 at session open). Index cards
+              use ETF proxies (SPY, QQQ, IWM). When markets are closed, charts replay the last completed US session.
+            </div>
+          </>
+        ) : (
+          <div className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">Loading today&apos;s glance…</div>
+        )}
               </>
             ),
           },
