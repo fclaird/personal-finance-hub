@@ -1,7 +1,12 @@
 import type Database from "better-sqlite3";
 
+import { notAuroraExclusiveWhereSql } from "@/lib/auroraExclusive";
 import type { DataMode } from "@/lib/dataMode";
 import { notPosterityWhereSql } from "@/lib/posterity";
+
+function syncedAccountsBaseWhereSql(alias: string): string {
+  return `${alias}.id NOT LIKE 'demo_%' AND ${notPosterityWhereSql(alias)} AND ${notAuroraExclusiveWhereSql(alias)}`;
+}
 
 export type LatestSnapshotScope = "all_synced" | "schwab_only";
 
@@ -17,14 +22,14 @@ export function latestSnapshotPerAccountJoinSql(hsAlias = "hs"): string {
   ) _latest_snap ON _latest_snap.account_id = ${hsAlias}.account_id AND _latest_snap.max_as_of = ${hsAlias}.as_of`;
 }
 
-/** All synced accounts: Schwab, manual, Plaid, etc. (excludes posterity + demo). */
+/** All synced accounts: Schwab, manual, Plaid, etc. (excludes posterity, Aurora-exclusive, demo). */
 export function allSyncedAccountsWhereSql(alias = "a"): string {
-  return `${alias}.id NOT LIKE 'demo_%' AND ${notPosterityWhereSql(alias)}`;
+  return syncedAccountsBaseWhereSql(alias);
 }
 
-/** Schwab broker + manual external accounts (excludes posterity + demo). Used for REAL data mode. */
+/** Schwab broker + manual external accounts (excludes posterity, Aurora-exclusive, demo). Used for REAL data mode. */
 export function syncedBrokerAndManualWhereSql(alias = "a"): string {
-  return `(${alias}.id LIKE 'schwab_%' OR ${alias}.id LIKE 'manual_%') AND ${alias}.id NOT LIKE 'demo_%' AND ${notPosterityWhereSql(alias)}`;
+  return `(${alias}.id LIKE 'schwab_%' OR ${alias}.id LIKE 'manual_%') AND ${syncedAccountsBaseWhereSql(alias)}`;
 }
 
 export function latestSnapshotScopeForMode(mode: DataMode): LatestSnapshotScope {

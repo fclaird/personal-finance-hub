@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 
+import { isAuroraExclusiveAccountId } from "@/lib/auroraExclusive";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { DEFAULT_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
@@ -118,6 +119,7 @@ export async function syncSchwabBrokerTransactions(options?: {
     const hash = (n.hashValue ?? "").trim();
     if (!num || !hash) continue;
     const localId = `schwab_${num}`;
+    if (isAuroraExclusiveAccountId(localId)) continue;
     const acc = db.prepare(`SELECT 1 AS ok FROM accounts WHERE id = ?`).get(localId) as { ok: number } | undefined;
     if (!acc) continue;
     updateHash.run({ hash, now, id: localId });

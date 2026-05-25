@@ -1,4 +1,4 @@
-export const POSTERITY_ACCOUNT_IDS = ["schwab_50138076", "schwab_94558855"] as const;
+export const POSTERITY_ACCOUNT_IDS = ["schwab_50138076"] as const;
 
 export function isPosterityAccountId(id: string | null | undefined): boolean {
   if (!id) return false;

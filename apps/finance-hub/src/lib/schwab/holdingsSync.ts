@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 
+import { AURORA_EXCLUSIVE_ACCOUNT_IDS, isAuroraExclusiveAccountId } from "@/lib/auroraExclusive";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { logError } from "@/lib/log";
@@ -92,6 +93,9 @@ export async function runSchwabHoldingsSync(
   try {
     db.prepare(`DELETE FROM accounts WHERE id = 'schwab_undefined'`).run();
     db.prepare(`DELETE FROM accounts WHERE id LIKE 'demo_%'`).run();
+    for (const auroraId of AURORA_EXCLUSIVE_ACCOUNT_IDS) {
+      db.prepare(`DELETE FROM accounts WHERE id = ?`).run(auroraId);
+    }
 
     let accounts: Array<SchwabAccount & { __accountNumber: string | null }> = [];
     try {
@@ -182,6 +186,7 @@ export async function runSchwabHoldingsSync(
           newId("schwabacct");
 
         const accountId = `schwab_${acctIdPart}`;
+        if (isAuroraExclusiveAccountId(accountId)) continue;
         upsertAccount.run({
           id: accountId,
           connection_id: connId,

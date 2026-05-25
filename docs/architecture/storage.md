@@ -36,7 +36,12 @@ This document defines where **Personal Finance Hub** code, configuration, and ru
 └── logs/                                        # Optional local logs
 
 ~/Projects/SimulatedDividendPortfolio/           # Related repo (standalone)
+~/Projects/aurora-personal-finance-hub/        # Aurora's dashboard (Schwab account schwab_94558855 only)
 ```
+
+## Aurora account split
+
+Schwab account **`schwab_94558855`** is owned by [Aurora Finance Hub](../../../aurora-personal-finance-hub). The parent Finance Hub excludes it from sync and analytics via `src/lib/auroraExclusive.ts`. Aurora's runtime data lives at `~/.local/share/aurora-finance-hub/`.
 
 ## Runtime data contract
 

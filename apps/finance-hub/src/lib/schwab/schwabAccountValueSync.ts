@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 
+import { isAuroraExclusiveAccountId } from "@/lib/auroraExclusive";
 import { getDb } from "@/lib/db";
 import { schwabFetch } from "@/lib/schwab/client";
 
@@ -82,6 +83,7 @@ export async function runSchwabAccountValueSync(db?: Database.Database): Promise
           (sa.accountNumber != null && String(sa.accountNumber).trim() !== "" ? String(sa.accountNumber) : null);
         if (!acctIdPart) continue;
         const accountId = `schwab_${acctIdPart}`;
+        if (isAuroraExclusiveAccountId(accountId)) continue;
         const cash = pickCashUsd(sa.currentBalances);
         const equity = pickEquityUsd(sa.currentBalances);
         if (equity == null || !Number.isFinite(equity)) continue;
