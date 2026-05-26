@@ -69,6 +69,7 @@ export type YahooChartQuery = {
   interval?: string;
   range?: string;
   events?: string;
+  includePrePost?: boolean;
 };
 
 async function fetchYahooChartUrl(
@@ -80,6 +81,7 @@ async function fetchYahooChartUrl(
   params.set("interval", query.interval ?? "1d");
   params.set("range", query.range ?? "5y");
   if (query.events) params.set("events", query.events);
+  if (query.includePrePost) params.set("includePrePost", "true");
   const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?${params.toString()}`;
 
   await throttleYahoo();
@@ -147,6 +149,11 @@ export async function fetchYahooChartResult(
 export async function fetchYahooIntradayChart(
   symbol: string,
   range: "1d" | "5d" = "1d",
+  opts: { includePrePost?: boolean } = {},
 ): Promise<{ result: Record<string, unknown>; meta: YahooChartFetchMeta } | null> {
-  return fetchYahooChartUrl(symbol, { interval: "5m", range });
+  return fetchYahooChartUrl(symbol, {
+    interval: "5m",
+    range,
+    includePrePost: opts.includePrePost,
+  });
 }

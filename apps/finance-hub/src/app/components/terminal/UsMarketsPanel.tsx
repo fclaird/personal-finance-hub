@@ -1,51 +1,103 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { MarketGlanceCard, type UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
+import {
+  MarketGlanceCard,
+  sharedSparklineYDomain,
+  type UsMarketGlanceItem,
+} from "@/app/components/terminal/MarketGlanceCard";
 import { MarketGlanceCombinedChart } from "@/app/components/terminal/MarketGlanceCombinedChart";
+import {
+  GLANCE_ALTERNATE_INSTRUMENT_OPTIONS,
+  pickGlanceAlternateCard,
+  type GlanceAlternateInstrumentId,
+} from "@/lib/market/glanceAlternateInstrumentIds";
+import {
+  readGlanceAlternateInstrument,
+  readGlanceSourceMode,
+  readGlanceViewMode,
+  writeGlanceAlternateInstrument,
+  writeGlanceSourceMode,
+  writeGlanceViewMode,
+  type GlanceSourceMode,
+  type GlanceViewMode,
+} from "@/app/components/terminal/terminalDisplayPrefs";
 
 export type UsMarketsPayload = {
   updatedAt?: string | null;
   session: {
     headline: string;
     detail: string;
+    isOpen: boolean;
     showingPriorSession?: boolean;
     sessionLabel?: string;
+    sessionYmd?: string;
   };
   items: UsMarketGlanceItem[];
+  alternateGlanceItems?: UsMarketGlanceItem[];
+  futuresGlanceItems?: UsMarketGlanceItem[];
 };
 
-export type GlanceViewMode = "tiles" | "combined";
-
-const GLANCE_VIEW_STORAGE_KEY = "terminal_glance_view_v1";
-
-function readGlanceViewMode(): GlanceViewMode {
-  try {
-    const v = localStorage.getItem(GLANCE_VIEW_STORAGE_KEY);
-    return v === "combined" ? "combined" : "tiles";
-  } catch {
-    return "tiles";
-  }
-}
+export type { GlanceViewMode };
 
 const VIEW_BTN =
   "rounded-md px-2.5 py-1 text-xs font-semibold tracking-tight transition-colors";
 
+function resolveGlanceMarketOpen(
+  item: UsMarketGlanceItem,
+  sessionIsOpen: boolean,
+): boolean {
+  if (item.tradableOpen != null) return item.tradableOpen;
+  if (item.futuresKind != null || item.instrumentKind === "cash_index") return false;
+  return sessionIsOpen;
+}
+
 export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | null }) {
   const [viewMode, setViewMode] = useState<GlanceViewMode>("tiles");
+  const [sourceMode, setSourceMode] = useState<GlanceSourceMode>("markets");
+  const [alternateInstrumentId, setAlternateInstrumentId] = useState<GlanceAlternateInstrumentId>(
+    readGlanceAlternateInstrument(),
+  );
+  const [prefsHydrated, setPrefsHydrated] = useState(false);
 
   useEffect(() => {
     setViewMode(readGlanceViewMode());
+    setSourceMode(readGlanceSourceMode());
+    setAlternateInstrumentId(readGlanceAlternateInstrument());
+    setPrefsHydrated(true);
   }, []);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(GLANCE_VIEW_STORAGE_KEY, viewMode);
-    } catch {
-      /* ignore */
-    }
-  }, [viewMode]);
+    if (!prefsHydrated) return;
+    writeGlanceViewMode(viewMode);
+  }, [viewMode, prefsHydrated]);
+
+  useEffect(() => {
+    if (!prefsHydrated) return;
+    writeGlanceSourceMode(sourceMode);
+  }, [sourceMode, prefsHydrated]);
+
+  useEffect(() => {
+    if (!prefsHydrated) return;
+    writeGlanceAlternateInstrument(alternateInstrumentId);
+  }, [alternateInstrumentId, prefsHydrated]);
+
+  const alternateItem = useMemo(
+    () => pickGlanceAlternateCard(usMarkets?.alternateGlanceItems ?? [], alternateInstrumentId),
+    [usMarkets?.alternateGlanceItems, alternateInstrumentId],
+  );
+
+  const displayItems = useMemo(() => {
+    if (sourceMode === "futures") return usMarkets?.futuresGlanceItems ?? [];
+    const base = usMarkets?.items ?? [];
+    return alternateItem ? [...base, alternateItem] : base;
+  }, [alternateItem, sourceMode, usMarkets?.futuresGlanceItems, usMarkets?.items]);
+
+  const tileChartYDomain = useMemo(
+    () => (displayItems.length > 0 ? sharedSparklineYDomain(displayItems) : undefined),
+    [displayItems],
+  );
 
   return (
     <>
@@ -61,9 +113,14 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
               </span>
               <span>{usMarkets.session.headline}</span>
             </div>
-            {usMarkets.session.showingPriorSession && usMarkets.session.sessionLabel ? (
+            {sourceMode === "markets" && usMarkets.session.showingPriorSession && usMarkets.session.sessionLabel ? (
               <span className="text-[11px] font-medium text-zinc-600 dark:text-zinc-300">
                 Showing {usMarkets.session.sessionLabel}
+              </span>
+            ) : null}
+            {sourceMode === "futures" ? (
+              <span className="text-[11px] font-medium text-zinc-600 dark:text-zinc-300">
+                Nikkei · ES · NQ · Russell (Yahoo + Stooq)
               </span>
             ) : null}
           </div>
@@ -71,6 +128,38 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
           <div />
         )}
         <div className="flex flex-wrap items-center gap-2">
+          <div
+            className="inline-flex rounded-lg border border-zinc-300 bg-white p-0.5 dark:border-white/20 dark:bg-zinc-950"
+            role="group"
+            aria-label="Quick glance data source"
+          >
+            <button
+              type="button"
+              onClick={() => setSourceMode("markets")}
+              aria-pressed={sourceMode === "markets"}
+              className={
+                VIEW_BTN +
+                (sourceMode === "markets"
+                  ? " bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                  : " text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900")
+              }
+            >
+              Markets
+            </button>
+            <button
+              type="button"
+              onClick={() => setSourceMode("futures")}
+              aria-pressed={sourceMode === "futures"}
+              className={
+                VIEW_BTN +
+                (sourceMode === "futures"
+                  ? " bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                  : " text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900")
+              }
+            >
+              Futures
+            </button>
+          </div>
           <div
             className="inline-flex rounded-lg border border-zinc-300 bg-white p-0.5 dark:border-white/20 dark:bg-zinc-950"
             role="group"
@@ -109,25 +198,49 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
         </div>
       </div>
 
-      {usMarkets && usMarkets.items.length > 0 ? (
+      {usMarkets && displayItems.length > 0 ? (
         <>
           {viewMode === "tiles" ? (
-            <div className="mt-3 flex gap-3 overflow-x-auto pb-1">
-              {usMarkets.items.map((item) => (
-                <MarketGlanceCard key={item.id} item={item} />
+            <div className="mt-3 grid min-w-0 grid-cols-4 gap-3 overflow-x-auto pb-1">
+              {displayItems.map((item) => (
+                <MarketGlanceCard
+                  key={item.id}
+                  item={item}
+                  chartYDomain={tileChartYDomain}
+                  className="min-w-0"
+                  marketOpen={resolveGlanceMarketOpen(item, usMarkets.session.isOpen)}
+                  sessionLabel={usMarkets.session.sessionLabel}
+                  sessionYmd={usMarkets.session.sessionYmd}
+                  updatedAt={usMarkets.updatedAt}
+                  alternateTitleSelector={
+                    sourceMode === "markets" && item.id === alternateItem?.id
+                      ? {
+                          options: GLANCE_ALTERNATE_INSTRUMENT_OPTIONS,
+                          value: alternateInstrumentId,
+                          onChange: setAlternateInstrumentId,
+                        }
+                      : undefined
+                  }
+                />
               ))}
             </div>
           ) : (
-            <MarketGlanceCombinedChart items={usMarkets.items} />
+            <MarketGlanceCombinedChart items={displayItems} />
           )}
           <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
             {viewMode === "combined"
-              ? "Combined view indexes each line to 100 at prior close so portfolio and index day moves are comparable. Portfolio uses live quotes × synced holdings; indices use ETF proxies (SPY, QQQ, IWM)."
-              : "Portfolio day % uses live quotes × synced share counts (same price logic as the quote table), includes cash and options, and is indexed to 100 at prior close. Index cards use ETF proxies (SPY, QQQ, IWM). When markets are closed, charts replay the last completed US session."}
+              ? sourceMode === "futures"
+                ? "Futures mode: green = Globex/cash session while that market trades (~23h ES/NQ Sun 6pm–Fri 5pm ET). Gray only for daily 5–6pm ET halt or weekend. Not US stock RTH hours."
+                : "Combined view indexes each line to 100 at prior close so portfolio and index day moves are comparable. Extended pre/after-hours segments are included when available."
+              : sourceMode === "futures"
+                ? "ES/NQ are CME Globex futures. Nikkei 225 is the Tokyo cash index (not a future). Russell 2000 tracks IWM with US equity session hours. Amber header = that market is closed."
+                : "Portfolio tile uses Schwab liquidation/account values for linked accounts, plus 529 and other external holdings. The 4th tile title opens a menu (Russell 2000, Gold, Bitcoin, WTI Crude, Nikkei 225, FTSE 100). Default is WTI Crude (CL futures, Globex hours). Tile charts share one Y scale indexed to prior close (dashed line)."}
           </div>
         </>
       ) : (
-        <div className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">Loading today&apos;s glance…</div>
+        <div className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
+          {sourceMode === "futures" ? "Loading global futures glance…" : "Loading today&apos;s glance…"}
+        </div>
       )}
     </>
   );

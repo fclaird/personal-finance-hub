@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Fragment, useEffect, useMemo, useState } from "react";
 
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
+import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { ExposurePositionTreemap } from "@/app/components/charts/ExposurePositionTreemap";
 import { FinancePiePanel } from "@/app/components/FinancePiePanel";
 import { SymbolLink } from "@/app/components/SymbolLink";
@@ -269,7 +270,9 @@ export default function PosterityPage() {
     <div className="flex w-full max-w-[108rem] flex-1 flex-col gap-8 py-10 pl-5 pr-6 sm:pl-6 sm:pr-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Posterity</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            <EditablePageHeading pageId="posterity" defaultTitle="Posterity" />
+          </h1>
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
             Archived Schwab accounts kept separate from the main dashboards.
           </p>

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { ExposurePositionTreemap } from "@/app/components/charts/ExposurePositionTreemap";
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
+import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { FinancePiePanel, type PieBucket } from "@/app/components/FinancePiePanel";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { formatUsd2 } from "@/lib/format";
@@ -360,7 +361,7 @@ export default function DiversificationPage() {
         </ControlGroup>
       </div>
       {expandedSectorKeys.length ? (
-        <p className="shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
+        <p className="shrink-0 text-xs text-zinc-600 dark:text-zinc-400">
           {expandedSectorKeys.length} slice{expandedSectorKeys.length === 1 ? "" : "s"} broken out
         </p>
       ) : null}
@@ -371,7 +372,9 @@ export default function DiversificationPage() {
     <div className="flex w-full max-w-[108rem] flex-1 flex-col gap-8 py-10 pl-5 pr-6 sm:pl-6 sm:pr-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Diversification</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            <EditablePageHeading pageId="diversification" defaultTitle="Diversification" />
+          </h1>
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
             Sector / market cap / revenue geography with the same account and pie-weight controls as Allocation.
           </p>

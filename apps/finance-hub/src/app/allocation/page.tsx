@@ -5,7 +5,9 @@ import { useMemo, useState } from "react";
 
 import { AccountPositionsForAllocation } from "@/app/components/AccountPositionsForAllocation";
 import { DraggableColumnHeader, DRAGGABLE_COLUMN_HEADER_GRAB_CLASS } from "@/app/components/DraggableColumnHeader";
+import { ColumnLabel } from "@/app/components/ColumnLabel";
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
+import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { DraggableControlColumn } from "@/app/components/DraggableControlColumn";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { AllocationWeightingChart } from "@/app/components/allocation/AllocationWeightingChart";
@@ -52,6 +54,8 @@ const DEFAULT_EXPOSURE_COLUMN_ORDER: readonly SortColumn[] = [
   "netShares",
   "pct",
 ];
+
+const EXPOSURE_COLUMN_TABLE_KEY = "fh.allocation.exposureColumns.v1";
 
 const EXPOSURE_COLUMN_LABEL: Record<SortColumn, string> = {
   underlying: "Underlying",
@@ -108,14 +112,16 @@ function usd2Masked(v: number, masked: boolean) {
 
 function SortHeaderBtn<T extends string>({
   col,
-  label,
+  tableKey,
+  defaultLabel,
   sortColumn,
   sortAsc,
   onToggle,
   align = "left",
 }: {
   col: T;
-  label: string;
+  tableKey: string;
+  defaultLabel: string;
   sortColumn: T;
   sortAsc: boolean;
   onToggle: (col: T) => void;
@@ -132,7 +138,7 @@ function SortHeaderBtn<T extends string>({
         (align === "right" ? "justify-end" : "justify-start")
       }
     >
-      <span>{label}</span>
+      <ColumnLabel tableKey={tableKey} columnId={col} defaultLabel={defaultLabel} />
       <span className="text-[10px] opacity-70">{arrow}</span>
     </button>
   );
@@ -318,7 +324,7 @@ export default function AllocationPage() {
     }>
   >([]);
   const { order: exposureColumnOrder, moveColumn: moveExposureColumn } = usePersistedColumnOrder(
-    "fh.allocation.exposureColumns.v1",
+    EXPOSURE_COLUMN_TABLE_KEY,
     DEFAULT_EXPOSURE_COLUMN_ORDER,
   );
 
@@ -452,11 +458,18 @@ export default function AllocationPage() {
     [chartScopedRows, pieMetric],
   );
 
-  /** One color per underlying (alphabetical palette) shared by pie, bars, and history line. */
-  const chartSymbolColors = useMemo(
-    () => assignEarthToneColorsBySymbols(chartScopedRows.map((r) => r.underlyingSymbol.trim()).filter(Boolean)),
-    [chartScopedRows],
-  );
+  /** One color per underlying (pie size order) shared by pie, bars, and history line. */
+  const chartSymbolColors = useMemo(() => {
+    const ordered = [...chartScopedRows]
+      .sort(
+        (a, b) =>
+          sliceMv(b, pieMetric) - sliceMv(a, pieMetric) ||
+          a.underlyingSymbol.localeCompare(b.underlyingSymbol, undefined, { sensitivity: "base" }),
+      )
+      .map((r) => r.underlyingSymbol.trim())
+      .filter(Boolean);
+    return assignEarthToneColorsBySymbols(ordered);
+  }, [chartScopedRows, pieMetric]);
 
   const sortedRows = useMemo(() => {
     const rs = [...tableRows];
@@ -547,7 +560,8 @@ export default function AllocationPage() {
       >
         <SortHeaderBtn
           col={col}
-          label={EXPOSURE_COLUMN_LABEL[col]}
+          tableKey={EXPOSURE_COLUMN_TABLE_KEY}
+          defaultLabel={EXPOSURE_COLUMN_LABEL[col]}
           sortColumn={sortColumn}
           sortAsc={sortAsc}
           onToggle={toggleSort}
@@ -770,7 +784,9 @@ export default function AllocationPage() {
     <div className="flex w-full min-w-0 max-w-[108rem] flex-1 flex-col gap-8 py-8 pl-4 pr-5 sm:py-10 sm:pl-6 sm:pr-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Allocation</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            <EditablePageHeading pageId="allocation" defaultTitle="Allocation" />
+          </h1>
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
             Exposure by underlying; pie chart switches Spot, Synthetic, or Net weights. Asset-class tables include delta-weighted option exposure in equities.{" "}
             <Link href="/diversification" className="font-medium text-zinc-900 underline-offset-4 hover:underline dark:text-zinc-100">
@@ -933,7 +949,7 @@ export default function AllocationPage() {
               if (id === "chartOpts") {
                 if (pieMetric !== "synthetic" && pieMetric !== "net") {
                   return (
-                    <p className="text-xs text-zinc-500 dark:text-zinc-500">
+                    <p className="text-xs text-zinc-600 dark:text-zinc-400">
                       Chart MV basis applies when weights are Net or Synthetic.
                     </p>
                   );
@@ -981,7 +997,7 @@ export default function AllocationPage() {
                           : "Retirement"}{" "}
                     · {PIE_METRIC_LABEL[pieMetric]}
                     {pieMetric !== "spot" && syntheticChartBasis === "mark" ? (
-                      <span className="mt-1 block text-zinc-500 dark:text-zinc-500">Charts use option contract marks</span>
+                      <span className="mt-1 block text-zinc-600 dark:text-zinc-400">Charts use option contract marks</span>
                     ) : null}
                   </div>
                 );

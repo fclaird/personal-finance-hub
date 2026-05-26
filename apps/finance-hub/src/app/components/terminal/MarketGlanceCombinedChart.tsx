@@ -14,9 +14,10 @@ import {
 } from "recharts";
 
 import {
-  GLANCE_CHART_LINES,
+  formatGlanceCombinedChartTime,
   glanceChartYDomain,
   mergeGlanceSeriesForChart,
+  resolveGlanceChartLines,
 } from "@/lib/terminal/marketGlanceChart";
 import { posNegClass } from "@/lib/terminal/colors";
 
@@ -25,15 +26,13 @@ import type { UsMarketGlanceItem } from "./MarketGlanceCard";
 const PCT2 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export function MarketGlanceCombinedChart({ items }: { items: UsMarketGlanceItem[] }) {
-  const lines = useMemo(() => {
-    const ids = new Set(items.map((i) => i.id));
-    return GLANCE_CHART_LINES.filter((l) => ids.has(l.id));
-  }, [items]);
+  const lines = useMemo(() => resolveGlanceChartLines(items), [items]);
 
   const chartData = useMemo(() => mergeGlanceSeriesForChart(items), [items]);
   const yDomain = useMemo(() => glanceChartYDomain(chartData, lines.map((l) => l.id)), [chartData, lines]);
+  const hasTimestamps = useMemo(() => chartData.some((row) => row.tsMs != null), [chartData]);
 
-  if (chartData.length < 2) {
+  if (chartData.length < 2 || lines.length === 0) {
     return <div className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">No intraday data for combined chart.</div>;
   }
 
@@ -41,9 +40,27 @@ export function MarketGlanceCombinedChart({ items }: { items: UsMarketGlanceItem
     <div className="mt-3 rounded-xl border border-zinc-300 bg-zinc-50 p-3 dark:border-white/15 dark:bg-zinc-900/80">
       <div className="h-52 w-full min-w-0">
         <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={208}>
-          <LineChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+          <LineChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: hasTimestamps ? 22 : 0 }}>
             <CartesianGrid strokeDasharray="3 3" className="stroke-zinc-200 dark:stroke-zinc-700" />
-            <XAxis dataKey="idx" hide />
+            {hasTimestamps ? (
+              <XAxis
+                dataKey="tsMs"
+                type="number"
+                domain={["dataMin", "dataMax"]}
+                tickFormatter={(ts) =>
+                  new Intl.DateTimeFormat("en-US", {
+                    hour: "numeric",
+                    minute: "2-digit",
+                    timeZone: "America/New_York",
+                  }).format(new Date(Number(ts)))
+                }
+                tick={{ fontSize: 10 }}
+                minTickGap={48}
+                className="fill-zinc-500 dark:fill-zinc-400"
+              />
+            ) : (
+              <XAxis dataKey="idx" hide />
+            )}
             <YAxis
               domain={yDomain}
               tickFormatter={(v) => `${Number(v).toFixed(1)}`}
@@ -59,12 +76,20 @@ export function MarketGlanceCombinedChart({ items }: { items: UsMarketGlanceItem
               strokeOpacity={0.7}
             />
             <Tooltip
-              formatter={(value: number, name: string) => {
+              formatter={(value, name) => {
+                const num = typeof value === "number" ? value : Number(value);
+                if (!Number.isFinite(num)) return ["—", String(name)];
                 const line = lines.find((l) => l.id === name);
-                const pct = value - 100;
-                return [`${pct >= 0 ? "+" : ""}${PCT2.format(pct)}%`, line?.label ?? name];
+                const pct = num - 100;
+                return [`${pct >= 0 ? "+" : ""}${PCT2.format(pct)}%`, line?.label ?? String(name)];
               }}
-              labelFormatter={() => "Session"}
+              labelFormatter={(_, payload) => {
+                const tsMs = payload?.[0]?.payload?.tsMs;
+                if (typeof tsMs === "number" && Number.isFinite(tsMs)) {
+                  return formatGlanceCombinedChartTime(tsMs);
+                }
+                return "Session";
+              }}
               contentStyle={{ fontSize: 12 }}
             />
             <Legend

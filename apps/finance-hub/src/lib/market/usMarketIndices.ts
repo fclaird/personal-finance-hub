@@ -1,7 +1,24 @@
 import { logError } from "@/lib/log";
+import type { FuturesGlanceKind } from "@/lib/market/futuresGlanceSession";
+import {
+  buildExtendedFallbackSeries,
+  computeExtendedChange,
+  extractYahooTimedCloses,
+  glanceChartContext,
+  nyBarPhase,
+  resolveGlanceSplitContext,
+  splitTimedPointsForGlance,
+} from "@/lib/market/glanceExtendedHours";
+import {
+  buildAlignedExtendedSeries,
+  extendedPhaseForGrid,
+  resampleTimedPointsToGrid,
+  toGlanceSeries,
+  type GlanceTimedGrid,
+} from "@/lib/market/glanceSessionGrid";
+import { filterTimedPointsForGlanceSession } from "@/lib/market/glanceTimedFilters";
 import {
   filterYahooClosesToSession,
-  glanceSessionYmd,
   isoDateInUsEastern,
   schwabIntradayWindowForGlance,
   toIndexedSeries,
@@ -25,11 +42,21 @@ export type UsMarketIndexDefinition = {
 export const US_MARKET_INDEXES: UsMarketIndexDefinition[] = [
   { id: "sp500", label: "S&P 500", symbol: "SPY" },
   { id: "nasdaq", label: "Nasdaq", symbol: "QQQ" },
-  { id: "russell2000", label: "Russell 2000", symbol: "IWM" },
 ];
 
+/** Russell 2000 is shown on the Futures quick-glance tab (IWM). */
+export const RUSSELL_2000_INDEX: UsMarketIndexDefinition = {
+  id: "russell2000",
+  label: "Russell 2000",
+  symbol: "IWM",
+};
+
+export type GlanceValueMode = "price" | "percent";
+
+export type GlanceInstrumentKind = "future" | "cash_index";
+
 export type UsMarketIndexCard = {
-  id: UsMarketIndexId;
+  id: string;
   label: string;
   symbol: string;
   last: number | null;
@@ -38,7 +65,16 @@ export type UsMarketIndexCard = {
   previousClose: number | null;
   series: Array<{ idx: number; close: number }>;
   dataSource: "yahoo" | "schwab" | "mixed";
-};
+  /** Indexed tiles use percent labels; portfolio also exposes netValue in dollars. */
+  valueMode?: GlanceValueMode;
+  netValue?: number | null;
+  priorNetValue?: number | null;
+  /** CME Globex futures tiles (ES, NQ, CL). */
+  futuresKind?: FuturesGlanceKind;
+  /** Cash index tiles (e.g. Nikkei ^N225) — not futures. */
+  instrumentKind?: GlanceInstrumentKind;
+  tradableOpen?: boolean;
+} & GlanceExtendedFields;
 
 function asNum(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
@@ -51,6 +87,48 @@ function computeDayChange(last: number | null, previousClose: number | null): { 
   }
   const change = last - previousClose;
   return { change, changePct: (change / previousClose) * 100 };
+}
+
+/** Schwab quote fields use the same prior-close basis as the terminal quotes table. */
+export function resolveSchwabAnchoredDayMetrics(
+  schwabQ: {
+    last: number | null;
+    change: number | null;
+    changePercent: number | null;
+    previousClose: number | null;
+  },
+  fallbackLast: number | null,
+  fallbackPreviousClose: number | null,
+): {
+  last: number | null;
+  previousClose: number | null;
+  change: number | null;
+  changePct: number | null;
+} {
+  const previousClose = schwabQ.previousClose ?? fallbackPreviousClose;
+  const last = schwabQ.last ?? fallbackLast;
+  const fromPrices = computeDayChange(last, previousClose);
+
+  if (
+    schwabQ.changePercent != null &&
+    Number.isFinite(schwabQ.changePercent) &&
+    schwabQ.previousClose != null &&
+    schwabQ.last != null
+  ) {
+    return {
+      last,
+      previousClose,
+      change: schwabQ.change ?? fromPrices.change,
+      changePct: schwabQ.changePercent * 100,
+    };
+  }
+
+  return {
+    last,
+    previousClose,
+    change: fromPrices.change,
+    changePct: fromPrices.changePct,
+  };
 }
 
 function seriesPriceRange(series: Array<{ close: number }>): number {
@@ -71,25 +149,25 @@ function seriesIsFlat(series: Array<{ close: number }>, refPrice: number | null)
 }
 
 export function normalizeSeriesForChart(
-  series: Array<{ idx: number; close: number }>,
+  series: Array<{ idx: number; close: number; tsMs?: number }>,
   previousClose: number | null,
   last: number | null,
-): Array<{ idx: number; close: number }> {
-  let out = series.map((p, i) => ({ idx: i, close: p.close }));
+): Array<{ idx: number; close: number; tsMs?: number }> {
+  let out = series.map((p, i) => ({ idx: i, close: p.close, tsMs: p.tsMs }));
 
   // No intraday bars — fall back to prior close → last (day change only).
   if (out.length === 0 && previousClose != null && last != null) {
     return [
       { idx: 0, close: previousClose },
       { idx: 1, close: last },
-    ];
+    ] as Array<{ idx: number; close: number; tsMs?: number }>;
   }
 
   if (last != null && out.length > 0) {
     const tail = out[out.length - 1]!.close;
     const ref = Math.max(Math.abs(last), 1e-9);
     if (Math.abs(tail - last) / ref > 0.00005) {
-      out = [...out, { idx: out.length, close: last }];
+      out = [...out, { idx: out.length, close: last, tsMs: undefined }];
     }
   }
 
@@ -101,11 +179,11 @@ export function normalizeSeriesForChart(
       return [
         { idx: 0, close: open },
         { idx: 1, close: last },
-      ];
+      ] as Array<{ idx: number; close: number; tsMs?: number }>;
     }
   }
 
-  return out.map((p, i) => ({ idx: i, close: p.close }));
+  return out.map((p, i) => ({ idx: i, close: p.close, tsMs: p.tsMs }));
 }
 
 function parseYahooIntraday(
@@ -163,15 +241,17 @@ async function schwabIntradaySeries(
   symbol: string,
   sessionYmd: string,
   window: CandleWindow,
-): Promise<Array<{ idx: number; close: number }>> {
+): Promise<Array<{ idx: number; close: number; tsMs?: number }>> {
   try {
     await ensureCandles(symbol, "5m", window);
     const since = Date.now() - (window === "5D" ? 8 : 2) * 24 * 60 * 60 * 1000;
     const candles = getCachedCandles(symbol, "5m", since);
     if (candles.length >= 2) {
-      const session = candles.filter((c) => isoDateInUsEastern(c.tsMs) === sessionYmd);
+      const session = candles.filter(
+        (c) => isoDateInUsEastern(c.tsMs) === sessionYmd && nyBarPhase(c.tsMs, sessionYmd) === "regular",
+      );
       const use = session.length >= 2 ? session : candles.slice(-78);
-      return toIndexedSeries(use.map((c) => c.close));
+      return use.map((c, idx) => ({ idx, close: c.close, tsMs: c.tsMs }));
     }
     await ensureBenchmarkHistory(symbol);
     const daily = getCachedBenchmarkSeries(symbol).slice(-10);
@@ -184,33 +264,150 @@ async function schwabIntradaySeries(
   }
 }
 
-async function buildIndexCard(def: UsMarketIndexDefinition, sessionYmd: string, now: Date): Promise<UsMarketIndexCard> {
+function schwabTimedPoints(
+  symbol: string,
+  sessionYmd: string,
+  window: CandleWindow,
+  phase: "regular" | GlanceExtendedPhase,
+): TimedClosePoint[] {
+  const since = Date.now() - (window === "5D" ? 8 : 2) * 24 * 60 * 60 * 1000;
+  const candles = getCachedCandles(symbol, "5m", since);
+  return candles
+    .filter((c) => isoDateInUsEastern(c.tsMs) === sessionYmd && nyBarPhase(c.tsMs, sessionYmd) === phase)
+    .map((c) => ({ tsMs: c.tsMs, close: c.close }));
+}
+
+export async function buildSymbolGlanceCard(
+  params: { id: string; label: string; symbol: string },
+  now: Date = new Date(),
+  grid?: GlanceTimedGrid,
+): Promise<UsMarketIndexCard> {
+  return buildIndexCard(
+    { id: params.id as UsMarketIndexId, label: params.label, symbol: params.symbol },
+    now,
+    grid,
+  );
+}
+
+async function buildIndexCard(
+  def: UsMarketIndexDefinition | { id: string; label: string; symbol: string },
+  now: Date = new Date(),
+  grid?: GlanceTimedGrid,
+): Promise<UsMarketIndexCard> {
+  const ctx = glanceChartContext(now);
+  const sessionYmd = ctx.sessionYmd;
   const sym = def.symbol.toUpperCase();
   let last: number | null = null;
   let previousClose: number | null = null;
-  let series: Array<{ idx: number; close: number }> = [];
+  let series: Array<{ idx: number; close: number; tsMs?: number }> = [];
+  let extendedSeries: Array<{ idx: number; close: number; tsMs?: number }> = [];
+  let sessionClose: number | null = null;
+  let extendedPhase: GlanceExtendedPhase | null = ctx.extendedPhase;
   let dataSource: UsMarketIndexCard["dataSource"] = "yahoo";
 
-  const yahooRange = yahooIntradayRangeForGlance(now);
+  const yahooRange = ctx.showExtended ? "5d" : yahooIntradayRangeForGlance(now);
   const schwabWindow = schwabIntradayWindowForGlance(now);
+  const includePrePost = ctx.showExtended || yahooRange === "5d" || grid != null;
 
-  const yahoo = await fetchYahooIntradayChart(sym, yahooRange);
-  if (yahoo?.result) {
-    const parsed = parseYahooIntraday(yahoo.result, sessionYmd);
-    last = parsed.last;
-    previousClose = parsed.previousClose;
-    series = parsed.series;
+  if (grid && grid.regular.length >= 1) {
+    const extPhase = extendedPhaseForGrid(grid) ?? ctx.extendedPhase ?? "post";
+    let regularTimed: TimedClosePoint[] = [];
+    let extendedTimed: TimedClosePoint[] = [];
+
+    const yahooGrid = await fetchYahooIntradayChart(sym, "5d", { includePrePost: true });
+    if (yahooGrid?.result) {
+      const timed = filterTimedPointsForGlanceSession(extractYahooTimedCloses(yahooGrid.result), sessionYmd, ctx);
+      regularTimed = timed.filter((p) => nyBarPhase(p.tsMs, sessionYmd) === "regular");
+      extendedTimed = timed.filter((p) => nyBarPhase(p.tsMs, ctx.chartYmd) === extPhase);
+      const meta = yahooGrid.result.meta as Record<string, unknown> | undefined;
+      previousClose =
+        asNum(meta?.chartPreviousClose) ??
+        asNum(meta?.previousClose) ??
+        asNum(meta?.regularMarketPreviousClose) ??
+        null;
+      last =
+        ctx.showExtended && extendedTimed.length > 0
+          ? extendedTimed[extendedTimed.length - 1]!.close
+          : regularTimed.length > 0
+            ? regularTimed[regularTimed.length - 1]!.close
+            : asNum(meta?.postMarketPrice) ?? asNum(meta?.regularMarketPrice);
+    }
+
+    if (regularTimed.length < 2) {
+      await ensureCandles(sym, "5m", schwabWindow);
+      regularTimed = schwabTimedPoints(sym, sessionYmd, schwabWindow, "regular");
+      if (ctx.showExtended && (grid.extended.length > 0 || extPhase === "pre")) {
+        extendedTimed = schwabTimedPoints(
+          sym,
+          extPhase === "pre" ? ctx.chartYmd : sessionYmd,
+          schwabWindow,
+          extPhase,
+        );
+      }
+      if (regularTimed.length >= 2) dataSource = yahooGrid?.result ? "mixed" : "schwab";
+    }
+
+    const resampledRegular = resampleTimedPointsToGrid(regularTimed, grid.regular);
+    series = toGlanceSeries(resampledRegular);
+    sessionClose = series.length > 0 ? series[series.length - 1]!.close : null;
+
+    if (ctx.showExtended && grid.extended.length > 0 && sessionClose != null) {
+      const resampledExt = resampleTimedPointsToGrid(extendedTimed, grid.extended);
+      extendedSeries = buildAlignedExtendedSeries(series, resampledExt, sessionClose);
+      extendedPhase = extPhase;
+    } else if (
+      ctx.showExtended &&
+      extendedSeries.length === 0 &&
+      extendedTimed.length >= 2 &&
+      sessionClose != null
+    ) {
+      extendedSeries = buildAlignedExtendedSeries(
+        series,
+        extendedTimed.map((p) => ({ tsMs: p.tsMs, close: p.close })),
+        sessionClose,
+      );
+      extendedPhase = extPhase;
+    }
   }
+
+  const yahoo = grid ? null : await fetchYahooIntradayChart(sym, yahooRange, { includePrePost });
+  if (yahoo?.result) {
+    const timed = extractYahooTimedCloses(yahoo.result);
+    const splitCtx = resolveGlanceSplitContext(ctx, timed, now);
+    const split = splitTimedPointsForGlance(timed, splitCtx);
+    series = split.regular;
+    extendedSeries = split.extended;
+    sessionClose = split.sessionClose;
+    if (splitCtx.extendedPhase) extendedPhase = splitCtx.extendedPhase;
+
+    const meta = yahoo.result.meta as Record<string, unknown> | undefined;
+    previousClose =
+      asNum(meta?.chartPreviousClose) ??
+      asNum(meta?.previousClose) ??
+      asNum(meta?.regularMarketPreviousClose) ??
+      null;
+    last =
+      extendedSeries.length > 0
+        ? extendedSeries[extendedSeries.length - 1]!.close
+        : series.length > 0
+          ? series[series.length - 1]!.close
+          : asNum(meta?.postMarketPrice) ?? asNum(meta?.regularMarketPrice);
+  }
+
+  const alignedToGrid = grid != null && grid.regular.length >= 1 && series.length >= 1;
 
   const schwabQ = await schwabQuoteForSymbol(sym);
   if (last == null) last = schwabQ.last;
   if (previousClose == null) previousClose = schwabQ.previousClose;
 
-  if (series.length === 0 || seriesIsFlat(series, previousClose ?? last)) {
+  if (!alignedToGrid && (series.length === 0 || seriesIsFlat(series, previousClose ?? last))) {
     const schwabSeries = await schwabIntradaySeries(sym, sessionYmd, schwabWindow);
     if (!seriesIsFlat(schwabSeries, previousClose ?? last)) {
       series = schwabSeries;
       dataSource = yahoo?.result ? "mixed" : "schwab";
+      if (sessionClose == null && series.length > 0) {
+        sessionClose = series[series.length - 1]!.close;
+      }
     }
   }
 
@@ -223,8 +420,46 @@ async function buildIndexCard(def: UsMarketIndexDefinition, sessionYmd: string, 
     last = series[series.length - 1]!.close;
   }
 
-  series = normalizeSeriesForChart(series, previousClose, last);
-  const dayChange = computeDayChange(last, previousClose);
+  if (sessionClose == null && series.length > 0) {
+    sessionClose = series[series.length - 1]!.close;
+  }
+
+  if (ctx.showExtended && extendedSeries.length === 0 && sessionClose != null && last != null) {
+    if (alignedToGrid) {
+      const yahooExt = await fetchYahooIntradayChart(sym, "5d", { includePrePost: true });
+      if (yahooExt?.result) {
+        const timed = filterTimedPointsForGlanceSession(extractYahooTimedCloses(yahooExt.result), sessionYmd, ctx);
+        const splitCtx = resolveGlanceSplitContext(ctx, timed, now);
+        const split = splitTimedPointsForGlance(timed, splitCtx);
+        if (split.extended.length >= 2) {
+          extendedSeries = split.extended;
+          if (splitCtx.extendedPhase) extendedPhase = splitCtx.extendedPhase;
+        }
+      }
+    }
+    if (extendedSeries.length === 0) {
+      extendedSeries = buildExtendedFallbackSeries(series, sessionClose, last, now);
+      if (extendedSeries.length >= 2 && extendedPhase == null) {
+        extendedPhase = ctx.extendedPhase ?? "post";
+      }
+    }
+  }
+
+  const anchored = resolveSchwabAnchoredDayMetrics(schwabQ, last, previousClose);
+  last = anchored.last;
+  previousClose = anchored.previousClose;
+
+  const regularAnchor = sessionClose ?? series.at(-1)?.close ?? null;
+  series = normalizeSeriesForChart(series, previousClose, regularAnchor);
+
+  if (!ctx.showExtended) {
+    extendedSeries = [];
+    extendedPhase = null;
+  }
+
+  const dayChange = { change: anchored.change, changePct: anchored.changePct };
+  const extendedLast = extendedSeries.length >= 2 ? last : null;
+  const ext = computeExtendedChange(sessionClose, extendedLast);
 
   return {
     id: def.id,
@@ -236,20 +471,28 @@ async function buildIndexCard(def: UsMarketIndexDefinition, sessionYmd: string, 
     previousClose,
     series,
     dataSource,
+    extendedSeries: extendedSeries.length >= 2 ? extendedSeries : undefined,
+    sessionClose,
+    extendedLast,
+    extendedChange: ext.extendedChange,
+    extendedChangePct: ext.extendedChangePct,
+    extendedPhase: extendedSeries.length >= 2 ? extendedPhase : null,
   };
 }
 
-export async function fetchUsMarketIndexCards(now: Date = new Date()): Promise<UsMarketIndexCard[]> {
-  const sessionYmd = glanceSessionYmd(now);
+export async function fetchUsMarketIndexCards(
+  now: Date = new Date(),
+  grid?: GlanceTimedGrid,
+): Promise<UsMarketIndexCard[]> {
   const cards: UsMarketIndexCard[] = [];
   for (const def of US_MARKET_INDEXES) {
-    cards.push(await buildIndexCard(def, sessionYmd, now));
+    cards.push(await buildIndexCard(def, now, grid));
   }
   return cards;
 }
 
 export async function ensureUsMarketIndexBenchmarks(): Promise<void> {
-  for (const def of US_MARKET_INDEXES) {
+  for (const def of [...US_MARKET_INDEXES, RUSSELL_2000_INDEX]) {
     try {
       await ensureBenchmarkHistory(def.symbol);
     } catch (e) {
@@ -261,7 +504,7 @@ export async function ensureUsMarketIndexBenchmarks(): Promise<void> {
 export function indexChangePctFromCards(cards: UsMarketIndexCard[], symbol: string): number | null {
   const sym = symbol.trim().toUpperCase();
   const card = cards.find((c) => {
-    const def = US_MARKET_INDEXES.find((d) => d.id === c.id);
+    const def = [...US_MARKET_INDEXES, RUSSELL_2000_INDEX].find((d) => d.id === c.id);
     return c.symbol.toUpperCase() === sym || def?.symbol === sym;
   });
   return card?.changePct ?? null;

@@ -1,39 +1,53 @@
-/** Recharts pie + allocation charts share this palette (earth tones). */
+/** Recharts pie + allocation charts share this palette (earth tones, no purple/violet). */
 export const EARTH_TONE_PIE_COLORS = [
   "#0f766e", // deep teal
-  "#4d7c0f", // rich olive
-  "#c2410f", // warm terracotta
-  "#d97706", // golden amber
-  "#10b981", // vibrant forest green
-  "#b45309", // earthy brown-orange
-  "#14b8a6", // sage teal
-  "#b91c1c", // burnt sienna
-  "#166534", // deep moss
+  "#c2410c", // terracotta
+  "#2563eb", // royal blue
   "#ca8a04", // warm ochre
+  "#b91c1c", // burnt red
+  "#059669", // emerald
+  "#ea580c", // orange
+  "#0369a1", // sky blue
+  "#4d7c0f", // olive
+  "#0d9488", // cyan-teal
 ] as const;
 
-/** Extra hues so many underlyings do not repeat until palette + extras are exhausted. */
+/** Extra hues — blues, greens, reds, oranges, teals, slates only (no purple/fuchsia/indigo). */
 const EXTENDED_PIE_COLORS = [
   ...EARTH_TONE_PIE_COLORS,
-  "#7c3aed", // violet
-  "#db2777", // pink
-  "#2563eb", // blue
+  "#dc2626", // red
+  "#d97706", // amber
+  "#16a34a", // green
   "#0891b2", // cyan
-  "#65a30d", // lime
-  "#c026d3", // fuchsia
-  "#ea580c", // orange
-  "#4f46e5", // indigo
-  "#0d9488", // teal 600
-  "#a16207", // yellow-700
-  "#be123c", // rose 700
-  "#475569", // slate 600
+  "#1d4ed8", // blue
+  "#b45309", // brown-orange
+  "#15803d", // forest
+  "#0e7490", // dark cyan
+  "#475569", // slate
+  "#a16207", // gold-brown
+  "#be123c", // rose
+  "#065f46", // deep emerald
+  "#92400e", // brown
+  "#1e40af", // navy
+  "#14b8a6", // teal
+  "#65a30d", // lime-olive
 ] as const;
+
+const PURPLE_HUE_MIN = 250;
+const PURPLE_HUE_MAX = 310;
+
+function skipPurpleHue(hue: number): number {
+  let h = ((hue % 360) + 360) % 360;
+  if (h >= PURPLE_HUE_MIN && h <= PURPLE_HUE_MAX) {
+    h = (h + 75) % 360;
+  }
+  return h;
+}
 
 export function distinctColorForIndex(i: number): string {
   if (i < EXTENDED_PIE_COLORS.length) return EXTENDED_PIE_COLORS[i]!;
-  // Golden-angle hues for any further series (still stable per index).
-  const hue = Math.round((i * 137.508) % 360);
-  return `hsl(${hue} 72% 56%)`;
+  const hue = skipPurpleHue(Math.round(i * 137.508));
+  return `hsl(${hue} 68% 48%)`;
 }
 
 function hexToRgb(hex: string): [number, number, number] | null {
@@ -100,7 +114,7 @@ function colorDistance(a: string, b: string): number {
 }
 
 /**
- * Pick colors so consecutive entries (treemap layout order) are as visually distinct as possible.
+ * Pick colors so consecutive entries (pie / treemap layout order) are as visually distinct as possible.
  */
 export function assignColorsForAdjacentContrast(count: number): string[] {
   if (count <= 0) return [];
@@ -130,7 +144,7 @@ export function assignColorsForAdjacentContrast(count: number): string[] {
 }
 
 /**
- * Map symbol → color using treemap layout order (largest → smallest), not alphabetical order.
+ * Map symbol → color using layout order (largest → smallest), maximizing contrast between neighbors.
  */
 export function assignEarthToneColorsByLayoutOrder(symbolsInLayoutOrder: string[]): Map<string, string> {
   const ordered = symbolsInLayoutOrder.map((s) => (s ?? "").trim()).filter(Boolean);
@@ -141,15 +155,21 @@ export function assignEarthToneColorsByLayoutOrder(symbolsInLayoutOrder: string[
 }
 
 /**
- * One color per unique symbol, stable order: alphabetically (case-insensitive), with `"Other"` last.
- * Reuses the earth-tone palette in order; only wraps after all palette slots are used.
+ * One color per unique symbol. Preserves caller order (e.g. pie size rank) for adjacent contrast; `"Other"` last.
  */
 export function assignEarthToneColorsBySymbols(symbols: string[]): Map<string, string> {
-  const uniq = [...new Set(symbols.map((s) => (s ?? "").trim()).filter(Boolean))];
-  const rest = uniq.filter((s) => s !== "Other").sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
-  const ordered = [...rest];
-  if (uniq.includes("Other")) ordered.push("Other");
-  const m = new Map<string, string>();
-  ordered.forEach((sym, i) => m.set(sym, distinctColorForIndex(i)));
-  return m;
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const raw of symbols) {
+    const s = (raw ?? "").trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    ordered.push(s);
+  }
+  const otherIdx = ordered.indexOf("Other");
+  if (otherIdx >= 0) {
+    ordered.splice(otherIdx, 1);
+    ordered.push("Other");
+  }
+  return assignEarthToneColorsByLayoutOrder(ordered);
 }

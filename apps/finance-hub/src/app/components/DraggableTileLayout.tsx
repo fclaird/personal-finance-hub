@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, type ReactNode } from "react";
+import { EditableHeading } from "@/app/components/EditableHeading";
 import { usePersistedCollapsedSet, usePersistedOrder } from "@/lib/usePersistedOrder";
 
 export type DraggableTileDef = {
@@ -32,7 +33,7 @@ export function DraggableTileLayout({
   defaultOrder,
   tiles,
   className,
-  hint = "Drag ⠿ to reorder · click title to collapse",
+  hint = "Drag ⠿ to reorder · click title to collapse · double-click title to rename",
 }: {
   storageKey: string;
   defaultOrder: readonly string[];
@@ -72,7 +73,7 @@ export function DraggableTileLayout({
   return (
     <div className={className ?? "flex flex-col gap-6"}>
       {hint ? (
-        <p className="text-xs text-zinc-500 dark:text-zinc-500">{hint}</p>
+        <p className="text-xs text-zinc-600 dark:text-zinc-400">{hint}</p>
       ) : null}
       {rendered.map((id) => {
         const tile = tiles[id];
@@ -107,11 +108,21 @@ export function DraggableTileLayout({
                   <span className="w-4 shrink-0 text-center text-xs text-zinc-500 dark:text-zinc-400" aria-hidden>
                     {collapsed ? "▸" : "▾"}
                   </span>
-                  <span className="truncate">{tile.title}</span>
+                  <EditableHeading
+                    namespace={storageKey}
+                    id={id}
+                    defaultLabel={tile.title}
+                    className="min-w-0 truncate"
+                  />
                 </button>
               ) : (
                 <div className={TITLE_BTN + " cursor-default hover:text-zinc-800 dark:hover:text-zinc-200"}>
-                  <span className="truncate">{tile.title}</span>
+                  <EditableHeading
+                    namespace={storageKey}
+                    id={id}
+                    defaultLabel={tile.title}
+                    className="min-w-0 truncate"
+                  />
                 </div>
               )}
             </div>

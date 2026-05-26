@@ -5,11 +5,18 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { DraggableColumnHeader, DRAGGABLE_COLUMN_HEADER_GRAB_CLASS } from "@/app/components/DraggableColumnHeader";
+import { ColumnLabel } from "@/app/components/ColumnLabel";
+import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatInt, formatNum, formatOptionIntExtPerShare, formatUsd2 } from "@/lib/format";
 import { formatDisplayDateTime } from "@/lib/formatDate";
 import { formatOptionSymbolDisplay } from "@/lib/formatOptionDisplay";
+import {
+  optionMarkPerShare,
+  optionPnlDollarsFromAvgPrice,
+  optionPnlPctFromAvgPrice,
+} from "@/lib/options/optionPnlFromAvgPrice";
 import { posNegClass } from "@/lib/terminal/colors";
 import { symbolPageTargetFromInstrument } from "@/lib/symbolPage";
 import { usePersistedColumnOrder } from "@/lib/usePersistedColumnOrder";
@@ -30,6 +37,7 @@ type OptionContractRow = {
   optionRight: "C" | "P" | null;
   optionStrike: number | null;
   quantity: number;
+  averagePrice?: number | null;
   price: number | null;
   marketValue: number | null;
   dte: number | null;
@@ -60,38 +68,49 @@ type OptionColumnId = (typeof OPTION_COLUMN_IDS)[number];
 const EVENT_COLUMN_IDS = ["when", "severity", "title", "rule"] as const;
 type EventColumnId = (typeof EVENT_COLUMN_IDS)[number];
 
-function optionPnlDollarsFromAvgPrice(r: Pick<OptionContractRow, "price" | "marketValue" | "quantity">): number | null {
-  const avg = r.price;
-  const mv = r.marketValue;
-  const qtyAbs = Math.abs(r.quantity);
-  if (avg == null || !Number.isFinite(avg)) return null;
-  if (mv == null || !Number.isFinite(mv) || !qtyAbs) return null;
-  const cur = mv / (qtyAbs * 100);
-  if (!Number.isFinite(cur)) return null;
-  return (cur - avg) * r.quantity * 100;
+const OPTION_COLUMN_TABLE_KEY = "alerts:optionContractColumns";
+const EVENT_COLUMN_TABLE_KEY = "alerts:recentEventsColumns";
+
+const OPTION_COLUMN_LABEL: Record<OptionColumnId, string> = {
+  account: "Account",
+  symbol: "Symbol",
+  qty: "Qty",
+  price: "Spot",
+  tradePrice: "Trade",
+  marketValue: "Market value",
+  pnlPct: "P/L",
+  pnlPctPct: "P/L %",
+  intrinsic: "Intrinsic",
+  extrinsic: "Extrinsic",
+  extrinsicPctIntrinsic: "% extrinsic",
+  dte: "DTE",
+};
+
+const EVENT_COLUMN_LABEL: Record<EventColumnId, string> = {
+  when: "When",
+  severity: "Severity",
+  title: "Title",
+  rule: "Rule",
+};
+
+function optionEntryPricePerShare(r: Pick<OptionContractRow, "averagePrice" | "price">): number | null {
+  const entry = r.averagePrice;
+  return entry != null && Number.isFinite(entry) ? entry : null;
 }
 
-function optionPnlPctFromAvgPrice(r: Pick<OptionContractRow, "price" | "marketValue" | "quantity">): number | null {
-  const avg = r.price;
-  const mv = r.marketValue;
-  const qtyAbs = Math.abs(r.quantity);
-  if (avg == null || !Number.isFinite(avg) || avg === 0) return null;
-  if (mv == null || !Number.isFinite(mv) || !qtyAbs) return null;
-  const cur = mv / (qtyAbs * 100);
-  if (!Number.isFinite(cur)) return null;
-  const pctLong = ((cur / avg) - 1) * 100;
-  if (r.quantity >= 0) return pctLong;
-  // For short options, max profit is 100% (option goes to $0).
-  const pctShort = -pctLong;
-  return Math.min(100, pctShort);
+function optionMarkPricePerShare(
+  r: Pick<OptionContractRow, "price" | "marketValue" | "quantity">,
+): number | null {
+  if (r.price != null && Number.isFinite(r.price)) return Math.abs(r.price);
+  return optionMarkPerShare(r.marketValue, r.quantity);
 }
 
-function optionSpotPriceFromMarketValue(r: Pick<OptionContractRow, "marketValue" | "quantity">): number | null {
-  const mv = r.marketValue;
-  const qtyAbs = Math.abs(r.quantity);
-  if (mv == null || !Number.isFinite(mv) || !qtyAbs) return null;
-  const cur = mv / (qtyAbs * 100);
-  return Number.isFinite(cur) ? cur : null;
+function optionPnlInputs(r: OptionContractRow) {
+  return {
+    price: optionEntryPricePerShare(r),
+    marketValue: r.marketValue,
+    quantity: r.quantity,
+  };
 }
 
 /** Extrinsic as a percentage of intrinsic (position totals from API; ratio equals per-contract). */
@@ -105,8 +124,13 @@ function formatExtrinsicPctOfIntrinsic(intrinsic: number | null, extrinsic: numb
 function AccountHeaderContent() {
   return (
     <>
-      <div className="font-medium text-zinc-600 dark:text-zinc-400">Account</div>
-      <div className="mt-0.5 text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-500">Nickname</div>
+      <ColumnLabel
+        tableKey={OPTION_COLUMN_TABLE_KEY}
+        columnId="account"
+        defaultLabel={OPTION_COLUMN_LABEL.account}
+        className="font-medium text-zinc-600 dark:text-zinc-400"
+      />
+      <div className="mt-0.5 text-[10px] font-normal uppercase tracking-wide text-zinc-600 dark:text-zinc-400">Nickname</div>
     </>
   );
 }
@@ -122,7 +146,7 @@ function AccountCell({
   return (
     <td className="whitespace-nowrap py-2 pr-6 align-top">
       <div className="text-xs font-medium text-zinc-800 dark:text-zinc-200">{accountName}</div>
-      <div className="mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-500">{n || "—"}</div>
+      <div className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">{n || "—"}</div>
     </td>
   );
 }
@@ -151,159 +175,52 @@ function OptionContractsRedTile({
   const nCols = optionColumnOrder.length;
 
   function optionHeader(col: OptionColumnId) {
-    switch (col) {
-      case "account":
-        return (
-          <DraggableColumnHeader
-            key={col}
-            colId={col}
-            columnOrder={optionColumnOrder}
-            moveColumn={moveOptionColumn}
-            className={`whitespace-nowrap py-2 pr-6 text-left align-bottom ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`}
-          >
-            <AccountHeaderContent />
-          </DraggableColumnHeader>
-        );
-      case "symbol":
-        return (
-          <DraggableColumnHeader
-            key={col}
-            colId={col}
-            columnOrder={optionColumnOrder}
-            moveColumn={moveOptionColumn}
-            className={`whitespace-nowrap py-2 pr-6 font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`}
-          >
-            Symbol
-          </DraggableColumnHeader>
-        );
-      case "qty":
-        return (
-          <DraggableColumnHeader
-            key={col}
-            colId={col}
-            columnOrder={optionColumnOrder}
-            moveColumn={moveOptionColumn}
-            className={`whitespace-nowrap py-2 pr-6 text-right font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`}
-          >
-            Qty
-          </DraggableColumnHeader>
-        );
-      case "price":
-        return (
-          <DraggableColumnHeader
-            key={col}
-            colId={col}
-            columnOrder={optionColumnOrder}
-            moveColumn={moveOptionColumn}
-            className={`whitespace-nowrap py-2 pr-6 text-right font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`}
-          >
-            Spot
-          </DraggableColumnHeader>
-        );
-      case "tradePrice":
-        return (
-          <DraggableColumnHeader
-            key={col}
-            colId={col}
-            columnOrder={optionColumnOrder}
-            moveColumn={moveOptionColumn}
-            className={`whitespace-nowrap py-2 pr-6 text-right font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`}
-          >
-            Trade
-          </DraggableColumnHeader>
-        );
-      case "marketValue":
-        return (
-          <DraggableColumnHeader
-            key={col}
-            colId={col}
-            columnOrder={optionColumnOrder}
-            moveColumn={moveOptionColumn}
-            className={`whitespace-nowrap py-2 pr-6 text-right font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`}
-          >
-            Market value
-          </DraggableColumnHeader>
-        );
-      case "pnlPct":
-        return (
-          <DraggableColumnHeader
-            key={col}
-            colId={col}
-            columnOrder={optionColumnOrder}
-            moveColumn={moveOptionColumn}
-            className={`whitespace-nowrap py-2 pr-6 text-right font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`}
-          >
-            <div>P/L</div>
-          </DraggableColumnHeader>
-        );
-      case "pnlPctPct":
-        return (
-          <DraggableColumnHeader
-            key={col}
-            colId={col}
-            columnOrder={optionColumnOrder}
-            moveColumn={moveOptionColumn}
-            className={`whitespace-nowrap py-2 pr-6 text-right font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`}
-          >
-            <div>P/L %</div>
-          </DraggableColumnHeader>
-        );
-      case "intrinsic":
-        return (
-          <DraggableColumnHeader
-            key={col}
-            colId={col}
-            columnOrder={optionColumnOrder}
-            moveColumn={moveOptionColumn}
-            className={`whitespace-nowrap py-2 pr-6 text-right font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`}
-          >
-            Intrinsic
-          </DraggableColumnHeader>
-        );
-      case "extrinsic":
-        return (
-          <DraggableColumnHeader
-            key={col}
-            colId={col}
-            columnOrder={optionColumnOrder}
-            moveColumn={moveOptionColumn}
-            className={`whitespace-nowrap py-2 pr-6 text-right font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`}
-          >
-            Extrinsic
-          </DraggableColumnHeader>
-        );
-      case "extrinsicPctIntrinsic":
-        return (
-          <DraggableColumnHeader
-            key={col}
-            colId={col}
-            columnOrder={optionColumnOrder}
-            moveColumn={moveOptionColumn}
-            className={`whitespace-nowrap py-2 pr-6 text-right align-bottom font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`}
-          >
-            <div>% extrinsic</div>
-            <div className="mt-0.5 text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
-              of intrinsic
-            </div>
-          </DraggableColumnHeader>
-        );
-      case "dte":
-        return (
-          <DraggableColumnHeader
-            key={col}
-            colId={col}
-            columnOrder={optionColumnOrder}
-            moveColumn={moveOptionColumn}
-            className={`whitespace-nowrap py-2 pr-6 text-right font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`}
-          >
-            DTE
-          </DraggableColumnHeader>
-        );
-      default: {
-        const _exhaustive: never = col;
-        return _exhaustive;
-      }
+    const grab = `whitespace-nowrap py-2 pr-6 font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`;
+    if (col === "account") {
+      return (
+        <DraggableColumnHeader
+          key={col}
+          colId={col}
+          columnOrder={optionColumnOrder}
+          moveColumn={moveOptionColumn}
+          className={`whitespace-nowrap py-2 pr-6 text-left align-bottom ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`}
+        >
+          <AccountHeaderContent />
+        </DraggableColumnHeader>
+      );
     }
+    if (col === "extrinsicPctIntrinsic") {
+      return (
+        <DraggableColumnHeader
+          key={col}
+          colId={col}
+          columnOrder={optionColumnOrder}
+          moveColumn={moveOptionColumn}
+          className={`whitespace-nowrap py-2 pr-6 text-right align-bottom font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`}
+        >
+          <ColumnLabel
+            tableKey={OPTION_COLUMN_TABLE_KEY}
+            columnId={col}
+            defaultLabel={OPTION_COLUMN_LABEL[col]}
+          />
+          <div className="mt-0.5 text-[10px] font-normal uppercase tracking-wide text-zinc-600 dark:text-zinc-400">
+            of intrinsic
+          </div>
+        </DraggableColumnHeader>
+      );
+    }
+    const alignRight = col !== "symbol";
+    return (
+      <DraggableColumnHeader
+        key={col}
+        colId={col}
+        columnOrder={optionColumnOrder}
+        moveColumn={moveOptionColumn}
+        className={`${grab} ${alignRight ? "text-right" : ""}`}
+      >
+        <ColumnLabel tableKey={OPTION_COLUMN_TABLE_KEY} columnId={col} defaultLabel={OPTION_COLUMN_LABEL[col]} />
+      </DraggableColumnHeader>
+    );
   }
 
   function optionCell(col: OptionColumnId, r: OptionContractRow) {
@@ -340,7 +257,7 @@ function OptionContractsRedTile({
         return (
           <td key={col} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums">
             {(() => {
-              const spot = optionSpotPriceFromMarketValue(r);
+              const spot = optionMarkPricePerShare(r);
               return spot == null ? "—" : formatUsd2(spot, { mask: privacy.masked });
             })()}
           </td>
@@ -348,7 +265,10 @@ function OptionContractsRedTile({
       case "tradePrice":
         return (
           <td key={col} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums">
-            {r.price == null ? "—" : formatUsd2(r.price, { mask: privacy.masked })}
+            {(() => {
+              const entry = optionEntryPricePerShare(r);
+              return entry == null ? "—" : formatUsd2(entry, { mask: privacy.masked });
+            })()}
           </td>
         );
       case "marketValue":
@@ -364,7 +284,7 @@ function OptionContractsRedTile({
           </td>
         );
       case "pnlPct": {
-        const pnl = optionPnlDollarsFromAvgPrice(r);
+        const pnl = optionPnlDollarsFromAvgPrice(optionPnlInputs(r));
         return (
           <td
             key={col}
@@ -378,7 +298,7 @@ function OptionContractsRedTile({
         );
       }
       case "pnlPctPct": {
-        const pct = optionPnlPctFromAvgPrice(r);
+        const pct = optionPnlPctFromAvgPrice(optionPnlInputs(r));
         return (
           <td
             key={col}
@@ -437,7 +357,7 @@ function OptionContractsRedTile({
   return (
     <div className="relative overflow-hidden">
       <div
-        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-red-100/90 via-red-50/40 to-white dark:from-red-600/18 dark:via-red-950/35 dark:to-zinc-950"
+        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-amber-100/90 via-amber-50/40 to-white dark:from-amber-600/18 dark:via-amber-950/35 dark:to-zinc-950"
         aria-hidden
       />
       <div className="relative">
@@ -445,7 +365,7 @@ function OptionContractsRedTile({
           <div>
             <p className="text-sm text-zinc-600 dark:text-zinc-400">{description}</p>
           </div>
-          <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-900 dark:bg-red-950/60 dark:text-red-100">
+          <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-950 dark:bg-amber-950/60 dark:text-amber-100">
             {badgeCount} contract{badgeCount === 1 ? "" : "s"}
           </span>
         </div>
@@ -453,7 +373,7 @@ function OptionContractsRedTile({
         <div className="mt-4 overflow-x-auto pb-1">
           <table className="w-max min-w-full border-collapse text-sm">
             <thead>
-              <tr className="border-b border-red-200/80 text-left text-zinc-600 dark:border-red-500/20 dark:text-zinc-400">
+              <tr className="border-b border-amber-200/80 text-left text-zinc-600 dark:border-amber-500/20 dark:text-zinc-400">
                 {optionColumnOrder.map((col) => optionHeader(col))}
               </tr>
             </thead>
@@ -613,7 +533,9 @@ export default function AlertsPage() {
     <div className="flex w-full max-w-[108rem] flex-1 flex-col gap-8 py-10 pl-5 pr-6 sm:pl-6 sm:pr-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Alerts</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            <EditablePageHeading pageId="alerts" defaultTitle="Alerts" />
+          </h1>
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
             In-app alert events generated from your latest data.
           </p>
@@ -763,60 +685,21 @@ export default function AlertsPage() {
               <tr className="border-b border-zinc-300 text-left text-zinc-600 dark:border-white/20 dark:text-zinc-400">
                 {eventColumnOrder.map((col) => {
                   const c = `py-2 pr-4 font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`;
-                  switch (col) {
-                    case "when":
-                      return (
-                        <DraggableColumnHeader
-                          key={col}
-                          colId={col}
-                          columnOrder={eventColumnOrder}
-                          moveColumn={moveEventColumn}
-                          className={c}
-                        >
-                          When
-                        </DraggableColumnHeader>
-                      );
-                    case "severity":
-                      return (
-                        <DraggableColumnHeader
-                          key={col}
-                          colId={col}
-                          columnOrder={eventColumnOrder}
-                          moveColumn={moveEventColumn}
-                          className={c}
-                        >
-                          Severity
-                        </DraggableColumnHeader>
-                      );
-                    case "title":
-                      return (
-                        <DraggableColumnHeader
-                          key={col}
-                          colId={col}
-                          columnOrder={eventColumnOrder}
-                          moveColumn={moveEventColumn}
-                          className={c}
-                        >
-                          Title
-                        </DraggableColumnHeader>
-                      );
-                    case "rule":
-                      return (
-                        <DraggableColumnHeader
-                          key={col}
-                          colId={col}
-                          columnOrder={eventColumnOrder}
-                          moveColumn={moveEventColumn}
-                          className={c}
-                        >
-                          Rule
-                        </DraggableColumnHeader>
-                      );
-                    default: {
-                      const _e: never = col;
-                      return _e;
-                    }
-                  }
+                  return (
+                    <DraggableColumnHeader
+                      key={col}
+                      colId={col}
+                      columnOrder={eventColumnOrder}
+                      moveColumn={moveEventColumn}
+                      className={c}
+                    >
+                      <ColumnLabel
+                        tableKey={EVENT_COLUMN_TABLE_KEY}
+                        columnId={col}
+                        defaultLabel={EVENT_COLUMN_LABEL[col]}
+                      />
+                    </DraggableColumnHeader>
+                  );
                 })}
               </tr>
             </thead>

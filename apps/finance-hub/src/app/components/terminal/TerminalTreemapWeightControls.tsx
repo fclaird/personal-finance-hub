@@ -115,7 +115,7 @@ export function TerminalTreemapWeightControls({
             </button>
           </>
         ) : (
-          <span className={"flex h-8 items-center text-xs " + (panel === "dark" ? "text-zinc-500" : "text-zinc-500 dark:text-zinc-500")}>
+          <span className={"flex h-8 items-center text-xs " + (panel === "dark" ? "text-zinc-400" : "text-zinc-600 dark:text-zinc-400")}>
             Net / Synthetic only
           </span>
         )}

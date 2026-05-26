@@ -1,11 +1,17 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-
-import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, test } from "node:test";
 import Database from "better-sqlite3";
 
 import { latestSnapshotIds } from "@/lib/holdings/latestSnapshots";
+import {
+  optionCloseValue,
+  optionLastValue,
+  optionValueAt,
+  type OptionLeg,
+  PORTFOLIO_INDEX_BASE,
+} from "@/lib/terminal/portfolioGlance";
 
 function createTestDb(): Database.Database {
   const db = new Database(":memory:");
@@ -72,4 +78,42 @@ describe("portfolioGlance snapshot selection", () => {
     const db = createTestDb();
     assert.deepEqual(latestSnapshotIds(db, "all_synced"), []);
   });
+});
+
+function sampleOption(overrides: Partial<OptionLeg> = {}): OptionLeg {
+  return {
+    quantity: 1,
+    closePerShare: 2,
+    lastPerShare: 2.5,
+    thetaPerShare: -0.05,
+    syncedMv: 200,
+    ...overrides,
+  };
+}
+
+test("optionValueAt interpolates from close to live mark during RTH", () => {
+  const leg = sampleOption();
+  const open = new Date("2026-05-22T09:30:00-04:00").getTime();
+  const close = new Date("2026-05-22T16:00:00-04:00").getTime();
+  const mid = new Date("2026-05-22T12:45:00-04:00").getTime();
+
+  assert.equal(optionValueAt(leg, open, close, open), optionCloseValue(leg));
+  assert.equal(optionValueAt(leg, close, close, open), optionLastValue(leg));
+
+  const midValue = optionValueAt(leg, mid, close, open);
+  assert.ok(midValue > optionCloseValue(leg));
+  assert.ok(midValue < optionLastValue(leg));
+});
+
+test("optionValueAt prefers live mark after RTH", () => {
+  const leg = sampleOption({ thetaPerShare: 5 });
+  const close = new Date("2026-05-22T16:00:00-04:00").getTime();
+  const after = new Date("2026-05-22T18:00:00-04:00").getTime();
+  const open = new Date("2026-05-22T09:30:00-04:00").getTime();
+
+  assert.equal(optionValueAt(leg, after, close, open), optionLastValue(leg));
+});
+
+test("portfolio index base is 100", () => {
+  assert.equal(PORTFOLIO_INDEX_BASE, 100);
 });

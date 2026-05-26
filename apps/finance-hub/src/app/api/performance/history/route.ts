@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-import { getPortfolioValueSeriesByBucket } from "@/lib/analytics/performance";
+import { getGlanceAlignedPortfolioValueSeriesByBucket, resolvePerformanceTrackingBaselineYmd, filterSeriesFromBaseline, PERFORMANCE_BACKFILL_LOOKBACK_DAYS } from "@/lib/analytics/glanceAlignedPerformance";
 import { DATA_MODE_COOKIE, parseDataMode } from "@/lib/dataMode";
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
@@ -59,12 +59,17 @@ export async function GET(req: Request) {
     const db = getDb();
     const todayIso = new Date(nowMs).toISOString().slice(0, 10);
 
-    const dense = getPortfolioValueSeriesByBucket(bucket as "combined" | "retirement" | "brokerage", mode);
-    const denseInWindow = cutoff ? dense.filter((p) => portfolioAsOfIsoDate(p.asOf) >= cutoff) : dense;
-    const tradingDaySeries = collapseToTradingDays(denseInWindow);
+    const denseAll = getGlanceAlignedPortfolioValueSeriesByBucket(bucket as "combined" | "retirement" | "brokerage", db);
+    const tradingDaySeriesAll = collapseToTradingDays(denseAll);
+    const { baselineYmd, resetForward } = resolvePerformanceTrackingBaselineYmd(tradingDaySeriesAll, new Date(nowMs));
+    const tradingDaySeries = filterSeriesFromBaseline(tradingDaySeriesAll, baselineYmd);
+    const denseInWindow = cutoff
+      ? tradingDaySeries.filter((p) => portfolioAsOfIsoDate(p.asOf) >= cutoff)
+      : tradingDaySeries;
+    const seriesForChart = denseInWindow.length >= 2 ? denseInWindow : tradingDaySeries;
     const throughDate =
-      tradingDaySeries.length > 0
-        ? portfolioAsOfIsoDate(tradingDaySeries[tradingDaySeries.length - 1]!.asOf)
+      seriesForChart.length > 0
+        ? portfolioAsOfIsoDate(seriesForChart[seriesForChart.length - 1]!.asOf)
         : todayIso;
     const needThrough = throughDate > todayIso ? throughDate : todayIso;
 
@@ -101,10 +106,10 @@ export async function GET(req: Request) {
     const spyRows = countBenchmarkPriceRows("SPY");
     const qqqRows = countBenchmarkPriceRows("QQQ");
 
-    let source_mix: "sync_points" | "snapshots" | "fallback";
+    let source_mix: "glance_aligned" | "snapshots" | "fallback";
     let chart_data;
 
-    if (tradingDaySeries.length === 0) {
+    if (seriesForChart.length === 0) {
       return NextResponse.json({
         ok: true,
         timeframe: tf,
@@ -113,6 +118,10 @@ export async function GET(req: Request) {
         meta: {
           source_mix: "fallback" as const,
           note: "no_portfolio_points_in_window",
+          tracking_start: baselineYmd,
+          tracking_reset_forward: resetForward,
+          portfolio_source: "schwab_liquidation_plus_external",
+          lookback_days: PERFORMANCE_BACKFILL_LOOKBACK_DAYS,
           window_start_ms: nowMs,
           window_end_ms: nowMs,
           benchmark_spy_rows: spyRows,
@@ -125,22 +134,22 @@ export async function GET(req: Request) {
       });
     }
 
-    const dataStartMs = Date.parse(tradingDaySeries[0]!.asOf);
+    const dataStartMs = Date.parse(seriesForChart[0]!.asOf);
     const { startMs: windowStartMs, endMs: windowEndMs } = timeframeToWindowRangeMs(
       tf,
       nowMs,
       Number.isFinite(dataStartMs) ? dataStartMs : null,
     );
 
-    if (tradingDaySeries.length >= 2) {
-      chart_data = chartDataFromDenseSeries(tradingDaySeries, benchSpy, benchQq);
-      source_mix = "sync_points";
+    if (seriesForChart.length >= 2) {
+      chart_data = chartDataFromDenseSeries(seriesForChart, benchSpy, benchQq);
+      source_mix = "glance_aligned";
     } else if (snapRows.length >= 2 && !shouldUseSnapshotFallback(snapRows.length, tf === "ALL" ? "6M" : tf)) {
       chart_data = chartDataFromSnapshotRows(snapRows);
       source_mix = "snapshots";
-    } else if (tradingDaySeries.length >= 1) {
-      chart_data = chartDataFromDenseSeries(tradingDaySeries, benchSpy, benchQq);
-      source_mix = "sync_points";
+    } else if (seriesForChart.length >= 1) {
+      chart_data = chartDataFromDenseSeries(seriesForChart, benchSpy, benchQq);
+      source_mix = "glance_aligned";
     } else {
       chart_data = chartDataFromSnapshotRows(snapRows);
       source_mix = "snapshots";
@@ -160,6 +169,10 @@ export async function GET(req: Request) {
         meta: {
           source_mix,
           note: "empty_chart",
+          tracking_start: baselineYmd,
+          tracking_reset_forward: resetForward,
+          portfolio_source: "schwab_liquidation_plus_external",
+          lookback_days: PERFORMANCE_BACKFILL_LOOKBACK_DAYS,
           window_start_ms: windowStartMs,
           window_end_ms: windowEndMs,
           benchmark_spy_rows: spyRows,
@@ -184,7 +197,10 @@ export async function GET(req: Request) {
       mode,
         meta: {
           source_mix,
-          tracking_start: tradingDaySeries[0] ? portfolioAsOfIsoDate(tradingDaySeries[0].asOf) : null,
+          tracking_start: seriesForChart[0] ? portfolioAsOfIsoDate(seriesForChart[0].asOf) : baselineYmd,
+          tracking_reset_forward: resetForward,
+          portfolio_source: "schwab_liquidation_plus_external",
+          lookback_days: PERFORMANCE_BACKFILL_LOOKBACK_DAYS,
           window_start_ms: windowStartMs,
           window_end_ms: windowEndMs,
           benchmark_spy_rows: spyRows,

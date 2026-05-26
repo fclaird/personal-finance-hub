@@ -6,7 +6,10 @@ import { isManualAccountId, parseManualPositionMetadata } from "@/lib/manual/man
 import { isPosterityAccountId, notPosterityWhereSql } from "@/lib/posterity";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
 import { latestSnapshotIds as latestSyncedSnapshotIds } from "@/lib/holdings/latestSnapshots";
+import { resolvePositionAveragePrice } from "@/lib/holdings/positionAveragePrice";
+import { buildLiveEquityMarkMap, resolveEquityMarkPx } from "@/lib/market/liveEquityMarks";
 import { latestSnapshotId } from "@/lib/snapshots";
+import { collectNonIndividualSecuritySymbols } from "@/lib/terminal/individualSecurityFilter";
 
 type ParsedOption = {
   expiration: string; // YYYY-MM-DD
@@ -63,9 +66,9 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
     `,
     )
     .all(today) as Array<{ symbol: string; close: number }>;
-  const px = new Map<string, number>();
+  const pricePoints = new Map<string, number>();
   for (const r of pxRows) {
-    if (r.symbol && Number.isFinite(r.close) && r.close > 0) px.set(r.symbol.toUpperCase(), r.close);
+    if (r.symbol && Number.isFinite(r.close) && r.close > 0) pricePoints.set(r.symbol.toUpperCase(), r.close);
   }
 
   const rows = db
@@ -135,12 +138,28 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
     )
     .all({ snapshots_json: JSON.stringify(snaps) }) as Array<{ symbol: string; qty: number; mv: number }>;
 
+  const equitySymbols = new Set<string>();
+  for (const u of underRows) {
+    const key = (u.symbol ?? "").trim().toUpperCase();
+    if (key) equitySymbols.add(key);
+  }
+  for (const r of rows) {
+    if (r.securityType !== "option") continue;
+    const eff = normalizeOptionUnderlying(r.underlyingSymbol, r.symbol);
+    if (eff && eff !== "CASH") equitySymbols.add(eff);
+    const joined = (r.underlyingSymbol ?? "").trim().toUpperCase();
+    if (joined && joined !== "CASH") equitySymbols.add(joined);
+  }
+
+  const liveMarks = await buildLiveEquityMarkMap(equitySymbols);
+
   const underPx = new Map<string, number>();
   for (const u of underRows) {
-    if (u.qty) {
-      const key = (u.symbol ?? "").trim().toUpperCase();
-      if (key) underPx.set(key, u.mv / u.qty);
-    }
+    const key = (u.symbol ?? "").trim().toUpperCase();
+    if (!key) continue;
+    const snapshotImplied = u.qty ? u.mv / u.qty : null;
+    const markPx = resolveEquityMarkPx(key, liveMarks, pricePoints, snapshotImplied);
+    if (markPx != null) underPx.set(key, markPx);
   }
 
   const out = rows.map((r) => {
@@ -168,11 +187,12 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
 
     if (r.securityType !== "option") {
       const sym = (r.symbol ?? "").toUpperCase();
-      const qpx = sym ? px.get(sym) ?? null : null;
-      const price = qpx ?? r.price;
+      const snapshotImplied =
+        r.quantity && r.marketValue != null ? r.marketValue / r.quantity : r.price ?? null;
+      const price = resolveEquityMarkPx(sym, liveMarks, pricePoints, snapshotImplied) ?? r.price;
       let marketValue =
         price != null && Number.isFinite(price) ? price * (r.quantity ?? 0) : r.marketValue;
-      if (isManual && r.marketValue != null && qpx == null) {
+      if (isManual && r.marketValue != null && !liveMarks.has(sym) && !pricePoints.has(sym)) {
         marketValue = r.marketValue;
       }
       return {
@@ -194,11 +214,17 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
     }
 
     const sym = (r.symbol ?? "").toUpperCase();
-    const qpx = sym ? px.get(sym) ?? null : null;
-    const price = qpx ?? r.price;
+    const qpx = sym ? pricePoints.get(sym) ?? null : null;
+    const averagePrice = resolvePositionAveragePrice(r.price, r.metadataJson);
     const qty = r.quantity ?? 0;
+    const syncedMark =
+      r.marketValue != null && Number.isFinite(r.marketValue) && qty !== 0
+        ? r.marketValue / (qty * 100)
+        : null;
+    const markPrice = qpx ?? syncedMark ?? averagePrice;
+    const price = markPrice;
     const marketValue =
-      price != null && Number.isFinite(price) && qty !== 0 ? price * 100 * qty : r.marketValue;
+      markPrice != null && Number.isFinite(markPrice) && qty !== 0 ? markPrice * 100 * qty : r.marketValue;
 
     const parsed = parseOptionFromSecurity(r.symbol, r.securityName);
     const dte = parsed ? daysToExpiration(parsed.expiration, r.asOf) : null;
@@ -225,6 +251,7 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
       symbol: r.symbol ?? "",
       securityName: r.securityName ?? "",
       effectiveUnderlyingSymbol,
+      averagePrice,
       price,
       marketValue,
       optionExpiration: parsed?.expiration ?? null,
@@ -239,6 +266,34 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
   });
 
   return out;
+}
+
+function nonIndividualSecuritySymbolsForSnapshots(db: ReturnType<typeof getDb>, snaps: string[]): string[] {
+  if (snaps.length === 0) return [];
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        s.symbol AS symbol,
+        s.security_type AS securityType,
+        p.metadata_json AS metadataJson,
+        us.symbol AS underlyingSymbol,
+        us.security_type AS underlyingSecurityType
+      FROM positions p
+      JOIN securities s ON s.id = p.security_id
+      LEFT JOIN securities us ON us.id = s.underlying_security_id
+      WHERE p.snapshot_id IN (SELECT value FROM json_each(@snapshots_json))
+        AND s.security_type != 'cash'
+    `,
+    )
+    .all({ snapshots_json: JSON.stringify(snaps) }) as Array<{
+    symbol: string | null;
+    securityType: string;
+    metadataJson: string | null;
+    underlyingSymbol: string | null;
+    underlyingSecurityType: string | null;
+  }>;
+  return collectNonIndividualSecuritySymbols(rows);
 }
 
 export async function GET(req: Request) {
@@ -276,7 +331,7 @@ export async function GET(req: Request) {
     }
 
     if (snaps.length === 0 && !latest && !accountIdParam) {
-      return NextResponse.json({ ok: true, snapshotId: null, positions: [], accounts: [] });
+      return NextResponse.json({ ok: true, snapshotId: null, positions: [], accounts: [], nonIndividualSecuritySymbols: [] });
     }
 
     if (snaps.length === 0) {
@@ -286,10 +341,12 @@ export async function GET(req: Request) {
         snapshots: [],
         positions: [],
         accounts: [],
+        nonIndividualSecuritySymbols: [],
       });
     }
 
     const out = await buildPositionsForSnapshots(db, snaps);
+    const nonIndividualSecuritySymbols = nonIndividualSecuritySymbolsForSnapshots(db, snaps);
 
     const accounts = db
       .prepare(
@@ -314,12 +371,13 @@ export async function GET(req: Request) {
       snapshots: snaps,
       positions: out,
       accounts,
+      nonIndividualSecuritySymbols,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     logError("api_positions_get", e);
     return NextResponse.json(
-      { ok: false, error: msg, snapshotId: null, snapshots: [], positions: [] },
+      { ok: false, error: msg, snapshotId: null, snapshots: [], positions: [], nonIndividualSecuritySymbols: [] },
       { status: 500 },
     );
   }

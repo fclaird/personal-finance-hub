@@ -19,6 +19,7 @@ import {
   assignEarthToneColorsByLayoutOrder,
   distinctColorForIndex,
   EARTH_TONE_PIE_COLORS,
+  assignColorsForAdjacentContrast,
 } from "@/lib/charts/pieEarthTones";
 import { formatUsd2 } from "@/lib/format";
 import { formatDisplayDate, formatDisplayMonth } from "@/lib/formatDate";
@@ -426,8 +427,8 @@ export function DividendBookDashboard({ dashboard, masked }: Props) {
                     outerRadius={78}
                     stroke="#18181b"
                   >
-                    {d.sectorBreakdown.map((_, i) => (
-                      <Cell key={i} fill={distinctColorForIndex(i)} />
+                    {assignColorsForAdjacentContrast(d.sectorBreakdown.length).map((fill, i) => (
+                      <Cell key={i} fill={fill} />
                     ))}
                   </Pie>
                   <Tooltip formatter={(v) => usd(typeof v === "number" ? v : Number(v), masked)} />

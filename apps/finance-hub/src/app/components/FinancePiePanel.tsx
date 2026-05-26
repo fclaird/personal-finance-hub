@@ -13,7 +13,7 @@ import {
 
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { SymbolLink } from "@/app/components/SymbolLink";
-import { distinctColorForIndex } from "@/lib/charts/pieEarthTones";
+import { assignColorsForAdjacentContrast, distinctColorForIndex } from "@/lib/charts/pieEarthTones";
 import { formatUsd2 } from "@/lib/format";
 import { symbolPageHref } from "@/lib/symbolPage";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip, type PieLabelRenderProps } from "recharts";
@@ -388,6 +388,8 @@ export function FinancePiePanel({
   }, [data.length, compact, split]);
   const total = b?.totalMarketValue ?? 0;
 
+  const sliceFillColors = useMemo(() => assignColorsForAdjacentContrast(data.length), [data.length]);
+
   const labelFontPx = split ? ALLOCATION_BAR_MATCH_FONT_PX : compact ? 11 : 24;
   const labelFontWeight = split ? ALLOCATION_BAR_MATCH_FONT_WEIGHT : 600;
   const textPad = split ? 8 : compact ? 6 : 10;
@@ -737,7 +739,7 @@ export function FinancePiePanel({
                   >
                     {data.map((entry, idx) => {
                       const k = (entry.key ?? "").trim();
-                      const fill = symbolColorMap?.get(k) ?? distinctColorForIndex(idx);
+                      const fill = symbolColorMap?.get(k) ?? sliceFillColors[idx] ?? distinctColorForIndex(idx);
                       return <Cell key={entry.key} fill={fill} />;
                     })}
                   </Pie>

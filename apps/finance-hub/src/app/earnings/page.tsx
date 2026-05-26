@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
+import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatUsdCompact } from "@/lib/format";
@@ -138,7 +139,9 @@ export default function EarningsPage() {
     <div className="flex w-full max-w-[108rem] flex-1 flex-col gap-8 py-10 pl-5 pr-6 sm:pl-6 sm:pr-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Earnings opportunities</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            <EditablePageHeading pageId="earnings" defaultTitle="Earnings opportunities" />
+          </h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
             Rank names with upcoming earnings by <span className="font-medium text-zinc-800 dark:text-zinc-200">IV vs its 52-week range</span>{" "}
             (elevated = more “event” premium) and{" "}

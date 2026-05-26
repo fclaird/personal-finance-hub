@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { StrategyStatsPanel } from "@/app/components/strategy/StrategyStatsPanel";
+import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { StrategyTradesTable } from "@/app/components/strategy/StrategyTradesTable";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import type { StrategyTabSlug } from "@/lib/strategy/strategyCategories";
@@ -106,7 +107,9 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
     <div className="flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Option Strategies</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            <EditablePageHeading pageId="option-strategies" defaultTitle="Option Strategies" />
+          </h1>
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
             Option-focused trade activity by classification bucket. Pull history from Connections (sync transactions).
           </p>

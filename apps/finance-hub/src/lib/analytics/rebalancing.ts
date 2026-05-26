@@ -1,4 +1,5 @@
 import { getConsolidatedAllocation } from "@/lib/analytics/allocation";
+import type { DataMode } from "@/lib/dataMode";
 import { getGlobalTargets } from "@/lib/targets";
 
 export type DriftRow = {
@@ -11,8 +12,12 @@ export type DriftRow = {
   suggestedDeltaMarketValue: number; // target - current (positive means buy/add)
 };
 
-export function getRebalancing(includeSynthetic: boolean) {
-  const alloc = getConsolidatedAllocation(includeSynthetic);
+export function getRebalancing(
+  includeSynthetic: boolean,
+  mode: DataMode = "auto",
+  equityMarkMap?: Map<string, number>,
+) {
+  const alloc = getConsolidatedAllocation(includeSynthetic, mode, equityMarkMap);
   const targets = getGlobalTargets();
 
   const targetByClass = new Map<string, number>();

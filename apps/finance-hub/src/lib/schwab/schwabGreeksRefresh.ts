@@ -119,7 +119,7 @@ export async function runSchwabGreeksRefresh(db?: Database.Database): Promise<Sc
 
     const updatePositionMark = database.prepare(`
       UPDATE positions
-      SET price = @price, market_value = @market_value
+      SET market_value = @market_value
       WHERE id = @position_id
     `);
 
@@ -184,7 +184,6 @@ export async function runSchwabGreeksRefresh(db?: Database.Database): Promise<Sc
             const qty = row.quantity ?? 0;
             updatePositionMark.run({
               position_id: row.position_id,
-              price: px,
               market_value: qty !== 0 ? px * 100 * qty : null,
             });
           }

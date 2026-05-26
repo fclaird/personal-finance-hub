@@ -49,7 +49,11 @@ function classify(securityType: string, metadataJson: string | null): AssetClass
   return classifyAsset(securityType, metadataJson);
 }
 
-export function getConsolidatedAllocation(includeSynthetic: boolean, mode: DataMode = "auto"): AllocationResult {
+export function getConsolidatedAllocation(
+  includeSynthetic: boolean,
+  mode: DataMode = "auto",
+  equityMarkMap?: Map<string, number>,
+): AllocationResult {
   const db = getDb();
   const scope = latestSnapshotScopeForMode(mode);
   const snapshotIds = latestSnapshotIds(db, scope);
@@ -86,7 +90,7 @@ export function getConsolidatedAllocation(includeSynthetic: boolean, mode: DataM
 
   if (includeSynthetic) {
     // Add synthetic option delta exposure into equities bucket.
-    const exposures = getUnderlyingExposureRollup(mode);
+    const exposures = getUnderlyingExposureRollup(mode, equityMarkMap);
     const syntheticEquityMv = exposures.reduce((sum, e) => sum + e.syntheticMarketValue, 0);
     buckets.set("equity", (buckets.get("equity") ?? 0) + syntheticEquityMv);
   }
@@ -103,9 +107,14 @@ export function getConsolidatedAllocation(includeSynthetic: boolean, mode: DataM
   return { totalMarketValue: total, byAssetClass };
 }
 
-export function getAllocationByAccount(includeSynthetic: boolean, mode: DataMode = "auto"): AllocationByAccountRow[] {
+export function getAllocationByAccount(
+  includeSynthetic: boolean,
+  mode: DataMode = "auto",
+  equityMarkMap?: Map<string, number>,
+): AllocationByAccountRow[] {
   const db = getDb();
-  const priceByUnderlying = includeSynthetic ? portfolioImpliedEquityPriceMap(db, mode) : undefined;
+  const priceByUnderlying =
+    includeSynthetic ? (equityMarkMap ?? portfolioImpliedEquityPriceMap(db, mode)) : undefined;
 
   const snapshots = db
     .prepare(
@@ -229,9 +238,14 @@ export function getAllocationByAccount(includeSynthetic: boolean, mode: DataMode
   return out;
 }
 
-export function getAllocationByBucket(includeSynthetic: boolean, mode: DataMode = "auto"): AllocationBucketedResult {
+export function getAllocationByBucket(
+  includeSynthetic: boolean,
+  mode: DataMode = "auto",
+  equityMarkMap?: Map<string, number>,
+): AllocationBucketedResult {
   const db = getDb();
-  const priceByUnderlying = includeSynthetic ? portfolioImpliedEquityPriceMap(db, mode) : undefined;
+  const priceByUnderlying =
+    includeSynthetic ? (equityMarkMap ?? portfolioImpliedEquityPriceMap(db, mode)) : undefined;
   const scope = latestSnapshotScopeForMode(mode);
   const snapshotIdSet = new Set(latestSnapshotIds(db, scope));
 

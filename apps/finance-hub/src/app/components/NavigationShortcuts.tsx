@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { getSidebarNavIndex, NAV } from "@/app/lib/sidebarNav";
+import { getSidebarNavIndex, readSidebarNavOrder } from "@/app/lib/sidebarNav";
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -23,16 +23,18 @@ export function NavigationShortcuts() {
       switch (e.key) {
         case "ArrowDown": {
           e.preventDefault();
-          const i = getSidebarNavIndex(pathname);
-          const next = (i + 1) % NAV.length;
-          router.push(NAV[next].href);
+          const nav = readSidebarNavOrder();
+          const i = getSidebarNavIndex(pathname, nav);
+          const next = (i + 1) % nav.length;
+          router.push(nav[next]!.href);
           break;
         }
         case "ArrowUp": {
           e.preventDefault();
-          const i = getSidebarNavIndex(pathname);
-          const next = (i - 1 + NAV.length) % NAV.length;
-          router.push(NAV[next].href);
+          const nav = readSidebarNavOrder();
+          const i = getSidebarNavIndex(pathname, nav);
+          const next = (i - 1 + nav.length) % nav.length;
+          router.push(nav[next]!.href);
           break;
         }
         case "ArrowLeft": {

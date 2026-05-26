@@ -1,12 +1,20 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, useMemo } from "react";
 import { DraggableColumnHeader, DRAGGABLE_COLUMN_HEADER_GRAB_CLASS } from "@/app/components/DraggableColumnHeader";
+import { ColumnLabel } from "@/app/components/ColumnLabel";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatInt, formatNum, formatOptionIntExtPerShare, formatUsd2 } from "@/lib/format";
 import { formatOptionSymbolDisplay } from "@/lib/formatOptionDisplay";
 import { symbolPageTargetFromInstrument } from "@/lib/symbolPage";
-import { usePersistedColumnOrder } from "@/lib/usePersistedColumnOrder";
+import { usePositionsColumnOrder } from "@/lib/positions/usePositionsColumnOrder";
+import {
+  POSITIONS_COLUMN_LABEL,
+  POSITIONS_COLUMN_ORDER_STORAGE_KEY,
+  POSITIONS_SORT_COLUMNS,
+  type PositionsColumnId,
+  type PositionsSortColumn,
+} from "@/lib/positions/positionsColumnOrder";
 import { posNegClass } from "@/lib/terminal/colors";
 
 export type Row = {
@@ -53,53 +61,22 @@ function formatOptionSymbol(r: Row) {
   return formatOptionSymbolDisplay(r);
 }
 
-export type SortColumn =
-  | "symbol"
-  | "quantity"
-  | "price"
-  | "marketValue"
-  | "purchaseDate"
-  | "delta"
-  | "gamma"
-  | "theta"
-  | "dte"
-  | "intrinsic"
-  | "extrinsic";
+export type SortColumn = PositionsSortColumn;
 
-/** Includes optional Account column (per-account view). */
 export type PositionsTableColumnId = "account" | SortColumn;
 
-const POSITIONS_COL_ORDER_NO_ACCOUNT: readonly SortColumn[] = [
-  "symbol",
-  "quantity",
-  "price",
-  "marketValue",
-  "purchaseDate",
-  "delta",
-  "gamma",
-  "theta",
-  "dte",
-  "intrinsic",
-  "extrinsic",
-];
-
-const POSITIONS_COL_ORDER_WITH_ACCOUNT: readonly PositionsTableColumnId[] = [
-  "account",
-  ...POSITIONS_COL_ORDER_NO_ACCOUNT,
-];
-
 const SORT_COLUMN_LABEL: Record<SortColumn, string> = {
-  symbol: "Symbol",
-  quantity: "Qty",
+  symbol: POSITIONS_COLUMN_LABEL.symbol,
+  quantity: POSITIONS_COLUMN_LABEL.quantity,
   price: "Cost/share",
-  marketValue: "Market\u00A0value",
-  purchaseDate: "Purchased",
-  delta: "Delta",
-  gamma: "Gamma",
-  theta: "Theta",
-  dte: "DTE",
-  intrinsic: "Intrinsic",
-  extrinsic: "Extrinsic",
+  marketValue: POSITIONS_COLUMN_LABEL.marketValue,
+  purchaseDate: POSITIONS_COLUMN_LABEL.purchaseDate,
+  delta: POSITIONS_COLUMN_LABEL.delta,
+  gamma: POSITIONS_COLUMN_LABEL.gamma,
+  theta: POSITIONS_COLUMN_LABEL.theta,
+  dte: POSITIONS_COLUMN_LABEL.dte,
+  intrinsic: POSITIONS_COLUMN_LABEL.intrinsic,
+  extrinsic: POSITIONS_COLUMN_LABEL.extrinsic,
 };
 
 const POSITIONS_TH_STICKY =
@@ -205,16 +182,21 @@ export function GroupedTable({
     return collapsed.has(`${viewMode}:${accountId}:${underlying}`);
   }
 
-  const columnStorageKey = showAccountCol ? "positions:grouped:v1:withAccount" : "positions:grouped:v1:noAccount";
-  const columnDefaultOrder = showAccountCol ? POSITIONS_COL_ORDER_WITH_ACCOUNT : POSITIONS_COL_ORDER_NO_ACCOUNT;
-  const { order: columnOrderRaw, moveColumn } = usePersistedColumnOrder(columnStorageKey, columnDefaultOrder);
-  const columnOrder = showManualColumns
-    ? columnOrderRaw
-    : columnOrderRaw.filter((c) => c !== "purchaseDate");
+  const availableColumns = useMemo((): PositionsColumnId[] => {
+    const out: PositionsColumnId[] = showAccountCol ? ["account"] : [];
+    for (const col of POSITIONS_SORT_COLUMNS) {
+      if (col === "purchaseDate" && !showManualColumns) continue;
+      out.push(col);
+    }
+    return out;
+  }, [showAccountCol, showManualColumns]);
+
+  const { order: columnOrder, moveColumn } = usePositionsColumnOrder(availableColumns);
+  const columnStorageKey = POSITIONS_COLUMN_ORDER_STORAGE_KEY;
 
   const grab = " " + DRAGGABLE_COLUMN_HEADER_GRAB_CLASS;
 
-  function headerCell(colId: PositionsTableColumnId) {
+  function headerCell(colId: PositionsColumnId) {
     if (colId === "account") {
       return (
         <DraggableColumnHeader
@@ -224,7 +206,7 @@ export function GroupedTable({
           moveColumn={moveColumn}
           className={POSITIONS_TH_STICKY + "text-left text-zinc-600 dark:text-zinc-400" + grab}
         >
-          Account
+          <ColumnLabel tableKey={columnStorageKey} columnId="account" defaultLabel="Account" />
         </DraggableColumnHeader>
       );
     }
@@ -243,7 +225,8 @@ export function GroupedTable({
       >
         <SortThButton
           col={col}
-          label={SORT_COLUMN_LABEL[col]}
+          tableKey={columnStorageKey}
+          defaultLabel={SORT_COLUMN_LABEL[col]}
           sortColumn={sortColumn}
           sortAsc={sortAsc}
           onToggle={toggleSort}
@@ -253,7 +236,7 @@ export function GroupedTable({
     );
   }
 
-  function groupEmDashTd(colId: PositionsTableColumnId) {
+  function groupEmDashTd(colId: PositionsColumnId) {
     return (
       <td key={colId} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums text-zinc-500 dark:text-zinc-400">
         —
@@ -261,7 +244,7 @@ export function GroupedTable({
     );
   }
 
-  function groupRowCell(colId: PositionsTableColumnId, g: UnderlyingGroup, collapsedNow: boolean) {
+  function groupRowCell(colId: PositionsColumnId, g: UnderlyingGroup, collapsedNow: boolean) {
     const caret = collapsedNow ? "▸" : "▾";
     switch (colId) {
       case "account":
@@ -305,7 +288,7 @@ export function GroupedTable({
     }
   }
 
-  function dataRowCell(colId: PositionsTableColumnId, r: Row) {
+  function dataRowCell(colId: PositionsColumnId, r: Row) {
     switch (colId) {
       case "account":
         return (
@@ -584,14 +567,16 @@ export function computeUnderlyingGroups(
 
 function SortThButton({
   col,
-  label,
+  tableKey,
+  defaultLabel,
   sortColumn,
   sortAsc,
   onToggle,
   align = "right",
 }: {
   col: SortColumn;
-  label: string;
+  tableKey: string;
+  defaultLabel: string;
   sortColumn: SortColumn;
   sortAsc: boolean;
   onToggle: (col: SortColumn) => void;
@@ -602,13 +587,13 @@ function SortThButton({
     <button
       type="button"
       onClick={() => onToggle(col)}
-      title={active ? `Sorted ${sortAsc ? "ascending" : "descending"}` : `Sort by ${label}`}
+      title={active ? `Sorted ${sortAsc ? "ascending" : "descending"}` : `Sort by ${defaultLabel}`}
       className={
         "-mx-1 inline-flex w-full max-w-full items-center gap-1 rounded px-1 py-0.5 font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100 " +
         (align === "right" ? "justify-end" : "justify-start")
       }
     >
-      <span>{label}</span>
+      <ColumnLabel tableKey={tableKey} columnId={col} defaultLabel={defaultLabel} />
       <span className="tabular-nums text-xs opacity-70" aria-hidden>
         {active ? (sortAsc ? "▲" : "▼") : ""}
       </span>

@@ -7,10 +7,13 @@ import { Line, LineChart, ResponsiveContainer } from "recharts";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { useMarketAwareInterval } from "@/hooks/useMarketAwareInterval";
 import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator";
-import { isUsEquityPreOpenFuturesPollWindow, isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
+import { isUsEquityExtendedFuturesPollWindow, isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import type { NormalizedQuote as ApiNormalizedQuote } from "@/app/api/quotes/route";
 import { HeatmapGrid, type HeatmapItem } from "@/app/components/HeatmapGrid";
+import { ColumnLabel } from "@/app/components/ColumnLabel";
+import { DraggableColumnHeader, DRAGGABLE_COLUMN_HEADER_GRAB_CLASS } from "@/app/components/DraggableColumnHeader";
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
+import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { type UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
 import { NewsDigestSection } from "@/app/components/terminal/NewsDigestSection";
 import {
@@ -23,6 +26,20 @@ import {
   readTreemapScope,
   readTreemapSyntheticBasis,
 } from "@/app/components/terminal/terminalTreemapPrefs";
+import {
+  readHeatmapHiddenSymbols,
+  readOptionFlowMode,
+  readQuotesSort,
+  readStocksOnlyView,
+  readVolumeLeadersMode,
+  readWatchlistId,
+  writeHeatmapHiddenSymbols,
+  writeOptionFlowMode,
+  writeQuotesSort,
+  writeStocksOnlyView,
+  writeVolumeLeadersMode,
+  writeWatchlistId,
+} from "@/app/components/terminal/terminalDisplayPrefs";
 import { UsMarketsPanel } from "@/app/components/terminal/UsMarketsPanel";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatUsd2 } from "@/lib/format";
@@ -39,19 +56,12 @@ import {
 import { heatmapCellStyle } from "@/lib/terminal/dailyPerfColor";
 import { posNegClass, priceDirClass } from "@/lib/terminal/colors";
 import { computeMovers } from "@/lib/terminal/movers";
+import { shouldHideNonIndividualSymbol } from "@/lib/terminal/individualSecurityFilter";
+import { usePersistedColumnOrder } from "@/lib/usePersistedColumnOrder";
 
 type WatchlistRow = { id: string; name: string; createdAt: string; itemCount: number };
 
 type NormalizedQuote = ApiNormalizedQuote;
-
-type MoversPayload = {
-  ok: boolean;
-  scope?: string;
-  basketKey?: string; // legacy
-  gainers?: NormalizedQuote[];
-  losers?: NormalizedQuote[];
-  error?: string;
-};
 
 type SortCol = "symbol" | "company" | "last" | "chgPct" | "chg" | "volume" | "volX";
 type VolumeInfo = { volume: number | null; avgVolume20: number | null; ratio: number | null; flagged: boolean };
@@ -59,6 +69,18 @@ type VolumeInfo = { volume: number | null; avgVolume20: number | null; ratio: nu
 type TerminalCol = "symbol" | "company" | "last" | "chg" | "chgPct" | "volume" | "volX";
 
 const DEFAULT_TERMINAL_COL_ORDER: TerminalCol[] = ["symbol", "company", "last", "chg", "chgPct", "volume", "volX"];
+const TERMINAL_QUOTES_COLUMN_KEY = "fh.terminal.quotes.columns.v1";
+const TERMINAL_QUOTES_COLUMN_LEGACY = ["terminal_table_column_order_v2", "terminal_table_column_order_v1"] as const;
+const TERMINAL_COL_LABEL: Record<TerminalCol, string> = {
+  symbol: "Symbol",
+  company: "Company",
+  last: "Last",
+  chg: "$ Chg",
+  chgPct: "% Chg",
+  volume: "Volume",
+  volX: "Vol ×",
+};
+const HEAT_VIEW = "portfolio" as const;
 
 const PCT2 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 function clamp(n: number, lo: number, hi: number) {
@@ -126,14 +148,16 @@ async function terminalFetchJson<T>(resp: Response, context: string): Promise<T>
 /** Header control only — must sit inside a single parent `<th>` (never wrap in another `<th>`). */
 function SortTh({
   col,
-  label,
+  tableKey,
+  defaultLabel,
   sortCol,
   sortAsc,
   onToggle,
   align = "right",
 }: {
   col: SortCol;
-  label: string;
+  tableKey: string;
+  defaultLabel: string;
   sortCol: SortCol;
   sortAsc: boolean;
   onToggle: (c: SortCol) => void;
@@ -150,7 +174,7 @@ function SortTh({
         (align === "right" ? "justify-end" : "justify-start")
       }
     >
-      <span>{label}</span>
+      <ColumnLabel tableKey={tableKey} columnId={col} defaultLabel={defaultLabel} />
       <span className="text-[10px] opacity-70">{arrow}</span>
     </button>
   );
@@ -162,7 +186,6 @@ export default function TerminalPage() {
   const [watchlistId, setWatchlistId] = useState<string | null>(null);
   const [symbols, setSymbols] = useState<string[]>([]);
   const [quotes, setQuotes] = useState<NormalizedQuote[]>([]);
-  const [movers, setMovers] = useState<MoversPayload | null>(null);
   const [optionFlow, setOptionFlow] = useState<OptionFlowPayload | null>(null);
   const [volumeInfo, setVolumeInfo] = useState<Map<string, VolumeInfo>>(new Map());
   const [error, setError] = useState<string | null>(null);
@@ -170,11 +193,14 @@ export default function TerminalPage() {
   const [nowMs, setNowMs] = useState<number>(0);
   const [sortCol, setSortCol] = useState<SortCol>("chgPct");
   const [sortAsc, setSortAsc] = useState(false);
-  const [colOrder, setColOrder] = useState<TerminalCol[]>(DEFAULT_TERMINAL_COL_ORDER);
+  const { order: colOrder, moveColumn } = usePersistedColumnOrder(
+    TERMINAL_QUOTES_COLUMN_KEY,
+    DEFAULT_TERMINAL_COL_ORDER,
+    TERMINAL_QUOTES_COLUMN_LEGACY,
+  );
   const [companyBySymbol, setCompanyBySymbol] = useState<Map<string, string>>(new Map());
   const [volumeLeadersMode, setVolumeLeadersMode] = useState<"volume" | "volX">("volume");
   const [optionFlowMode, setOptionFlowMode] = useState<"volume" | "relative">("volume");
-  const [heatView, setHeatView] = useState<"portfolio" | "spy" | "qqq">("portfolio");
   const [heatItems, setHeatItems] = useState<HeatmapItem[]>([]);
   const [positionMvBySym, setPositionMvBySym] = useState<Map<string, number>>(() => new Map());
   const [exposureRows, setExposureRows] = useState<ExposureRow[]>([]);
@@ -184,7 +210,10 @@ export default function TerminalPage() {
   const [treemapScope, setTreemapScope] = useState<ExposureScope>("net");
   const [treemapMetric, setTreemapMetric] = useState<ExposurePieMetric>("net");
   const [treemapSyntheticBasis, setTreemapSyntheticBasis] = useState<SyntheticChartBasis>("delta");
-  const treemapPrefsHydratedRef = useRef(false);
+  const [stocksOnlyView, setStocksOnlyView] = useState(false);
+  const [heatmapHiddenSymbols, setHeatmapHiddenSymbols] = useState<Set<string>>(() => new Set());
+  const [nonIndividualSymbols, setNonIndividualSymbols] = useState<Set<string>>(() => new Set());
+  const [displayPrefsHydrated, setDisplayPrefsHydrated] = useState(false);
   const [futuresItems, setFuturesItems] = useState<
     Array<{ symbol: string; quote: NormalizedQuote; series: Array<{ date: string; close: number }> }>
   >([]);
@@ -198,11 +227,13 @@ export default function TerminalPage() {
       showingPriorSession?: boolean;
     };
     items: UsMarketGlanceItem[];
+    alternateGlanceItems?: UsMarketGlanceItem[];
+    futuresGlanceItems?: UsMarketGlanceItem[];
     updatedAt: string | null;
   } | null>(null);
   const [clockTick, setClockTick] = useState(() => Date.now());
 
-  const heatViewPrimed = useRef(false);
+  const watchlistPrimed = useRef(false);
   const bootstrapInflightRef = useRef<Promise<void> | null>(null);
   const bootstrapInflightKeyRef = useRef("");
   const lastPrimaryLoadAtRef = useRef(0);
@@ -223,16 +254,51 @@ export default function TerminalPage() {
   );
 
   const marketPollResetKey = useMemo(
-    () => `${watchlistId ?? ""}|${heatView}`,
-    [watchlistId, heatView],
+    () => `${watchlistId ?? ""}|${HEAT_VIEW}|${stocksOnlyView ? "stocksOnly" : "all"}`,
+    [watchlistId, stocksOnlyView],
   );
 
+  const shouldHideSymbol = useMemo(() => {
+    return (symbol: string) =>
+      shouldHideNonIndividualSymbol(symbol, stocksOnlyView, nonIndividualSymbols);
+  }, [stocksOnlyView, nonIndividualSymbols]);
+
+  const filteredExposureRows = useMemo(() => {
+    if (!stocksOnlyView) return exposureRows;
+    return exposureRows.filter((r) => !shouldHideSymbol(r.underlyingSymbol));
+  }, [exposureRows, stocksOnlyView, shouldHideSymbol]);
+
+  const filteredExposureBuckets = useMemo(() => {
+    if (!stocksOnlyView) return exposureBuckets;
+    return exposureBuckets.map((b) => ({
+      ...b,
+      exposure: b.exposure.filter((r) => !shouldHideSymbol(r.underlyingSymbol)),
+    }));
+  }, [exposureBuckets, stocksOnlyView, shouldHideSymbol]);
+
+  const filteredPositionMvBySym = useMemo(() => {
+    if (!stocksOnlyView) return positionMvBySym;
+    const out = new Map<string, number>();
+    for (const [sym, mv] of positionMvBySym.entries()) {
+      if (shouldHideSymbol(sym)) continue;
+      out.set(sym, mv);
+    }
+    return out;
+  }, [positionMvBySym, stocksOnlyView, shouldHideSymbol]);
+
   const treemapMvBySym = useMemo(() => {
-    if (exposureRows.length === 0) return positionMvBySym;
-    const scoped = scopeExposureRows(exposureRows, exposureBuckets, treemapScope);
+    if (filteredExposureRows.length === 0) return filteredPositionMvBySym;
+    const scoped = scopeExposureRows(filteredExposureRows, filteredExposureBuckets, treemapScope);
     const weighted = exposureMvByUnderlying(scoped, treemapMetric, treemapSyntheticBasis);
-    return weighted.size > 0 ? weighted : positionMvBySym;
-  }, [exposureRows, exposureBuckets, treemapScope, treemapMetric, treemapSyntheticBasis, positionMvBySym]);
+    return weighted.size > 0 ? weighted : filteredPositionMvBySym;
+  }, [
+    filteredExposureRows,
+    filteredExposureBuckets,
+    treemapScope,
+    treemapMetric,
+    treemapSyntheticBasis,
+    filteredPositionMvBySym,
+  ]);
 
   const treemapSizeCaption = useMemo(
     () => terminalTreemapSizeCaption(treemapScope, treemapMetric, treemapSyntheticBasis),
@@ -270,8 +336,8 @@ export default function TerminalPage() {
 
   async function loadUniverse(nextWatchlistId: string | null) {
     const params = new URLSearchParams();
-    params.set("scope", heatView);
-    if (heatView === "portfolio" && nextWatchlistId) params.set("watchlistId", nextWatchlistId);
+    params.set("scope", HEAT_VIEW);
+    if (nextWatchlistId) params.set("watchlistId", nextWatchlistId);
     const q = params.toString() ? `?${params.toString()}` : "";
     const resp = await fetch(`/api/terminal/universe${q}`, { cache: "no-store" });
     const json = await terminalFetchJson<{ ok: boolean; symbols?: string[]; error?: string }>(resp, "terminal universe");
@@ -409,11 +475,6 @@ export default function TerminalPage() {
     setLastUpdatedAt(new Date().toISOString());
     setHeatItems(items);
 
-    const portfolioSet = new Set(symList.map((s) => s.toUpperCase()));
-    const portfolioQuotes = rows.filter((q) => portfolioSet.has(q.symbol.toUpperCase()));
-    const computed = computeMovers("portfolio", portfolioQuotes, 50);
-    setMovers({ ok: true, scope: "myUniverse", gainers: computed.gainers, losers: computed.losers });
-
     setCompanyBySymbol((prev) => {
       const m = new Map(prev);
       for (const q of rows) {
@@ -434,7 +495,7 @@ export default function TerminalPage() {
       .filter(Boolean)
       .sort()
       .join(",");
-    return `${heatView}|${nextWatchlistId ?? ""}|${syms}`;
+    return `${HEAT_VIEW}|${nextWatchlistId ?? ""}|${syms}`;
   }
 
   async function runTerminalPrimaryLoad(symList: string[], nextWatchlistId: string | null) {
@@ -448,7 +509,7 @@ export default function TerminalPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          view: heatView,
+          view: HEAT_VIEW,
           watchlistId: nextWatchlistId,
           indexSymbols: ["SPY", "QQQ"],
         }),
@@ -500,12 +561,16 @@ export default function TerminalPage() {
           showingPriorSession?: boolean;
         };
         items?: UsMarketGlanceItem[];
+        alternateGlanceItems?: UsMarketGlanceItem[];
+        futuresGlanceItems?: UsMarketGlanceItem[];
         updatedAt?: string;
       }>(resp, "us-markets");
       if (!json.ok) return;
       setUsMarkets({
         session: json.session ?? { headline: "U.S. MARKETS", detail: "", isOpen: false },
         items: json.items ?? [],
+        alternateGlanceItems: json.alternateGlanceItems ?? [],
+        futuresGlanceItems: json.futuresGlanceItems ?? [],
         updatedAt: json.updatedAt ?? new Date().toISOString(),
       });
     } catch {
@@ -531,13 +596,13 @@ export default function TerminalPage() {
   }, []);
 
   useEffect(() => {
-    if (!heatViewPrimed.current) {
-      heatViewPrimed.current = true;
+    if (!watchlistPrimed.current) {
+      watchlistPrimed.current = true;
       return;
     }
     void loadUniverse(watchlistId).catch(() => null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [heatView, watchlistId]);
+  }, [watchlistId]);
 
   useSchwabRefreshCoordinator({
     onTick: () => {
@@ -551,14 +616,76 @@ export default function TerminalPage() {
   });
 
   useEffect(() => {
+    setWatchlistId(readWatchlistId());
+    const sort = readQuotesSort();
+    setSortCol(sort.col);
+    setSortAsc(sort.asc);
+    setVolumeLeadersMode(readVolumeLeadersMode());
+    setOptionFlowMode(readOptionFlowMode());
+    setStocksOnlyView(readStocksOnlyView());
+    setHeatmapHiddenSymbols(readHeatmapHiddenSymbols());
     setTreemapScope(readTreemapScope());
     setTreemapMetric(readTreemapMetric());
     setTreemapSyntheticBasis(readTreemapSyntheticBasis());
-    treemapPrefsHydratedRef.current = true;
+    setDisplayPrefsHydrated(true);
   }, []);
 
   useEffect(() => {
-    if (!treemapPrefsHydratedRef.current) return;
+    if (!displayPrefsHydrated) return;
+    writeStocksOnlyView(stocksOnlyView);
+  }, [stocksOnlyView, displayPrefsHydrated]);
+
+  useEffect(() => {
+    if (!displayPrefsHydrated) return;
+    writeHeatmapHiddenSymbols(heatmapHiddenSymbols);
+  }, [heatmapHiddenSymbols, displayPrefsHydrated]);
+
+  useEffect(() => {
+    if (!displayPrefsHydrated) return;
+    writeWatchlistId(watchlistId);
+  }, [watchlistId, displayPrefsHydrated]);
+
+  useEffect(() => {
+    if (!displayPrefsHydrated) return;
+    writeQuotesSort(sortCol, sortAsc);
+  }, [sortCol, sortAsc, displayPrefsHydrated]);
+
+  useEffect(() => {
+    if (!displayPrefsHydrated) return;
+    writeVolumeLeadersMode(volumeLeadersMode);
+  }, [volumeLeadersMode, displayPrefsHydrated]);
+
+  useEffect(() => {
+    if (!displayPrefsHydrated) return;
+    writeOptionFlowMode(optionFlowMode);
+  }, [optionFlowMode, displayPrefsHydrated]);
+
+  useEffect(() => {
+    if (watchlists.length === 0 || !watchlistId) return;
+    if (!watchlists.some((w) => w.id === watchlistId)) {
+      setWatchlistId(null);
+    }
+  }, [watchlists, watchlistId]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const posResp = await fetch("/api/positions", { cache: "no-store" });
+        const posJson = await terminalFetchJson<{ ok: boolean; nonIndividualSecuritySymbols?: string[] }>(
+          posResp,
+          "positions",
+        );
+        if (posJson.ok) {
+          setNonIndividualSymbols(new Set((posJson.nonIndividualSecuritySymbols ?? []).map((s) => s.toUpperCase())));
+        }
+      } catch {
+        // ignore
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!displayPrefsHydrated) return;
     try {
       localStorage.setItem("terminal_treemap_scope_v1", treemapScope);
       localStorage.setItem("terminal_treemap_metric_v1", treemapMetric);
@@ -566,56 +693,7 @@ export default function TerminalPage() {
     } catch {
       // ignore
     }
-  }, [treemapScope, treemapMetric, treemapSyntheticBasis]);
-
-  useEffect(() => {
-    const allowed = new Set<TerminalCol>(["symbol", "company", "last", "chg", "chgPct", "volume", "volX"]);
-    const legacyAllowed = new Set<string>(["symbol", "last", "chg", "chgPct", "volume", "volX"]);
-
-    function normalizeOrder(parsed: unknown): TerminalCol[] | null {
-      if (!Array.isArray(parsed)) return null;
-      let clean = parsed.filter((x) => typeof x === "string" && allowed.has(x as TerminalCol)) as TerminalCol[];
-      if (clean.length === 0) {
-        clean = parsed.filter((x) => typeof x === "string" && legacyAllowed.has(x as string)) as TerminalCol[];
-      }
-      if (clean.length === 0) return null;
-      if (!clean.includes("company")) {
-        const i = clean.indexOf("symbol");
-        if (i >= 0) clean.splice(i + 1, 0, "company");
-        else clean = ["symbol", "company", ...clean.filter((c) => c !== "symbol")];
-      }
-      for (const c of DEFAULT_TERMINAL_COL_ORDER) {
-        if (!clean.includes(c)) clean.push(c);
-      }
-      return clean;
-    }
-
-    try {
-      const rawV2 = localStorage.getItem("terminal_table_column_order_v2");
-      if (rawV2) {
-        const clean = normalizeOrder(JSON.parse(rawV2) as unknown);
-        if (clean?.length) {
-          setTimeout(() => setColOrder(clean), 0);
-          return;
-        }
-      }
-      const rawV1 = localStorage.getItem("terminal_table_column_order_v1");
-      if (rawV1) {
-        const clean = normalizeOrder(JSON.parse(rawV1) as unknown);
-        if (clean?.length) setTimeout(() => setColOrder(clean), 0);
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("terminal_table_column_order_v2", JSON.stringify(colOrder));
-    } catch {
-      // ignore
-    }
-  }, [colOrder]);
+  }, [treemapScope, treemapMetric, treemapSyntheticBasis, displayPrefsHydrated]);
 
   useEffect(() => {
     const t = setTimeout(() => setNowMs(Date.now()), 0);
@@ -639,11 +717,13 @@ export default function TerminalPage() {
           const posJson = await terminalFetchJson<{
             ok: boolean;
             positions?: Array<{ symbol: string | null; marketValue: number | null }>;
+            nonIndividualSecuritySymbols?: string[];
           }>(posResp, "positions");
           if (!posJson.ok) {
             setPositionMvBySym(new Map());
             return;
           }
+          setNonIndividualSymbols(new Set((posJson.nonIndividualSecuritySymbols ?? []).map((s) => s.toUpperCase())));
           const mvBySym = new Map<string, number>();
           for (const p of posJson.positions ?? []) {
             const sym = (p.symbol ?? "").toUpperCase().trim();
@@ -671,7 +751,7 @@ export default function TerminalPage() {
     const run = () => void loadFutures();
     void run();
     const sync = () => {
-      if (isUsEquityPreOpenFuturesPollWindow(new Date())) {
+      if (isUsEquityExtendedFuturesPollWindow(new Date())) {
         if (five == null) {
           void run();
           five = setInterval(run, 300_000);
@@ -699,8 +779,59 @@ export default function TerminalPage() {
 
   const portfolioSymbolSet = useMemo(() => new Set(symbols.map((s) => s.toUpperCase())), [symbols]);
 
+  const visiblePortfolioSymbolCount = useMemo(() => {
+    if (!stocksOnlyView) return symbols.length;
+    return symbols.filter((s) => !shouldHideSymbol(s)).length;
+  }, [symbols, stocksOnlyView, shouldHideSymbol]);
+
+  const filteredHeatItems = useMemo(() => {
+    if (!stocksOnlyView) return heatItems;
+    return heatItems.filter((it) => !shouldHideSymbol(it.symbol));
+  }, [heatItems, stocksOnlyView, shouldHideSymbol]);
+
+  const visualHeatItems = useMemo(() => {
+    if (heatmapHiddenSymbols.size === 0) return filteredHeatItems;
+    return filteredHeatItems.filter((it) => !heatmapHiddenSymbols.has(it.symbol.toUpperCase()));
+  }, [filteredHeatItems, heatmapHiddenSymbols]);
+
+  const sortedHiddenHeatmapSymbols = useMemo(
+    () => [...heatmapHiddenSymbols].sort((a, b) => a.localeCompare(b)),
+    [heatmapHiddenSymbols],
+  );
+
+  function hideHeatmapSymbol(symbol: string) {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym) return;
+    setHeatmapHiddenSymbols((prev) => {
+      if (prev.has(sym)) return prev;
+      const next = new Set(prev);
+      next.add(sym);
+      return next;
+    });
+  }
+
+  function restoreHeatmapSymbol(symbol: string) {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym) return;
+    setHeatmapHiddenSymbols((prev) => {
+      if (!prev.has(sym)) return prev;
+      const next = new Set(prev);
+      next.delete(sym);
+      return next;
+    });
+  }
+
+  function restoreAllHeatmapHidden() {
+    setHeatmapHiddenSymbols(new Set());
+  }
+
   const sortedQuotes = useMemo(() => {
-    const a = quotes.filter((q) => portfolioSymbolSet.has(q.symbol.toUpperCase()));
+    const a = quotes.filter((q) => {
+      const sym = q.symbol.toUpperCase();
+      if (!portfolioSymbolSet.has(sym)) return false;
+      if (shouldHideSymbol(sym)) return false;
+      return true;
+    });
     a.sort((x, y) => {
       let cmp = 0;
       switch (sortCol) {
@@ -736,10 +867,21 @@ export default function TerminalPage() {
       return sortAsc ? cmp : -cmp;
     });
     return a;
-  }, [quotes, portfolioSymbolSet, sortCol, sortAsc, volumeInfo, companyBySymbol]);
+  }, [quotes, portfolioSymbolSet, sortCol, sortAsc, volumeInfo, companyBySymbol, shouldHideSymbol]);
+
+  const moversDisplay = useMemo(() => {
+    const portfolioQuotes = quotes.filter((q) => {
+      const sym = q.symbol.toUpperCase();
+      if (!portfolioSymbolSet.has(sym)) return false;
+      if (shouldHideSymbol(sym)) return false;
+      return true;
+    });
+    return computeMovers("portfolio", portfolioQuotes, 50);
+  }, [quotes, portfolioSymbolSet, shouldHideSymbol]);
 
   const volumeLeaders = useMemo(() => {
     const rows = quotes
+      .filter((q) => !shouldHideSymbol(q.symbol))
       .map((q) => {
         const v = volumeInfo.get(q.symbol);
         return { q, vol: q.volume ?? null, ratio: v?.ratio ?? null, flagged: v?.flagged ?? false };
@@ -758,7 +900,7 @@ export default function TerminalPage() {
     });
 
     return rows.slice(0, 10);
-  }, [quotes, volumeInfo, volumeLeadersMode]);
+  }, [quotes, volumeInfo, volumeLeadersMode, shouldHideSymbol]);
 
   const changePctBySymbol = useMemo(() => {
     const m = new Map<string, number | null | undefined>();
@@ -767,7 +909,9 @@ export default function TerminalPage() {
   }, [quotes]);
 
   const optionFlowRows = useMemo(() => {
-    const rows = (optionFlow?.items ?? []).map((it) => ({
+    const rows = (optionFlow?.items ?? [])
+      .filter((it) => !shouldHideSymbol(it.symbol))
+      .map((it) => ({
       ...it,
       relativeVolume: it.relativeVolume ?? null,
       flagged: it.relativeVolume != null && it.relativeVolume >= 2.5,
@@ -785,7 +929,7 @@ export default function TerminalPage() {
     });
 
     return rows.slice(0, 10);
-  }, [optionFlow, optionFlowMode]);
+  }, [optionFlow, optionFlowMode, shouldHideSymbol]);
 
   const updatedLabel = useMemo(() => {
     if (!lastUpdatedAt) return "—";
@@ -801,11 +945,14 @@ export default function TerminalPage() {
 
   const newsFocusSymbols = useMemo(() => {
     const out = new Set<string>();
-    for (const q of movers?.gainers?.slice(0, 6) ?? []) out.add(q.symbol.toUpperCase());
-    for (const q of movers?.losers?.slice(0, 6) ?? []) out.add(q.symbol.toUpperCase());
-    for (const s of symbols.slice(0, 8)) out.add(s.toUpperCase());
+    for (const q of moversDisplay.gainers.slice(0, 6)) out.add(q.symbol.toUpperCase());
+    for (const q of moversDisplay.losers.slice(0, 6)) out.add(q.symbol.toUpperCase());
+    for (const s of symbols.slice(0, 8)) {
+      const sym = s.toUpperCase();
+      if (!shouldHideSymbol(sym)) out.add(sym);
+    }
     return [...out].slice(0, 12);
-  }, [movers, symbols]);
+  }, [moversDisplay, symbols, shouldHideSymbol]);
 
   const newsAnomalySymbols = useMemo(() => {
     return volumeLeaders.filter((r) => r.flagged).map((r) => r.q.symbol).slice(0, 8);
@@ -815,17 +962,32 @@ export default function TerminalPage() {
     <div className="flex w-full max-w-7xl flex-1 flex-col gap-6 py-8 pl-4 pr-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Terminal</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            <EditablePageHeading pageId="terminal" defaultTitle="Terminal" />
+          </h1>
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
             Portfolio-aware quote monitor (holdings + option underlyings) with a big-name movers board. Live equity refresh runs every 60 seconds during US RTH only (09:30–16:00 ET).
           </p>
           {!rthOpen ? (
             <p className="mt-2 text-xs font-medium text-amber-800 dark:text-amber-200">
-              Market closed — equity live refresh is paused. Futures (if configured) still update on their pre-open schedule.
+              Market closed — equity live refresh is paused. Use Quick glance → Futures for global E-minis, or configure Schwab contracts below.
             </p>
           ) : null}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            aria-pressed={stocksOnlyView}
+            onClick={() => setStocksOnlyView((v) => !v)}
+            className={
+              "rounded-full border px-4 py-2 text-sm font-medium shadow-sm transition-colors " +
+              (stocksOnlyView
+                ? "border-zinc-900 bg-zinc-900 text-white dark:border-white dark:bg-white dark:text-zinc-900"
+                : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
+            }
+          >
+            Stocks only
+          </button>
           <Link
             href="/connections"
             className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
@@ -848,55 +1010,59 @@ export default function TerminalPage() {
             children: <UsMarketsPanel usMarkets={usMarkets} />,
           },
           futures: {
-            title: "Futures",
+            title: "Schwab futures",
             visible: futuresItems.length > 0,
             children: (
               <>
-            <div className="text-[11px] text-zinc-600 dark:text-zinc-400">
-              Set <span className="font-mono">TERMINAL_FUTURES_SYMBOLS</span> (e.g. <span className="font-mono">/ESM6,/NQM6</span>). Pre-open: every 5 min 08:30–09:30 ET; one fetch on load.
-            </div>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {futuresItems.map((row) => {
-              const last = row.quote.last ?? row.quote.mark;
-              const pctPts = row.quote.changePercent == null ? null : row.quote.changePercent * 100;
-              const chartData = row.series.map((p, idx) => ({ idx, c: p.close }));
-              return (
-                <div
-                  key={row.symbol}
-                  className="rounded-xl border border-zinc-300 bg-white/70 p-3 dark:border-white/20 dark:bg-black/20"
-                >
-                  <div className="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                    <SymbolLink symbol={row.symbol} className="font-mono font-semibold hover:no-underline">
-                      {row.symbol}
-                    </SymbolLink>
-                  </div>
-                  <div className="mt-1 grid grid-cols-2 gap-1 text-xs tabular-nums text-zinc-700 dark:text-zinc-300">
-                    <div>Last</div>
-                    <div className="text-right font-medium">{last == null ? "—" : last.toFixed(2)}</div>
-                    <div>Chg %</div>
-                    <div className={"text-right font-medium " + posNegClass(pctPts)}>{pctPts == null ? "—" : `${PCT2.format(pctPts)}%`}</div>
-                  </div>
-                  {chartData.length >= 2 ? (
-                    <div className="mt-2 h-24 w-full min-w-0">
-                      <ResponsiveContainer
-                        width="100%"
-                        height="100%"
-                        minWidth={64}
-                        minHeight={96}
-                        initialDimension={{ width: 200, height: 96 }}
-                      >
-                        <LineChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                          <Line type="monotone" dataKey="c" dot={false} strokeWidth={1.5} stroke="#0f766e" />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  ) : (
-                    <div className="mt-2 text-[11px] text-zinc-500">No history cached yet.</div>
-                  )}
+                <div className="text-[11px] text-zinc-600 dark:text-zinc-400">
+                  From <span className="font-mono">TERMINAL_FUTURES_SYMBOLS</span> (e.g.{" "}
+                  <span className="font-mono">/ESM6,/NQM6</span>). Global ES/NQ/Nikkei/Russell are in Quick glance →
+                  Futures. The 4th Markets tile is selectable (Russell, Gold, Bitcoin, WTI Crude, Nikkei, FTSE 100).
                 </div>
-              );
-            })}
-          </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {futuresItems.map((row) => {
+                        const last = row.quote.last ?? row.quote.mark;
+                        const pctPts = row.quote.changePercent == null ? null : row.quote.changePercent * 100;
+                        const chartData = row.series.map((p, idx) => ({ idx, c: p.close }));
+                        return (
+                          <div
+                            key={row.symbol}
+                            className="rounded-xl border border-zinc-300 bg-white/70 p-3 dark:border-white/20 dark:bg-black/20"
+                          >
+                            <div className="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                              <SymbolLink symbol={row.symbol} className="font-mono font-semibold hover:no-underline">
+                                {row.symbol}
+                              </SymbolLink>
+                            </div>
+                            <div className="mt-1 grid grid-cols-2 gap-1 text-xs tabular-nums text-zinc-700 dark:text-zinc-300">
+                              <div>Last</div>
+                              <div className="text-right font-medium">{last == null ? "—" : last.toFixed(2)}</div>
+                              <div>Chg %</div>
+                              <div className={"text-right font-medium " + posNegClass(pctPts)}>
+                                {pctPts == null ? "—" : `${PCT2.format(pctPts)}%`}
+                              </div>
+                            </div>
+                            {chartData.length >= 2 ? (
+                              <div className="mt-2 h-24 w-full min-w-0">
+                                <ResponsiveContainer
+                                  width="100%"
+                                  height="100%"
+                                  minWidth={64}
+                                  minHeight={96}
+                                  initialDimension={{ width: 200, height: 96 }}
+                                >
+                                  <LineChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                                    <Line type="monotone" dataKey="c" dot={false} strokeWidth={1.5} stroke="#0f766e" />
+                                  </LineChart>
+                                </ResponsiveContainer>
+                              </div>
+                            ) : (
+                              <div className="mt-2 text-[11px] text-zinc-500">No history cached yet.</div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
               </>
             ),
           },
@@ -937,7 +1103,11 @@ export default function TerminalPage() {
             </Link>
           </div>
           <div className="text-sm text-zinc-600 dark:text-zinc-400">
-            {symbols.length} symbols • Updated {updatedLabel}
+            {visiblePortfolioSymbolCount} symbols
+            {stocksOnlyView && nonIndividualSymbols.size > 0
+              ? ` (${nonIndividualSymbols.size} hidden)`
+              : ""}{" "}
+            • Updated {updatedLabel}
           </div>
         </div>
               ),
@@ -947,32 +1117,44 @@ export default function TerminalPage() {
               bodyClassName: "p-4",
               children: (
                 <>
-              <div className="flex flex-wrap items-center justify-end gap-1">
-                {(
-                  [
-                    { key: "spy", label: "SPY" },
-                    { key: "qqq", label: "QQQ" },
-                    { key: "portfolio", label: "Net portfolio" },
-                  ] as const
-                ).map((v) => (
-                  <button
-                    key={v.key}
-                    type="button"
-                    onClick={() => setHeatView(v.key)}
-                    className={
-                      "h-9 min-w-[5.5rem] whitespace-nowrap rounded-md px-3 text-sm font-semibold " +
-                      (heatView === v.key
-                        ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
-                        : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
-                    }
-                  >
-                    {v.label}
-                  </button>
-                ))}
+          {sortedHiddenHeatmapSymbols.length > 0 ? (
+            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-white/10 dark:bg-zinc-900/50">
+              <span className="text-[11px] font-medium text-zinc-600 dark:text-zinc-400">Hidden from map</span>
+              {sortedHiddenHeatmapSymbols.map((sym) => (
+                <button
+                  key={sym}
+                  type="button"
+                  onClick={() => restoreHeatmapSymbol(sym)}
+                  className="rounded-full border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-zinc-800 hover:bg-zinc-100 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/10"
+                  title={`Restore ${sym} to heatmap and treemap`}
+                >
+                  {sym} ×
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={restoreAllHeatmapHidden}
+                className="ml-auto text-[11px] font-semibold text-zinc-700 underline-offset-2 hover:underline dark:text-zinc-200"
+              >
+                Restore all
+              </button>
+            </div>
+          ) : null}
+          <p className="mb-2 text-[11px] text-zinc-600 dark:text-zinc-400">
+            Click a tile to hide it from the heatmap and treemap (saved until you restore). ⌘/Ctrl+click opens the
+            symbol page.
+          </p>
+          <div className="min-w-0">
+            <HeatmapGrid
+              items={visualHeatItems.slice(0, 220)}
+              companyNamesBySymbol={companyBySymbol}
+              onHideSymbol={hideHeatmapSymbol}
+            />
+            {visualHeatItems.length === 0 ? (
+              <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+                {filteredHeatItems.length === 0 ? "No heatmap data yet." : "All symbols hidden — restore from the list above."}
               </div>
-          <div className="mt-3 min-w-0">
-            <HeatmapGrid items={heatItems.slice(0, 220)} companyNamesBySymbol={companyBySymbol} />
-            {heatItems.length === 0 ? <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">No heatmap data yet.</div> : null}
+            ) : null}
           </div>
                 </>
               ),
@@ -982,8 +1164,8 @@ export default function TerminalPage() {
               bodyClassName: "p-4",
               children: (
                 <PortfolioTreemapSection
-                  heatView={heatView}
-                  heatItems={heatItems}
+                  heatView={HEAT_VIEW}
+                  heatItems={visualHeatItems}
                   companyNamesBySymbol={companyBySymbol}
                   treemapScope={treemapScope}
                   onScopeChange={setTreemapScope}
@@ -992,7 +1174,7 @@ export default function TerminalPage() {
                   treemapSyntheticBasis={treemapSyntheticBasis}
                   onSyntheticChartBasisChange={setTreemapSyntheticBasis}
                   treemapMvBySym={treemapMvBySym}
-                  positionMvBySym={positionMvBySym}
+                  positionMvBySym={filteredPositionMvBySym}
                   portfolioSizeCaption={treemapSizeCaption}
                 />
               ),
@@ -1013,67 +1195,34 @@ export default function TerminalPage() {
               <thead>
                 <tr className="border-b border-zinc-300 bg-zinc-50 text-left text-zinc-600 dark:border-white/20 dark:bg-zinc-900/40 dark:text-zinc-400">
                   {colOrder.map((c) => {
-                    const label =
-                      c === "symbol"
-                        ? "Symbol"
-                        : c === "company"
-                          ? "Company"
-                          : c === "last"
-                            ? "Last"
-                            : c === "chg"
-                              ? "$ Chg"
-                              : c === "chgPct"
-                                ? "% Chg"
-                                : c === "volume"
-                                  ? "Volume"
-                                  : "Vol ×";
                     const align = c === "symbol" || c === "company" ? "left" : "right";
                     const colActive = sortCol === c;
                     const ariaSort = colActive ? (sortAsc ? "ascending" : "descending") : "none";
                     return (
-                      <th
+                      <DraggableColumnHeader
                         key={c}
-                        draggable
+                        colId={c}
+                        columnOrder={colOrder}
+                        moveColumn={moveColumn}
                         aria-sort={ariaSort}
-                        onDragStart={(e) => {
-                          e.dataTransfer.setData("text/plain", c);
-                          e.dataTransfer.effectAllowed = "move";
-                        }}
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          e.dataTransfer.dropEffect = "move";
-                        }}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          const from = e.dataTransfer.getData("text/plain") as TerminalCol;
-                          if (!from || from === c) return;
-                          const allowedCols = new Set<TerminalCol>([
-                            "symbol",
-                            "company",
-                            "last",
-                            "chg",
-                            "chgPct",
-                            "volume",
-                            "volX",
-                          ]);
-                          if (!allowedCols.has(from)) return;
-                          setColOrder((prev) => {
-                            const next = [...prev];
-                            const i = next.indexOf(from);
-                            const j = next.indexOf(c);
-                            if (i < 0 || j < 0) return prev;
-                            next.splice(i, 1);
-                            next.splice(j, 0, from);
-                            return next;
-                          });
-                        }}
-                        title="Drag to reorder columns"
+                        title="Drag to reorder columns · double-click label to rename"
                         className={
-                          "py-2 pr-4 font-medium " + (align === "right" ? "text-right" : "text-left")
+                          "py-2 pr-4 font-medium " +
+                          DRAGGABLE_COLUMN_HEADER_GRAB_CLASS +
+                          " " +
+                          (align === "right" ? "text-right" : "text-left")
                         }
                       >
-                        <SortTh col={c} label={label} sortCol={sortCol} sortAsc={sortAsc} onToggle={toggleSort} align={align as "left" | "right"} />
-                      </th>
+                        <SortTh
+                          col={c}
+                          tableKey={TERMINAL_QUOTES_COLUMN_KEY}
+                          defaultLabel={TERMINAL_COL_LABEL[c]}
+                          sortCol={sortCol}
+                          sortAsc={sortAsc}
+                          onToggle={toggleSort}
+                          align={align as "left" | "right"}
+                        />
+                      </DraggableColumnHeader>
                     );
                   })}
                 </tr>
@@ -1157,16 +1306,12 @@ export default function TerminalPage() {
               bodyClassName: "p-4",
               children: (
                 <>
-              {movers?.ok === false ? (
-                <div className="text-xs text-red-700 dark:text-red-300">{movers.error ?? "Failed to load movers"}</div>
-              ) : null}
-
               <div className="text-sm font-semibold">Movers</div>
               <div className="mt-2 grid grid-cols-2 gap-3">
                 <div>
                   <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-400">Top gainers</div>
                   <div className="mt-1 grid gap-1">
-                    {(movers?.gainers ?? []).slice(0, 8).map((q) => (
+                    {moversDisplay.gainers.slice(0, 8).map((q) => (
                       <SymbolLink
                         key={q.symbol}
                         symbol={q.symbol}
@@ -1185,7 +1330,7 @@ export default function TerminalPage() {
                 <div>
                   <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-400">Top losers</div>
                   <div className="mt-1 grid gap-1">
-                    {(movers?.losers ?? []).slice(0, 8).map((q) => (
+                    {moversDisplay.losers.slice(0, 8).map((q) => (
                       <SymbolLink
                         key={q.symbol}
                         symbol={q.symbol}

@@ -3,8 +3,7 @@
 import type { CSSProperties } from "react";
 
 import { SymbolLink } from "@/app/components/SymbolLink";
-import { posNegClass } from "@/lib/terminal/colors";
-import { heatmapCellStyle } from "@/lib/terminal/dailyPerfColor";
+import { perfCellRowStyle } from "@/lib/terminal/dailyPerfColor";
 
 const PCT2 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -31,8 +30,10 @@ export type OptionFlowRow = {
 };
 
 function sentimentRowBackground(changeFraction: number | null): CSSProperties {
-  if (changeFraction == null || !Number.isFinite(changeFraction)) return heatmapCellStyle(null);
-  return heatmapCellStyle(changeFraction);
+  if (changeFraction == null || !Number.isFinite(changeFraction)) {
+    return perfCellRowStyle(null);
+  }
+  return perfCellRowStyle(changeFraction);
 }
 
 function volRatioLabel(ratio: number | null) {
@@ -107,25 +108,19 @@ export function OptionFlowPanel({
               symbol={it.symbol}
               style={sentimentRowBackground(chgFrac)}
               title="Open symbol"
-              className="relative flex w-full items-center justify-between overflow-hidden rounded-md border border-zinc-300 bg-white/70 px-2 py-1 text-xs hover:no-underline dark:border-white/15 dark:bg-zinc-950/40"
+              className="relative flex w-full items-center justify-between overflow-hidden rounded-md border border-zinc-300 px-2 py-1 text-xs hover:no-underline dark:border-white/15"
             >
               <span className="font-semibold">{it.symbol}</span>
               <span className="flex items-center gap-2 tabular-nums">
-                <span className={"w-[4.5rem] text-right " + posNegClass(chgFrac == null ? null : chgFrac * 100)}>
+                <span className="w-[4.5rem] text-right font-semibold">
                   {chgFrac == null ? "—" : `${PCT2.format(chgFrac * 100)}%`}
                 </span>
                 {optionFlowMode === "relative" ? (
-                  <span
-                    className={
-                      it.flagged ? "font-semibold text-amber-700 dark:text-amber-300" : "text-zinc-600 dark:text-zinc-400"
-                    }
-                  >
+                  <span className={it.flagged ? "font-semibold text-amber-200" : "opacity-90"}>
                     {volRatioLabel(it.relativeVolume)}
                   </span>
                 ) : null}
-                <span className="text-zinc-700 dark:text-zinc-300">
-                  {Math.round(it.totalOptionVolume).toLocaleString()} opt vol
-                </span>
+                <span className="opacity-90">{Math.round(it.totalOptionVolume).toLocaleString()} opt vol</span>
               </span>
             </SymbolLink>
           );

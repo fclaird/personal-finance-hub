@@ -2,17 +2,47 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
-import { NAV } from "@/app/lib/sidebarNav";
+import {
+  DEFAULT_SIDEBAR_NAV_ORDER,
+  orderSidebarNavItems,
+  SIDEBAR_NAV_ORDER_STORAGE_KEY,
+} from "@/app/lib/sidebarNav";
+import { usePersistedOrder } from "@/lib/usePersistedOrder";
 
 type DataMode = "auto" | "schwab";
+
+const NAV_DRAG_HANDLE =
+  "flex shrink-0 cursor-grab items-center px-1.5 text-zinc-400 active:cursor-grabbing dark:text-zinc-500";
 
 export function SidebarNav() {
   const pathname = usePathname();
   const [mode, setMode] = useState<DataMode>("auto");
   const [avail, setAvail] = useState<{ hasSchwab: boolean }>({ hasSchwab: false });
   const privacy = usePrivacy();
+  const { order, reorderById } = usePersistedOrder(SIDEBAR_NAV_ORDER_STORAGE_KEY, DEFAULT_SIDEBAR_NAV_ORDER);
+  const orderedItems = useMemo(() => orderSidebarNavItems(order), [order]);
+
+  const onDragStart = useCallback((e: React.DragEvent, href: string) => {
+    e.dataTransfer.setData("text/plain", href);
+    e.dataTransfer.effectAllowed = "move";
+  }, []);
+
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }, []);
+
+  const onDrop = useCallback(
+    (e: React.DragEvent, targetHref: string) => {
+      e.preventDefault();
+      const sourceHref = e.dataTransfer.getData("text/plain");
+      if (!sourceHref || sourceHref === targetHref) return;
+      reorderById(sourceHref, targetHref);
+    },
+    [reorderById],
+  );
 
   const modeLabel = useMemo(() => {
     if (mode === "schwab") return "REAL";
@@ -103,22 +133,38 @@ export function SidebarNav() {
           Auto (latest)
         </button>
       </div>
-      <nav className="mt-5 flex flex-col gap-1.5">
-        {NAV.map((item) => {
+      <nav className="mt-5 flex flex-col gap-1.5" aria-label="Main navigation">
+        <p className="px-1 text-[11px] text-zinc-500 dark:text-zinc-400">Drag ⠿ to reorder</p>
+        {orderedItems.map((item) => {
           const active = item.prefix ? pathname.startsWith(item.prefix) : pathname === item.href;
           return (
-            <Link
+            <div
               key={item.href}
-              href={item.href}
-              className={
-                "rounded-lg px-3 py-2.5 text-[15px] font-medium transition-colors " +
-                (active
-                  ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
-                  : "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-white/10")
-              }
+              className="flex items-stretch rounded-lg"
+              onDragOver={onDragOver}
+              onDrop={(e) => onDrop(e, item.href)}
             >
-              {item.label}
-            </Link>
+              <div
+                draggable
+                onDragStart={(e) => onDragStart(e, item.href)}
+                className={NAV_DRAG_HANDLE}
+                title="Drag to reorder"
+                aria-label={`Drag to reorder ${item.label}`}
+              >
+                ⠿
+              </div>
+              <Link
+                href={item.href}
+                className={
+                  "min-w-0 flex-1 rounded-lg px-2 py-2.5 text-[15px] font-medium transition-colors " +
+                  (active
+                    ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
+                    : "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-white/10")
+                }
+              >
+                {item.label}
+              </Link>
+            </div>
           );
         })}
       </nav>

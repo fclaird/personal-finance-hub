@@ -86,7 +86,7 @@ export function SymbolNotesSection({ symbol }: Props) {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {notesUpdatedAt ? (
-            <span className="text-xs text-zinc-500 dark:text-zinc-500">
+            <span className="text-xs text-zinc-600 dark:text-zinc-400">
               Saved {formatDisplayDateTime(notesUpdatedAt)}
             </span>
           ) : null}

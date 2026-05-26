@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
+import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { formatDisplayDateTime } from "@/lib/formatDate";
 import { MAX_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
 
@@ -137,7 +138,9 @@ export default function ConnectionsPage() {
   return (
     <div className="flex w-full max-w-[84rem] flex-1 flex-col gap-8 py-10 pl-5 pr-6 sm:pl-6 sm:pr-8">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Welcome</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          <EditablePageHeading pageId="connections" defaultTitle="Welcome" />
+        </h1>
         <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
           This is local-only. Tokens are stored encrypted on disk using `FINANCE_HUB_PASSPHRASE`.
         </p>
@@ -208,7 +211,7 @@ export default function ConnectionsPage() {
           </button>
         </div>
 
-        <div className="mt-3 text-xs text-zinc-500 dark:text-zinc-500">
+        <div className="mt-3 text-xs text-zinc-600 dark:text-zinc-400">
           Note: Schwab connect requires `SCHWAB_CLIENT_ID`, `SCHWAB_CLIENT_SECRET`, and `SCHWAB_REDIRECT_URI` in `.env.local`.
         </div>
 

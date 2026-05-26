@@ -4,6 +4,7 @@ import type { AnalyticsBucketKey } from "@/lib/accountBuckets";
 import { bucketFromAccount } from "@/lib/accountBuckets";
 import { latestSnapshotIds, latestSnapshotScopeForMode, accountsInDataModeWhereSql } from "@/lib/holdings/latestSnapshots";
 import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
+import { buildLiveEquityMarkMap, resolveEquityMarkPx } from "@/lib/market/liveEquityMarks";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
 
 /**
@@ -45,6 +46,58 @@ export function portfolioImpliedEquityPriceMap(db: ReturnType<typeof getDb>, mod
     if (sym && sym !== "CASH" && qty) out.set(sym, mv / qty);
   }
   return out;
+}
+
+/** Live Schwab marks merged over snapshot-implied prices for all portfolio underlyings. */
+export async function fetchPortfolioEquityMarkPriceMap(
+  db: ReturnType<typeof getDb>,
+  mode: DataMode = "auto",
+): Promise<Map<string, number>> {
+  const implied = portfolioImpliedEquityPriceMap(db, mode);
+  const scope = latestSnapshotScopeForMode(mode);
+  const snapshotIds = latestSnapshotIds(db, scope);
+  const symbols = new Set(implied.keys());
+
+  if (snapshotIds.length > 0) {
+    const optionRows = db
+      .prepare(
+        `
+        SELECT us.symbol AS us_symbol, sec.symbol AS option_symbol
+        FROM positions p
+        JOIN securities sec ON sec.id = p.security_id
+        LEFT JOIN securities us ON us.id = sec.underlying_security_id
+        WHERE p.snapshot_id IN (SELECT value FROM json_each(@snaps))
+          AND sec.security_type = 'option'
+      `,
+      )
+      .all({ snaps: JSON.stringify(snapshotIds) }) as Array<{
+      us_symbol: string | null;
+      option_symbol: string | null;
+    }>;
+    for (const row of optionRows) {
+      const sym = normalizeOptionUnderlying(row.us_symbol, row.option_symbol);
+      if (sym && sym !== "CASH") symbols.add(sym);
+    }
+  }
+
+  const live = await buildLiveEquityMarkMap(symbols);
+  const out = new Map<string, number>();
+  for (const sym of symbols) {
+    const px = resolveEquityMarkPx(sym, live, new Map(), implied.get(sym));
+    if (px != null) out.set(sym, px);
+  }
+  return out;
+}
+
+export async function portfolioEquityMarkPrice(
+  db: ReturnType<typeof getDb>,
+  mode: DataMode,
+  underlying: string,
+): Promise<number | null> {
+  const key = (underlying ?? "").trim().toUpperCase();
+  if (key === "CASH") return 1;
+  const map = await fetchPortfolioEquityMarkPriceMap(db, mode);
+  return map.get(key) ?? null;
 }
 
 export type ExposureRow = {
@@ -193,11 +246,17 @@ export function rollupExposureBuckets(buckets: BucketExposure[]): ExposureRow[] 
   return out;
 }
 
-export function getUnderlyingExposureRollup(mode: DataMode = "auto"): ExposureRow[] {
-  return rollupExposureBuckets(getUnderlyingExposureByBucket(mode));
+export function getUnderlyingExposureRollup(
+  mode: DataMode = "auto",
+  equityMarkMap?: Map<string, number>,
+): ExposureRow[] {
+  return rollupExposureBuckets(getUnderlyingExposureByBucket(mode, equityMarkMap));
 }
 
-export function getUnderlyingExposureByBucket(mode: DataMode = "auto"): BucketExposure[] {
+export function getUnderlyingExposureByBucket(
+  mode: DataMode = "auto",
+  equityMarkMap?: Map<string, number>,
+): BucketExposure[] {
   const db = getDb();
   const scope = latestSnapshotScopeForMode(mode);
   const snapshotIds = latestSnapshotIds(db, scope);
@@ -343,11 +402,13 @@ export function getUnderlyingExposureByBucket(mode: DataMode = "auto"): BucketEx
     commit(bucket, sym, prev);
   }
 
-  const priceByUnderlying = portfolioImpliedEquityPriceMap(db, mode);
+  const priceByUnderlying = equityMarkMap ?? portfolioImpliedEquityPriceMap(db, mode);
   for (const m of byBucket.values()) {
     for (const row of m.values()) {
       const px = priceByUnderlying.get(row.underlyingSymbol);
-      row.syntheticMarketValue = row.syntheticShares * (px ?? 0);
+      if (px == null) continue;
+      if (row.heldShares > 0) row.spotMarketValue = row.heldShares * px;
+      row.syntheticMarketValue = row.syntheticShares * px;
     }
   }
 

@@ -1,10 +1,9 @@
 "use client";
 
-import Link from "next/link";
-import { useMemo, type CSSProperties } from "react";
+import { useMemo, type MouseEvent } from "react";
 
 import { symbolPageHref } from "@/lib/symbolPage";
-import { heatmapCellStyle, treemapLabelColor } from "@/lib/terminal/dailyPerfColor";
+import { heatmapCellStyle, perfCellForegroundStyle } from "@/lib/terminal/dailyPerfColor";
 
 export type HeatmapItem = {
   symbol: string;
@@ -12,10 +11,6 @@ export type HeatmapItem = {
   marketCap: number | null; // USD
   companyName?: string | null;
 };
-
-function clamp(n: number, lo: number, hi: number) {
-  return Math.min(hi, Math.max(lo, n));
-}
 
 function spanForCap(marketCap: number | null, caps: number[]) {
   if (marketCap == null || !Number.isFinite(marketCap) || marketCap <= 0 || caps.length < 3) return { c: 1, r: 1 };
@@ -35,10 +30,13 @@ export function HeatmapGrid({
   items,
   title,
   companyNamesBySymbol,
+  onHideSymbol,
 }: {
   items: HeatmapItem[];
   title?: string;
   companyNamesBySymbol?: Map<string, string>;
+  /** Click a tile to hide it from the heatmap (⌘/Ctrl+click still opens the symbol page). */
+  onHideSymbol?: (symbol: string) => void;
 }) {
   const caps = useMemo(() => {
     const v = items
@@ -63,6 +61,16 @@ export function HeatmapGrid({
     });
   }, [items]);
 
+  function onTileClick(e: MouseEvent, symbol: string) {
+    const href = symbolPageHref(symbol);
+    if (e.metaKey || e.ctrlKey) {
+      if (href) window.open(href, "_blank", "noopener,noreferrer");
+      return;
+    }
+    e.preventDefault();
+    onHideSymbol?.(symbol);
+  }
+
   return (
     <div className="min-w-0">
       {title ? <div className="mb-2 text-sm font-semibold">{title}</div> : null}
@@ -73,31 +81,32 @@ export function HeatmapGrid({
         {sortedItems.map((it) => {
           const spans = spanForCap(it.marketCap, caps);
           const style = heatmapCellStyle(it.changePercent);
+          const labelStyle = perfCellForegroundStyle();
           const pct = it.changePercent == null ? null : it.changePercent * 100;
           const companyName =
             it.companyName?.trim() || companyNamesBySymbol?.get(it.symbol.toUpperCase())?.trim() || undefined;
-          const tip = companyName;
-          const href = symbolPageHref(it.symbol);
-          const labelColor = treemapLabelColor(it.changePercent);
+          const tip = companyName
+            ? `${companyName} · click to hide · ⌘/Ctrl+click to open`
+            : "Click to hide · ⌘/Ctrl+click to open symbol";
           return (
-            <Link
+            <button
               key={it.symbol}
-              href={href ?? "#"}
-              prefetch={false}
-              className="min-w-0 rounded-md border px-2 py-1 text-left text-[13px] font-semibold shadow-sm hover:brightness-110 dark:border-white/15"
+              type="button"
+              onClick={(e) => onTileClick(e, it.symbol)}
+              className="min-w-0 cursor-pointer rounded-md border px-2 py-1 text-left text-[13px] font-bold shadow-sm hover:brightness-110 dark:border-white/15"
               style={{
                 ...style,
-                color: labelColor,
+                ...labelStyle,
                 gridColumn: `span ${Math.max(1, Math.round(spans.c * 1.3))}`,
                 gridRow: `span ${Math.max(1, Math.round(spans.r * 1.3))}`,
               }}
               title={tip}
             >
               <div className="truncate">{it.symbol}</div>
-              <div className="truncate text-[12px] font-medium opacity-95" style={{ color: labelColor }}>
+              <div className="truncate text-[12px] font-semibold tabular-nums">
                 {pct == null ? "—" : `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`}
               </div>
-            </Link>
+            </button>
           );
         })}
       </div>

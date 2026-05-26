@@ -18,14 +18,13 @@ import {
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import type { Row } from "@/app/components/PositionsGroupedTable";
-import { SymbolLink } from "@/app/components/SymbolLink";
+import { SymbolPositionsTable } from "@/app/components/SymbolPositionsTable";
 
 import { NewsFeedPanel } from "@/app/components/terminal/NewsFeedPanel";
 import { SymbolNotesSection } from "./SymbolNotesSection";
-import { formatInt, formatNum, formatOptionIntExtPerShare, formatUsd2 } from "@/lib/format";
+import { formatInt, formatNum, formatUsd2 } from "@/lib/format";
 import { formatDisplayDate } from "@/lib/formatDate";
-import { formatOptionSymbolDisplay } from "@/lib/formatOptionDisplay";
-import { symbolPageTargetFromInstrument } from "@/lib/symbolPage";
+import { computeSymbolPageExposure } from "@/lib/analytics/symbolPageExposure";
 import { posNegClass, priceDirClass } from "@/lib/terminal/colors";
 
 type NormalizedQuote = {
@@ -46,14 +45,8 @@ type NormalizedQuote = {
   updatedAt: string;
 };
 
-function usd2Unmasked(v: number) {
-  return formatUsd2(v, { mask: false });
-}
-
-function syntheticSharesForRow(r: Row): number | null {
-  if (r.securityType !== "option") return null;
-  const d = typeof r.delta === "number" && Number.isFinite(r.delta) ? r.delta : 0;
-  return r.quantity * 100 * d;
+function usd2Masked(v: number, masked: boolean) {
+  return formatUsd2(v, { mask: masked });
 }
 
 type CompanyPayload =
@@ -75,10 +68,6 @@ type CompanyPayload =
 
 const PCT2 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const USD_COMPACT = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
-
-function usd2Masked(v: number, masked: boolean) {
-  return formatUsd2(v, { mask: masked });
-}
 
 function normSym(s: string) {
   return (s ?? "").trim().toUpperCase();
@@ -158,6 +147,11 @@ export default function TerminalSymbolPage() {
   const [quote, setQuote] = useState<NormalizedQuote | null>(null);
   const [company, setCompany] = useState<CompanyPayload | null>(null);
   const [benchSeries, setBenchSeries] = useState<Record<string, Array<{ date: string; close: number }>>>({});
+  const [intradayPerf, setIntradayPerf] = useState<{
+    points: Array<{ label: string; tsMs: number | null } & Record<string, number | null>>;
+    sessionLabel?: string;
+    showingPriorSession?: boolean;
+  } | null>(null);
   const [windowKey, setWindowKey] = useState<WindowKey>("6M");
   const [nowMs, setNowMs] = useState<number>(0);
   const [positions, setPositions] = useState<Row[]>([]);
@@ -166,6 +160,36 @@ export default function TerminalSymbolPage() {
   const [aboutError, setAboutError] = useState<string | null>(null);
   const [secFilingError, setSecFilingError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  async function loadIntradayPerf() {
+    if (windowKey !== "1D" || !sym) {
+      setIntradayPerf(null);
+      return;
+    }
+    try {
+      const resp = await fetch(
+        `/api/terminal/symbol-performance-intraday?symbols=${encodeURIComponent([sym, "SPY", "QQQ"].join(","))}`,
+        { cache: "no-store" },
+      );
+      const json = (await resp.json()) as {
+        ok: boolean;
+        points?: Array<{ label: string; tsMs: number | null } & Record<string, number | null>>;
+        sessionLabel?: string;
+        showingPriorSession?: boolean;
+      };
+      if (json.ok) {
+        setIntradayPerf({
+          points: json.points ?? [],
+          sessionLabel: json.sessionLabel,
+          showingPriorSession: json.showingPriorSession,
+        });
+      } else {
+        setIntradayPerf(null);
+      }
+    } catch {
+      setIntradayPerf(null);
+    }
+  }
 
   async function loadAll() {
     setError(null);
@@ -286,7 +310,10 @@ export default function TerminalSymbolPage() {
   }, [sym]);
 
   useSchwabRefreshCoordinator({
-    onTick: () => void loadAll(),
+    onTick: () => {
+      void loadAll();
+      void loadIntradayPerf();
+    },
     resetKey: `${sym}|${windowKey}`,
   });
 
@@ -295,45 +322,15 @@ export default function TerminalSymbolPage() {
     return () => clearTimeout(t);
   }, [sym, windowKey]);
 
-  const exposure = useMemo(() => {
-    let spotMv = 0;
-    let synthMv = 0;
-    let synthShares = 0;
-    let heldShares = 0;
-    for (const r of positions) {
-      if (r.securityType === "option") {
-        const d = typeof r.delta === "number" && Number.isFinite(r.delta) ? r.delta : 0;
-        const shares = (r.quantity ?? 0) * 100 * d;
-        synthShares += shares;
-        const px = quote?.last ?? quote?.close ?? 0;
-        synthMv += shares * px;
-      } else {
-        heldShares += r.quantity ?? 0;
-        spotMv += r.marketValue ?? 0;
-      }
-    }
-    return {
-      heldShares,
-      synthShares,
-      netShares: heldShares + synthShares,
-      spotMv,
-      synthMv,
-      netMv: spotMv + synthMv,
-    };
-  }, [positions, quote]);
+  useEffect(() => {
+    void loadIntradayPerf();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sym, windowKey]);
 
-  const sortedSymbolPositions = useMemo(() => {
-    const list = [...positions];
-    list.sort((a, b) => {
-      const am = Math.abs(a.marketValue ?? 0);
-      const bm = Math.abs(b.marketValue ?? 0);
-      if (bm !== am) return bm - am;
-      const as = a.securityType === "option" ? formatOptionSymbolDisplay(a) : a.symbol;
-      const bs = b.securityType === "option" ? formatOptionSymbolDisplay(b) : b.symbol;
-      return as.localeCompare(bs, undefined, { numeric: true, sensitivity: "base" });
-    });
-    return list;
-  }, [positions]);
+  const exposure = useMemo(
+    () => computeSymbolPageExposure(positions, quote),
+    [positions, quote],
+  );
 
   const windowStartIso = useMemo(() => {
     const DAY = 24 * 60 * 60_000;
@@ -358,6 +355,19 @@ export default function TerminalSymbolPage() {
   }, [windowKey, nowMs]);
 
   const perfData = useMemo(() => {
+    if (windowKey === "1D") {
+      const points = intradayPerf?.points ?? [];
+      if (points.length < 2) return [];
+      return points
+        .map((p) => ({
+          date: p.label,
+          sym: p[sym] ?? null,
+          SPY: p.SPY ?? null,
+          QQQ: p.QQQ ?? null,
+        }))
+        .filter((row): row is { date: string; sym: number; SPY: number | null; QQQ: number | null } => row.sym != null);
+    }
+
     const s = benchSeries[sym] ?? [];
     const spy = benchSeries.SPY ?? [];
     const qqq = benchSeries.QQQ ?? [];
@@ -407,7 +417,7 @@ export default function TerminalSymbolPage() {
         };
       })
       .filter((x): x is { date: string; sym: number; SPY: number | null; QQQ: number | null } => !!x);
-  }, [benchSeries, sym, windowStartIso]);
+  }, [benchSeries, intradayPerf, sym, windowKey, windowStartIso]);
 
   const nameForHeader =
     company == null ? null : company.ok ? ((company.companyName ?? "").trim() || sym) : "Company name unavailable";
@@ -565,12 +575,12 @@ export default function TerminalSymbolPage() {
             </div>
           )}
           {about?.refreshing && about?.text ? (
-            <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">
+            <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
               Refreshing from Wikidata, Wikipedia, and Yahoo Finance…
             </p>
           ) : null}
           {about?.sources?.length ? (
-            <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-500">Sources: {about.sources.join(" · ")}</p>
+            <p className="mt-3 text-xs text-zinc-600 dark:text-zinc-400">Sources: {about.sources.join(" · ")}</p>
           ) : null}
           {about?.yahooProfileUrl ? (
             <p className="mt-2 text-xs">
@@ -601,7 +611,7 @@ export default function TerminalSymbolPage() {
             </div>
           )}
           {secFiling?.form && secFiling.filingDate ? (
-            <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-500">
+            <p className="mt-3 text-xs text-zinc-600 dark:text-zinc-400">
               SEC {secFiling.form} filed {formatDisplayDate(secFiling.filingDate)} (EDGAR)
             </p>
           ) : null}
@@ -623,7 +633,17 @@ export default function TerminalSymbolPage() {
 
         <div className="mt-4 min-w-0 rounded-xl border border-zinc-300 bg-white/60 p-4 dark:border-white/20 dark:bg-black/20">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="text-sm font-semibold">Performance overlay (% rebased)</div>
+            <div>
+              <div className="text-sm font-semibold">Performance overlay (% rebased)</div>
+              {windowKey === "1D" && intradayPerf?.sessionLabel ? (
+                <div className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
+                  {intradayPerf.showingPriorSession
+                    ? `Showing ${intradayPerf.sessionLabel}`
+                    : intradayPerf.sessionLabel}{" "}
+                  · intraday session (same window as quick glance tiles)
+                </div>
+              ) : null}
+            </div>
             <div className="grid grid-cols-8 gap-1">
               {(["1D", "5D", "1M", "3M", "6M", "1Y", "3Y", "5Y"] as const).map((k) => (
                 <button
@@ -652,12 +672,14 @@ export default function TerminalSymbolPage() {
               <span className="font-medium text-zinc-700 dark:text-zinc-200">SPY</span>
             </div>
             <div className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#7c3aed" }} />
+              <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#0891b2" }} />
               <span className="font-medium text-zinc-700 dark:text-zinc-200">QQQ</span>
             </div>
           </div>
           {perfData.length < 2 ? (
-            <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Not enough cached history yet.</div>
+            <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+              {windowKey === "1D" ? "Loading intraday session…" : "Not enough cached history yet."}
+            </div>
           ) : (
             <div className="mt-2 h-72 w-full min-w-0">
               <ResponsiveContainer
@@ -670,11 +692,15 @@ export default function TerminalSymbolPage() {
                 <LineChart data={perfData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="date" tick={false} />
-                  <YAxis tickFormatter={(v) => `${Number(v).toFixed(0)}%`} />
+                  <YAxis
+                    tickFormatter={(v) =>
+                      `${Number(v).toFixed(windowKey === "1D" ? 1 : 0)}%`
+                    }
+                  />
                   <Tooltip formatter={(v) => `${Number(v).toFixed(2)}%`} labelFormatter={(l) => String(l)} />
                   <Line type="monotone" dataKey="sym" name={sym} strokeWidth={2} dot={false} stroke="#0f766e" />
                   <Line type="monotone" dataKey="SPY" name="SPY" strokeWidth={2} dot={false} stroke="#2563eb" />
-                  <Line type="monotone" dataKey="QQQ" name="QQQ" strokeWidth={2} dot={false} stroke="#7c3aed" />
+                  <Line type="monotone" dataKey="QQQ" name="QQQ" strokeWidth={2} dot={false} stroke="#0891b2" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -714,89 +740,13 @@ export default function TerminalSymbolPage() {
         <div className="mt-4 rounded-xl border border-zinc-300 bg-white/60 p-4 dark:border-white/20 dark:bg-black/20">
           <div className="text-sm font-semibold">All positions for {sym}</div>
           <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-            Latest snapshot rows linked to this symbol (spot and options). Click a symbol to open its terminal page.
+            Latest snapshot rows linked to this symbol (spot and options). Drag column headers to reorder — order
+            syncs with Positions and Allocation tables.
           </p>
-          {sortedSymbolPositions.length === 0 ? (
+          {positions.length === 0 ? (
             <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">No positions found for this symbol.</div>
           ) : (
-            <div className="mt-2 overflow-x-auto">
-              <table className="min-w-[72rem] w-full text-sm">
-                <thead className="text-xs text-zinc-600 dark:text-zinc-400">
-                  <tr>
-                    <th className="py-1 pr-4 text-left font-medium">Account</th>
-                    <th className="py-1 pr-4 text-left font-medium">Symbol</th>
-                    <th className="py-1 pr-4 text-right font-medium">Qty</th>
-                    <th className="py-1 pr-4 text-right font-medium">Price</th>
-                    <th className="py-1 pr-4 text-right font-medium">Market&nbsp;value</th>
-                    <th className="py-1 pr-4 text-right font-medium">Delta</th>
-                    <th className="py-1 pr-4 text-right font-medium">Gamma</th>
-                    <th className="py-1 pr-4 text-right font-medium">Theta</th>
-                    <th className="py-1 pr-4 text-right font-medium">DTE</th>
-                    <th className="py-1 pr-4 text-right font-medium">Intrinsic</th>
-                    <th className="py-1 pr-4 text-right font-medium">Extrinsic</th>
-                    <th className="py-1 text-right font-medium">Synth&nbsp;sh</th>
-                  </tr>
-                </thead>
-                <tbody className="tabular-nums text-zinc-900 dark:text-zinc-100">
-                  {sortedSymbolPositions.map((r) => {
-                    const synth = syntheticSharesForRow(r);
-                    return (
-                      <tr key={r.positionId} className="border-t border-zinc-200/70 dark:border-white/10">
-                        <td className="whitespace-nowrap py-1 pr-4 text-left text-xs text-zinc-600 dark:text-zinc-400">
-                          {r.accountName}
-                        </td>
-                        <td className="whitespace-nowrap py-1 pr-4 text-left font-medium">
-                          <SymbolLink symbol={symbolPageTargetFromInstrument(r)} className="font-mono text-[13px]">
-                            {r.securityType === "option" ? (
-                              <span className={r.quantity < 0 ? "text-red-400" : "text-emerald-400"}>
-                                {formatOptionSymbolDisplay(r)}
-                              </span>
-                            ) : (
-                              <span>{r.symbol}</span>
-                            )}
-                          </SymbolLink>
-                        </td>
-                        <td className={"whitespace-nowrap py-1 pr-4 text-right " + posNegClass(r.quantity)}>
-                          {formatInt(r.quantity)}
-                        </td>
-                        <td className="whitespace-nowrap py-1 pr-4 text-right">
-                          {r.price == null ? "—" : usd2Unmasked(r.price)}
-                        </td>
-                        <td
-                          className={
-                            "whitespace-nowrap py-1 pr-4 text-right " +
-                            (r.marketValue == null ? "" : posNegClass(r.marketValue))
-                          }
-                        >
-                          {r.marketValue == null ? "—" : usd2Masked(r.marketValue, privacy.masked)}
-                        </td>
-                        <td className={"whitespace-nowrap py-1 pr-4 text-right " + posNegClass(r.delta)}>
-                          {r.delta == null ? "—" : formatNum(r.delta, 3)}
-                        </td>
-                        <td className={"whitespace-nowrap py-1 pr-4 text-right " + posNegClass(r.gamma)}>
-                          {r.gamma == null ? "—" : formatNum(r.gamma, 4)}
-                        </td>
-                        <td className={"whitespace-nowrap py-1 pr-4 text-right " + posNegClass(r.theta)}>
-                          {r.theta == null ? "—" : formatNum(r.theta, 3)}
-                        </td>
-                        <td className="whitespace-nowrap py-1 pr-4 text-right">
-                          {r.dte == null ? "—" : formatInt(r.dte)}
-                        </td>
-                        <td className="whitespace-nowrap py-1 pr-4 text-right text-zinc-800 dark:text-zinc-200">
-                          {formatOptionIntExtPerShare(r.intrinsic, r.quantity, { mask: privacy.masked })}
-                        </td>
-                        <td className="whitespace-nowrap py-1 pr-4 text-right text-zinc-800 dark:text-zinc-200">
-                          {formatOptionIntExtPerShare(r.extrinsic, r.quantity, { mask: privacy.masked })}
-                        </td>
-                        <td className={"whitespace-nowrap py-1 text-right font-semibold " + posNegClass(synth)}>
-                          {synth == null ? "—" : synth.toFixed(2)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <SymbolPositionsTable rows={positions} quote={quote} privacyMasked={privacy.masked} />
           )}
         </div>
               </>

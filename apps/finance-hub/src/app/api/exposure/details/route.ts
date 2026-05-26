@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 
 import { getDb } from "@/lib/db";
 import { DATA_MODE_COOKIE, parseDataMode } from "@/lib/dataMode";
-import { portfolioImpliedEquityPrice } from "@/lib/analytics/optionsExposure";
+import { portfolioEquityMarkPrice } from "@/lib/analytics/optionsExposure";
 import { accountsInDataModeWhereSql } from "@/lib/holdings/latestSnapshots";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
 
@@ -21,7 +21,7 @@ export async function GET(req: Request) {
 
   const db = getDb();
   const impliedPrice =
-    underlying === "CASH" ? 1 : portfolioImpliedEquityPrice(db, mode, underlying);
+    underlying === "CASH" ? 1 : await portfolioEquityMarkPrice(db, mode, underlying);
 
   const where = accountsInDataModeWhereSql(mode, "a");
 

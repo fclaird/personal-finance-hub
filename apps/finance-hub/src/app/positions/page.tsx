@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
+import { EditablePageHeading } from "@/app/components/EditableHeading";
 import {
   AddManualAccountDialog,
   EditManualAccountDialog,
@@ -21,6 +22,7 @@ import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator";
 import { bucketFromAccount, type AccountBucket } from "@/lib/accountBuckets";
 import { isManualAccountId } from "@/lib/manual/isManualAccountId";
+import { underPxMapFromNormalizedQuotes } from "@/lib/market/equityMarkPrice";
 
 export default function PositionsPage() {
   const privacy = usePrivacy();
@@ -114,13 +116,7 @@ export default function PositionsPage() {
       | { ok: boolean; quotes?: Array<{ symbol: string; last: number | null; mark?: number | null; close: number | null }> }
       | null;
     if (!json?.ok) return;
-    const m = new Map<string, number>();
-    for (const q of json.quotes ?? []) {
-      const s = (q.symbol ?? "").toUpperCase();
-      const px = (q.last ?? q.mark ?? q.close) as number | null;
-      if (s && px != null && Number.isFinite(px) && px > 0) m.set(s, px);
-    }
-    setUnderPx(m);
+    setUnderPx(underPxMapFromNormalizedQuotes(json.quotes ?? []));
   }
 
   useEffect(() => {
@@ -456,7 +452,9 @@ export default function PositionsPage() {
     <div className="flex w-full max-w-[108rem] flex-1 flex-col gap-8 py-10 pl-5 pr-6 sm:pl-6 sm:pr-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Positions</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            <EditablePageHeading pageId="positions" defaultTitle="Positions" />
+          </h1>
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
             Individual holdings from Schwab sync and manually entered external accounts.
           </p>

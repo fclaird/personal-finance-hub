@@ -145,3 +145,16 @@ export function isUsEquityPreOpenFuturesPollWindow(now: Date = new Date()): bool
   const start = open - 60;
   return mins >= start && mins < open;
 }
+
+/** US index futures poll window: pre-open (08:30–09:30 ET) and after-hours (16:00–20:00 ET). */
+export function isUsEquityExtendedFuturesPollWindow(now: Date = new Date()): boolean {
+  if (isUsEquityPreOpenFuturesPollWindow(now)) return true;
+  const wd = nyWeekdayIso(now);
+  if (wd < 1 || wd > 5) return false;
+  const ymd = nyYmd(now);
+  if (isNyseHolidayYmd(ymd)) return false;
+  const mins = nyMinutesSinceMidnight(now);
+  const close = 16 * 60;
+  const end = 20 * 60;
+  return mins >= close && mins < end;
+}

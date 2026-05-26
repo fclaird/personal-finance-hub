@@ -87,7 +87,7 @@ export function StrategyStatsPanel({
       <div className="rounded-xl border border-zinc-300 bg-white p-4 shadow-sm dark:border-white/20 dark:bg-zinc-950">
         <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Sharpe (on % returns)</div>
         <div className="mt-1 text-2xl font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{num2(stats.sharpeRatio)}</div>
-        <div className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-500">Sample-based; interpret cautiously.</div>
+        <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">Sample-based; interpret cautiously.</div>
       </div>
     </div>
   );

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
+import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { filletLinearCurve } from "@/lib/charts/curveFilletLinear";
 import { formatDisplayDate } from "@/lib/formatDate";
 
@@ -22,6 +23,9 @@ type HistoryPayload = {
   meta?: {
     source_mix?: string;
     tracking_start?: string | null;
+    tracking_reset_forward?: boolean;
+    portfolio_source?: string;
+    lookback_days?: number;
     benchmark_spy_rows?: number;
     benchmark_qqq_rows?: number;
   };
@@ -45,12 +49,10 @@ function formatPct(v: number) {
   return `${sign}${v.toFixed(2)}%`;
 }
 
-const TRACKING_START_FALLBACK = "2026-05-08";
-
 function trackingStartMs(iso: string | null | undefined): number {
-  const d = iso ?? TRACKING_START_FALLBACK;
-  const [y, m, day] = d.split("-").map(Number);
-  if (!y || !m || !day) return Date.parse(`${TRACKING_START_FALLBACK}T12:00:00`);
+  if (!iso) return Date.now();
+  const [y, m, day] = iso.split("-").map(Number);
+  if (!y || !m || !day) return Date.now();
   return new Date(y, m - 1, day).getTime();
 }
 
@@ -155,11 +157,12 @@ export default function PerformancePage() {
   const COLORS = {
     portfolio: "#0f766e",
     SPY: "#2563eb",
-    QQQ: "#7c3aed",
+    QQQ: "#0891b2",
   } as const;
 
   const trackingStart = hist?.ok ? hist.meta?.tracking_start : null;
-  const trackingStartLabel = trackingStart ? formatDisplayDate(trackingStart) : formatDisplayDate(TRACKING_START_FALLBACK);
+  const trackingResetForward = hist?.ok ? hist.meta?.tracking_reset_forward === true : false;
+  const trackingStartLabel = trackingStart ? formatDisplayDate(trackingStart) : "today";
 
   const benchWarn =
     hist?.ok && (hist.meta?.benchmark_spy_rows ?? 0) === 0
@@ -177,10 +180,13 @@ export default function PerformancePage() {
     <div className="flex w-full max-w-[108rem] flex-1 flex-col gap-8 py-10 pl-5 pr-6 sm:pl-6 sm:pr-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Performance</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            <EditablePageHeading pageId="performance" defaultTitle="Performance" />
+          </h1>
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Cumulative % change from the first tracked trading day (weekdays only). Portfolio vs SPY and QQQ on the
-            same scale. Straight segments between trading days with a very small corner radius at each point.
+            Cumulative % change from the first tracked trading day (weekdays only). Portfolio totals match the
+            terminal quick glance: Schwab liquidation value plus external holdings, not reverse-engineered position
+            math. SPY and QQQ use the same scale.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -214,9 +220,19 @@ export default function PerformancePage() {
         >
           <div className="flex flex-wrap items-start justify-between gap-3">
             <p className="min-w-0 flex-1 leading-relaxed">
-              Performance logging began on{" "}
-              <span className="font-semibold">{trackingStartLabel}</span>, when the program was initiated. All series
-              below show cumulative % change from that first trading day.
+              {trackingResetForward ? (
+                <>
+                  Performance tracking reset on <span className="font-semibold">{trackingStartLabel}</span> using Schwab
+                  liquidation data. Earlier calculated history was dropped because fewer than two trading days of aligned
+                  data were available in the last 19 days.
+                </>
+              ) : (
+                <>
+                  Performance tracking began on <span className="font-semibold">{trackingStartLabel}</span> using Schwab
+                  liquidation plus external holdings (same source as the terminal portfolio tile). All series show
+                  cumulative % change from that first trading day.
+                </>
+              )}
             </p>
             <TrackingDurationClock startIso={trackingStart} />
           </div>
@@ -286,8 +302,8 @@ export default function PerformancePage() {
           <div className="text-sm text-zinc-600 dark:text-zinc-400">Loading chart…</div>
         ) : chartData.length < 2 ? (
           <div className="text-sm text-zinc-600 dark:text-zinc-400">
-            Not enough data yet. Connect Schwab and run a few syncs — the chart will populate from your first tracked
-            trading day forward.
+            Not enough aligned data yet. Connect Schwab and run syncs — the chart fills from the first trading day with
+            Schwab liquidation totals (or resets from today if history is too thin).
           </div>
         ) : (
           <div className="h-80 w-full min-w-0 text-[var(--foreground)]">

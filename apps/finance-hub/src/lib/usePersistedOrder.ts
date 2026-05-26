@@ -23,21 +23,39 @@ export function mergeWithDefaults<T extends string>(saved: unknown, defaultOrder
   return out;
 }
 
-export function usePersistedOrder<T extends string>(storageKey: string, defaultOrder: readonly T[]) {
+function readPersistedOrder<T extends string>(
+  storageKey: string,
+  defaultOrder: readonly T[],
+  legacyStorageKeys?: readonly string[],
+): T[] {
+  const keys = [storageKey, ...(legacyStorageKeys ?? [])];
+  for (const key of keys) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const merged = mergeWithDefaults(JSON.parse(raw) as unknown, defaultOrder);
+      if (merged.length > 0) return merged;
+    } catch {
+      // try next key
+    }
+  }
+  return [...defaultOrder];
+}
+
+export function usePersistedOrder<T extends string>(
+  storageKey: string,
+  defaultOrder: readonly T[],
+  legacyStorageKeys?: readonly string[],
+) {
   const [order, setOrder] = useState<T[]>(() => [...defaultOrder]);
   const ignoreNextPersist = useRef(true);
   const defaultSignature = defaultOrder.join("|");
+  const legacySignature = legacyStorageKeys?.join("|") ?? "";
 
   useEffect(() => {
     ignoreNextPersist.current = true;
-    try {
-      const raw = localStorage.getItem(storageKey);
-      const merged = mergeWithDefaults(raw ? JSON.parse(raw) : null, defaultOrder);
-      setOrder(merged);
-    } catch {
-      setOrder([...defaultOrder]);
-    }
-  }, [storageKey, defaultSignature]);
+    setOrder(readPersistedOrder(storageKey, defaultOrder, legacyStorageKeys));
+  }, [storageKey, defaultSignature, legacySignature]);
 
   useEffect(() => {
     if (ignoreNextPersist.current) {
