@@ -9,7 +9,11 @@ import {
   indexedGlanceValueToRebasedPct,
   mergeGlanceSeriesForChart,
 } from "@/lib/terminal/marketGlanceChart";
-import type { GlanceTileChartWindowCtx } from "@/lib/market/glanceTileChartWindow";
+import {
+  glanceItemForTileChart,
+  isUsEquityGlanceItem,
+  type GlanceTileChartWindowCtx,
+} from "@/lib/market/glanceTileChartWindow";
 
 export type SymbolPerformanceIntradayPoint = {
   tsMs: number | null;
@@ -40,7 +44,8 @@ export async function fetchSymbolPerformanceIntraday(
     ...card,
     id: card.symbol.toUpperCase(),
   }));
-  const merged = mergeGlanceSeriesForChart(items, windowCtx);
+  const trimmedItems = items.map((entry) => glanceItemForTileChart(entry, windowCtx).item);
+  const merged = mergeGlanceSeriesForChart(trimmedItems, windowCtx);
   const points: SymbolPerformanceIntradayPoint[] = merged.map((row) => {
     const point: SymbolPerformanceIntradayPoint = {
       tsMs: row.tsMs,
@@ -59,7 +64,7 @@ export async function fetchSymbolPerformanceIntraday(
     showingPriorSession: glanceSessionUsesPriorDay(now),
     marketOpen: session.isOpen,
     windowCtx,
-    items,
+    items: trimmedItems,
     points,
   };
 }

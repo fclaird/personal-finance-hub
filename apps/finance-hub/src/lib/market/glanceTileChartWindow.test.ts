@@ -122,6 +122,25 @@ test("resolveGlanceExtendedShadeX shades after-hours from 16:00 ET when closed",
   assert.equal(shade!.toMs, tsAt(16 * 60 + 30));
 });
 
+test("resolveGlanceTileChartAxisDomain uses pre-market trim from overlay items when closed", () => {
+  const last = tsAt(8 * 60 + 45);
+  const axis = resolveGlanceTileChartAxisDomain(
+    { marketOpen: false, sessionYmd: SESSION },
+    [
+      {
+        futuresKind: undefined,
+        instrumentKind: undefined,
+        extendedPhase: "pre",
+        extendedSeries: [{ idx: 0, close: 1, tsMs: last }],
+      },
+    ],
+    last,
+  );
+  assert.ok(axis);
+  assert.equal(axis!.startMs, tsAt(GLANCE_PREMARKET_REF_START_MIN));
+  assert.equal(axis!.endMs, last);
+});
+
 test("resolveGlanceExtendedShadeX shades pre-market from axis start to 09:30 ET when open", () => {
   const axis = resolveGlanceTileChartAxisDomain({ marketOpen: true, sessionYmd: SESSION })!;
   const shade = resolveGlanceExtendedShadeX({ marketOpen: true, sessionYmd: SESSION }, axis, tsAt(12 * 60));

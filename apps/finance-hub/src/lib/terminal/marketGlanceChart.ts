@@ -2,6 +2,7 @@ import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceC
 import { GLANCE_CHART_BASELINE, yDomainFromChartRange } from "@/app/components/terminal/MarketGlanceCard";
 import {
   glanceItemForTileChart,
+  isUsEquityGlanceItem,
   type GlanceTileChartWindowCtx,
 } from "@/lib/market/glanceTileChartWindow";
 import { nyWallTimeMs } from "@/lib/market/futuresGlanceSession";
@@ -203,6 +204,14 @@ export function mergeGlanceSeriesForChart(
   }));
   const byTime = mergeGlanceSeriesByTimestamp(indexed);
   if (byTime.length >= 2) return byTime;
+
+  const hasTimedPoints = indexed.some(({ points }) =>
+    points.some((p) => p.tsMs != null && Number.isFinite(p.tsMs)),
+  );
+  if (windowCtx && hasTimedPoints && source.some((entry) => isUsEquityGlanceItem(entry))) {
+    return byTime;
+  }
+
   return mergeGlanceSeriesByIndex(indexed);
 }
 

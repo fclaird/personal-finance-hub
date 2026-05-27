@@ -85,8 +85,8 @@ export function GlanceIntradayOverlayChart({
   const hasTimestamps = useMemo(() => chartData.some((row) => row.tsMs != null), [chartData]);
   const chartAxisDomain = useMemo(() => {
     const lastTs = lastGlanceChartDataTsMs(chartData);
-    return resolveGlanceTileChartAxisDomain(windowCtx, undefined, lastTs);
-  }, [windowCtx, chartData]);
+    return resolveGlanceTileChartAxisDomain(windowCtx, items, lastTs);
+  }, [windowCtx, items, chartData]);
   const useFixedTimeAxis = chartAxisDomain != null && hasTimestamps;
   const shadeRange = useMemo(
     () => extendedOverlayShadeRange(chartData, windowCtx, items),
@@ -142,10 +142,13 @@ export function GlanceIntradayOverlayChart({
   const sessionCloseBoundaryX = overlaySessionCloseBoundaryMs(windowCtx);
   const shadeStartX = overlayExtendedShadeStartX(chartData, windowCtx);
   const firstX = useFixedTimeAxis ? chartAxisDomain!.startMs : xAt(0);
-  const priorRefEndX = sessionCloseBoundaryX ?? xAt(priorRefEndIdx);
   const lastX = useFixedTimeAxis
     ? (chartData[lastIdx]?.tsMs ?? chartAxisDomain!.endMs)
     : xAt(lastIdx);
+  const priorRefEndX =
+    useFixedTimeAxis && windowCtx.marketOpen
+      ? lastX
+      : sessionCloseBoundaryX ?? xAt(priorRefEndIdx);
   const shadeFromX =
     shadeBounds?.fromMs ??
     (shadeRange != null ? (shadeStartX ?? sessionCloseBoundaryX ?? xAt(shadeRange.fromIdx)) : null);

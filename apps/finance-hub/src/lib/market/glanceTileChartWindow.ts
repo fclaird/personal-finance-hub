@@ -124,17 +124,27 @@ export function glanceItemForTileChart(
   };
 }
 
+export type GlanceTileChartItemRef = Pick<
+  UsMarketGlanceItem,
+  "futuresKind" | "instrumentKind" | "extendedPhase" | "extendedSeries"
+>;
+
 function resolveGlanceTrimFromMs(
   ctx: GlanceTileChartWindowCtx,
-  item?: Pick<UsMarketGlanceItem, "futuresKind" | "instrumentKind" | "extendedPhase" | "extendedSeries">,
+  item?: GlanceTileChartItemRef | GlanceTileChartItemRef[],
 ): number | null {
   const sessionYmd = (ctx.sessionYmd ?? nyYmd(new Date())).trim();
   if (!sessionYmd) return null;
 
-  if (item && isUsEquityGlanceItem(item)) {
-    const window = resolveGlanceTileChartWindow(item, ctx);
-    if (window) return window.fromMs;
+  const items = item == null ? [] : Array.isArray(item) ? item : [item];
+  let trimFromMs: number | null = null;
+  for (const entry of items) {
+    if (!isUsEquityGlanceItem(entry)) continue;
+    const window = resolveGlanceTileChartWindow(entry, ctx);
+    if (!window) continue;
+    trimFromMs = trimFromMs == null ? window.fromMs : Math.min(trimFromMs, window.fromMs);
   }
+  if (trimFromMs != null) return trimFromMs;
 
   if (ctx.marketOpen) return nyWallTimeMs(sessionYmd, GLANCE_PREMARKET_REF_START_MIN);
   return nyWallTimeMs(sessionYmd, GLANCE_RTH_LAST_HOUR_START_MIN);
@@ -158,10 +168,13 @@ export function lastGlanceChartDataTsMs(rows: Array<{ tsMs?: number | null }>): 
  */
 export function resolveGlanceTileChartAxisDomain(
   ctx: GlanceTileChartWindowCtx,
-  item?: Pick<UsMarketGlanceItem, "futuresKind" | "instrumentKind" | "extendedPhase" | "extendedSeries">,
+  item?: GlanceTileChartItemRef | GlanceTileChartItemRef[],
   lastDataTsMs?: number | null,
 ): { startMs: number; endMs: number } | null {
-  if (item && !isUsEquityGlanceItem(item)) return null;
+  const items = item == null ? [] : Array.isArray(item) ? item : [item];
+  if (items.length === 1 && !isUsEquityGlanceItem(items[0]!)) return null;
+  if (items.length > 1 && items.every((entry) => !isUsEquityGlanceItem(entry))) return null;
+
   const trimFromMs = resolveGlanceTrimFromMs(ctx, item);
   if (trimFromMs == null) return null;
 
