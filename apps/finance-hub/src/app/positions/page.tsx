@@ -23,6 +23,7 @@ import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator
 import { bucketFromAccount, type AccountBucket } from "@/lib/accountBuckets";
 import { isManualAccountId } from "@/lib/manual/isManualAccountId";
 import { underPxMapFromNormalizedQuotes } from "@/lib/market/equityMarkPrice";
+import { positionCostShare } from "@/lib/positions/positionCostShare";
 
 export default function PositionsPage() {
   const privacy = usePrivacy();
@@ -246,13 +247,14 @@ export default function PositionsPage() {
   }
 
   function openEditHolding(row: Row) {
+    const costShare = positionCostShare(row);
     setPositionDialog({
       positionId: row.positionId,
       accountId: row.accountId,
       symbol: row.symbol,
       securityType: row.securityType === "cash" ? "cash" : row.securityType === "fund" ? "fund" : "equity",
       quantity: String(row.quantity),
-      purchasePrice: row.price == null ? "" : String(row.price),
+      purchasePrice: costShare == null ? "" : String(costShare),
       marketValue: row.marketValue == null ? "" : String(row.marketValue),
       purchaseDate: row.purchaseDate ?? "",
       notes: "",

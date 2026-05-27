@@ -172,6 +172,7 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
         symbol: "CASH",
         securityName: "Cash",
         effectiveUnderlyingSymbol: "CASH",
+        averagePrice: 1,
         price: 1,
         marketValue: r.marketValue ?? r.quantity,
         optionExpiration: null,
@@ -187,6 +188,7 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
 
     if (r.securityType !== "option") {
       const sym = (r.symbol ?? "").toUpperCase();
+      const averagePrice = resolvePositionAveragePrice(r.price, r.metadataJson);
       const snapshotImplied =
         r.quantity && r.marketValue != null ? r.marketValue / r.quantity : r.price ?? null;
       const price = resolveEquityMarkPx(sym, liveMarks, pricePoints, snapshotImplied) ?? r.price;
@@ -200,6 +202,7 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
         symbol: r.symbol ?? "",
         securityName: r.securityName ?? "",
         effectiveUnderlyingSymbol: sym,
+        averagePrice,
         price,
         marketValue,
         optionExpiration: null,
