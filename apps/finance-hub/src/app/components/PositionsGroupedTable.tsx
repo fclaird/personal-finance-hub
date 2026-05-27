@@ -15,6 +15,7 @@ import {
   type PositionsColumnId,
   type PositionsSortColumn,
 } from "@/lib/positions/positionsColumnOrder";
+import { positionCostShare } from "@/lib/positions/positionCostShare";
 import { posNegClass } from "@/lib/terminal/colors";
 
 export type Row = {
@@ -33,6 +34,7 @@ export type Row = {
   optionRight: "C" | "P" | null;
   optionStrike: number | null;
   quantity: number;
+  averagePrice?: number | null;
   price: number | null;
   marketValue: number | null;
   delta: number | null;
@@ -103,7 +105,7 @@ function compareRows(a: Row, b: Row, col: SortColumn, asc: boolean): number {
       return asc ? cmp : -cmp;
     }
     case "price":
-      return compareNullableNumber(a.price, b.price, asc);
+      return compareNullableNumber(positionCostShare(a), positionCostShare(b), asc);
     case "marketValue":
       return compareNullableNumber(a.marketValue, b.marketValue, asc);
     case "purchaseDate": {
@@ -345,12 +347,14 @@ export function GroupedTable({
             {formatInt(r.quantity)}
           </td>
         );
-      case "price":
+      case "price": {
+        const costShare = positionCostShare(r);
         return (
           <td key={colId} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums">
-            {r.price == null ? "-" : usd2Unmasked(r.price)}
+            {costShare == null ? "-" : usd2Unmasked(costShare)}
           </td>
         );
+      }
       case "marketValue":
         return (
           <td
@@ -462,8 +466,17 @@ function groupSortValue(g: UnderlyingGroup, col: SortColumn): string | number {
     case "quantity":
       return g.rows.reduce((s, r) => s + n0(r.quantity), 0);
     case "price": {
-      const qty = g.rows.filter((r) => r.securityType !== "option").reduce((s, r) => s + n0(r.quantity), 0);
-      return qty ? g.spotMarketValue / qty : 0;
+      let qty = 0;
+      let cost = 0;
+      for (const row of g.rows) {
+        if (row.securityType === "option") continue;
+        const rowCost = positionCostShare(row);
+        if (rowCost == null) continue;
+        const weight = Math.abs(n0(row.quantity));
+        qty += weight;
+        cost += rowCost * weight;
+      }
+      return qty ? cost / qty : 0;
     }
     case "delta":
       return g.rows.filter((r) => r.securityType === "option").reduce((s, r) => s + n0(r.delta) * n0(r.quantity), 0);
