@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
 
-import { indexedGlanceSeries, indexedGlanceValueToRebasedPct, mergeGlanceSeriesForChart, formatGlanceCombinedChartTime, enrichOverlayPrimaryLineBands, extendedOverlayShadeRange, insertOverlaySessionCloseBridge } from "./marketGlanceChart";
+import { indexedGlanceSeries, indexedGlanceValueToRebasedPct, mergeGlanceSeriesForChart, formatGlanceCombinedChartTime, enrichOverlayPrimaryLineBands, extendedOverlayShadeRange, insertOverlaySessionCloseBridge, overlaySessionCloseRowIdx, overlayShowsExtendedSegment, indexedGlancePointsFromTile } from "./marketGlanceChart";
 
 function item(
   id: string,
@@ -132,4 +132,71 @@ test("insertOverlaySessionCloseBridge adds a 4pm row when after-hours ticks star
   assert.equal(bridged.length, 3);
   assert.equal(bridged[1]!.tsMs, closeMs);
   assert.equal(bridged[1]!.RKLB, 100.2);
+});
+
+test("overlaySessionCloseRowIdx points at the last regular bar before after-hours", () => {
+  const sessionYmd = "2026-05-22";
+  const rthMs = Date.parse("2026-05-22T15:59:00-04:00");
+  const ahMs = Date.parse("2026-05-22T16:06:00-04:00");
+  const rows = [
+    { idx: 0, tsMs: rthMs, sp500: 100 },
+    { idx: 1, tsMs: ahMs, sp500: 100.1 },
+  ];
+  assert.equal(overlaySessionCloseRowIdx(rows, { marketOpen: false, sessionYmd }), 0);
+});
+
+test("extendedOverlayShadeRange skips shading when items have no extended segment", () => {
+  const sessionYmd = "2026-05-22";
+  const rows = [
+    { idx: 0, tsMs: Date.parse("2026-05-22T10:00:00-04:00"), sp500: 100 },
+    { idx: 1, tsMs: Date.parse("2026-05-22T11:00:00-04:00"), sp500: 100.1 },
+  ];
+  const range = extendedOverlayShadeRange(
+    rows,
+    { marketOpen: true, sessionYmd },
+    [item("sp500", rows.map((r, i) => ({ idx: i, close: 100 + i * 0.1, tsMs: r.tsMs! })), 99)],
+  );
+  assert.equal(range, null);
+});
+
+test("overlayShowsExtendedSegment is true when any item has extended hours", () => {
+  const base = item("sp500", [{ idx: 0, close: 500, tsMs: 1 }, { idx: 1, close: 501, tsMs: 2 }], 500);
+  assert.equal(
+    overlayShowsExtendedSegment(
+      [{ ...base, extendedSeries: [{ idx: 0, close: 501, tsMs: 3 }, { idx: 1, close: 502, tsMs: 4 }], extendedPhase: "post" }],
+      { marketOpen: false, sessionYmd: "2026-05-22" },
+    ),
+    true,
+  );
+});
+
+test("indexedGlancePointsFromTile keeps after-hours timestamps from the tile row builder", () => {
+  const sessionYmd = "2026-05-22";
+  const rthClose = Date.parse("2026-05-22T16:00:00-04:00");
+  const ah1 = Date.parse("2026-05-22T16:30:00-04:00");
+  const ah2 = Date.parse("2026-05-22T17:00:00-04:00");
+  const lastHour = Date.parse("2026-05-22T15:30:00-04:00");
+  const equity = {
+    ...item(
+      "SPY",
+      [
+        { idx: 0, close: 499, tsMs: lastHour },
+        { idx: 1, close: 500, tsMs: rthClose },
+      ],
+      498,
+    ),
+    sessionClose: 500,
+    extendedSeries: [
+      { idx: 1, close: 500, tsMs: rthClose },
+      { idx: 2, close: 500.5, tsMs: ah1 },
+      { idx: 3, close: 501, tsMs: ah2 },
+    ],
+    extendedPhase: "post" as const,
+  };
+  const windowCtx = { marketOpen: false, sessionYmd, nowMs: ah2 };
+  const points = indexedGlancePointsFromTile(equity, windowCtx);
+  assert.ok(points.some((p) => p.tsMs === ah1));
+  assert.ok(points.some((p) => p.tsMs === ah2));
+  const merged = mergeGlanceSeriesForChart([equity], windowCtx);
+  assert.ok(merged.some((row) => row.tsMs === ah2));
 });

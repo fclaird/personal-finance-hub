@@ -1,7 +1,16 @@
 import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
-import { GLANCE_CHART_BASELINE, yDomainFromChartRange } from "@/app/components/terminal/MarketGlanceCard";
+import {
+  buildTileChartRows,
+  indexTileChartRows,
+} from "@/lib/market/glanceTileChartRows";
+import {
+  GLANCE_CHART_BASELINE,
+  sharedSparklineYDomain,
+  yDomainFromChartRange,
+} from "@/app/components/terminal/MarketGlanceCard";
 import {
   glanceItemForTileChart,
+  glanceShowExtendedChartSegment,
   isUsEquityGlanceItem,
   type GlanceTileChartWindowCtx,
 } from "@/lib/market/glanceTileChartWindow";
@@ -70,6 +79,25 @@ export function fullGlanceSeries(item: UsMarketGlanceItem): Array<{ idx: number;
   return [...regular, ...extended];
 }
 
+/** Same intraday timeline as quick-glance tiles (regular + extended columns with wall-clock tsMs). */
+export function indexedGlancePointsFromTile(
+  item: UsMarketGlanceItem,
+  windowCtx?: GlanceTileChartWindowCtx,
+): IndexedGlancePoint[] {
+  const { item: chartItem, omitPriorAnchor } = windowCtx
+    ? glanceItemForTileChart(item, windowCtx)
+    : { item, omitPriorAnchor: false };
+  const rows = indexTileChartRows(buildTileChartRows(chartItem, { omitPriorAnchor }), item);
+  const points: IndexedGlancePoint[] = [];
+  for (const row of rows) {
+    if (row.tsMs == null || !Number.isFinite(row.tsMs)) continue;
+    const value = row.regular ?? row.extended;
+    if (value == null || !Number.isFinite(value)) continue;
+    points.push({ idx: points.length, value, tsMs: row.tsMs });
+  }
+  return points;
+}
+
 /** Index intraday path to 100 at prior close so series are comparable on one chart. */
 export function indexedGlanceSeries(item: UsMarketGlanceItem): IndexedGlancePoint[] {
   const base = item.previousClose;
@@ -116,7 +144,7 @@ function sampleIndexedValue(points: Array<{ value: number }>, position: number):
   return points[lo]!.value * (1 - frac) + points[hi]!.value * frac;
 }
 
-function sampleIndexedValueAtTime(points: IndexedGlancePoint[], tsMs: number): number | null {
+export function sampleIndexedValueAtTime(points: IndexedGlancePoint[], tsMs: number): number | null {
   const timed = points.filter((p) => p.tsMs != null && Number.isFinite(p.tsMs));
   if (timed.length === 0) return null;
   const first = timed[0]!;
@@ -195,12 +223,14 @@ export function mergeGlanceSeriesForChart(
   items: UsMarketGlanceItem[],
   windowCtx?: GlanceTileChartWindowCtx,
 ): GlanceCombinedChartRow[] {
-  const source = windowCtx
-    ? items.map((item) => glanceItemForTileChart(item, windowCtx).item)
-    : items;
-  const indexed = source.map((item) => ({
+  const indexed = items.map((item) => ({
     id: item.id,
-    points: indexedGlanceSeries(item),
+    points:
+      windowCtx && isUsEquityGlanceItem(item)
+        ? indexedGlancePointsFromTile(item, windowCtx)
+        : indexedGlanceSeries(
+            windowCtx ? glanceItemForTileChart(item, windowCtx).item : item,
+          ),
   }));
   const byTime = mergeGlanceSeriesByTimestamp(indexed);
   if (byTime.length >= 2) return byTime;
@@ -208,7 +238,7 @@ export function mergeGlanceSeriesForChart(
   const hasTimedPoints = indexed.some(({ points }) =>
     points.some((p) => p.tsMs != null && Number.isFinite(p.tsMs)),
   );
-  if (windowCtx && hasTimedPoints && source.some((entry) => isUsEquityGlanceItem(entry))) {
+  if (windowCtx && hasTimedPoints && items.some((entry) => isUsEquityGlanceItem(entry))) {
     return byTime;
   }
 
@@ -240,8 +270,39 @@ export function priorCloseReferenceEndIdx(
   windowCtx: GlanceTileChartWindowCtx,
 ): number {
   if (windowCtx.marketOpen) return rows.length - 1;
+  return overlaySessionCloseRowIdx(rows, windowCtx);
+}
+
+/** Last regular-session row before extended-hours on merged overlay charts. */
+export function overlaySessionCloseRowIdx(
+  rows: GlanceCombinedChartRow[],
+  windowCtx: GlanceTileChartWindowCtx,
+): number {
   const start = extendedOverlayStartIdx(rows, windowCtx);
-  return Math.max(0, start);
+  return Math.max(0, start - 1);
+}
+
+export function overlayShowsExtendedSegment(
+  items: UsMarketGlanceItem[],
+  windowCtx: GlanceTileChartWindowCtx,
+): boolean {
+  return items.some((item) =>
+    glanceShowExtendedChartSegment(item, {
+      sessionOpen: windowCtx.marketOpen,
+      sessionYmd: windowCtx.sessionYmd,
+    }),
+  );
+}
+
+export function overlayChartYDomain(
+  items: UsMarketGlanceItem[],
+  windowCtx: GlanceTileChartWindowCtx,
+  chartData: Array<Record<string, number | null>>,
+  lineIds: string[],
+): [number, number] {
+  const shared = sharedSparklineYDomain(items, windowCtx);
+  if (shared) return shared;
+  return glanceChartYDomain(chartData, lineIds, items, windowCtx);
 }
 
 /** 16:00 ET session-close x-position for overlay charts when the US market is closed. */
@@ -311,6 +372,7 @@ export function extendedOverlayShadeRange(
 ): { fromIdx: number; toIdx: number } | null {
   const sessionYmd = windowCtx.sessionYmd ?? "";
   if (!sessionYmd || rows.length < 2) return null;
+  if (items?.length && !overlayShowsExtendedSegment(items, windowCtx)) return null;
   const hasTimestamps = rows.some((row) => row.tsMs != null && Number.isFinite(row.tsMs));
   if (!hasTimestamps) return null;
 

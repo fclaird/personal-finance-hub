@@ -22,7 +22,43 @@ export type GlanceTileChartWindow = {
 export type GlanceTileChartWindowCtx = {
   marketOpen: boolean;
   sessionYmd?: string;
+  /** Wall clock for trim/axis decisions (defaults to Date.now()). */
+  nowMs?: number;
 };
+
+function ctxNowMs(ctx: GlanceTileChartWindowCtx): number {
+  return ctx.nowMs ?? Date.now();
+}
+
+export type GlanceTileChartItemRef = Pick<
+  UsMarketGlanceItem,
+  "futuresKind" | "instrumentKind" | "extendedPhase" | "extendedSeries"
+>;
+
+/** 08:30 pre-market hour before the 09:30 open, or 15:00 last RTH hour before the 16:00 close. */
+export function resolveGlanceTrimAnchorMs(
+  ctx: GlanceTileChartWindowCtx,
+  item?: GlanceTileChartItemRef,
+): number | null {
+  const sessionYmd = (ctx.sessionYmd ?? nyYmd(new Date(ctxNowMs(ctx)))).trim();
+  if (!sessionYmd) return null;
+
+  if (item && !isUsEquityGlanceItem(item)) return null;
+
+  const preStart = nyWallTimeMs(sessionYmd, GLANCE_PREMARKET_REF_START_MIN);
+  const lastHourStart = nyWallTimeMs(sessionYmd, GLANCE_RTH_LAST_HOUR_START_MIN);
+  const nowMs = ctxNowMs(ctx);
+
+  if (!ctx.marketOpen && item?.extendedPhase === "pre") {
+    return preStart;
+  }
+
+  if (ctx.marketOpen) {
+    return nowMs >= lastHourStart ? lastHourStart : preStart;
+  }
+
+  return lastHourStart;
+}
 
 function isUsEquityGlanceItem(item: Pick<UsMarketGlanceItem, "futuresKind" | "instrumentKind">): boolean {
   return item.futuresKind == null && item.instrumentKind !== "cash_index";
@@ -50,25 +86,14 @@ export function resolveGlanceTileChartWindow(
 ): GlanceTileChartWindow | null {
   if (!isUsEquityGlanceItem(item)) return null;
 
-  const sessionYmd = (ctx.sessionYmd ?? nyYmd(new Date())).trim();
+  const sessionYmd = (ctx.sessionYmd ?? nyYmd(new Date(ctxNowMs(ctx)))).trim();
   if (!sessionYmd) return null;
 
-  if (ctx.marketOpen) {
-    return {
-      fromMs: nyWallTimeMs(sessionYmd, GLANCE_PREMARKET_REF_START_MIN),
-      omitPriorAnchor: true,
-    };
-  }
-
-  if (item.extendedPhase === "pre") {
-    return {
-      fromMs: nyWallTimeMs(sessionYmd, GLANCE_PREMARKET_REF_START_MIN),
-      omitPriorAnchor: true,
-    };
-  }
+  const fromMs = resolveGlanceTrimAnchorMs(ctx, item);
+  if (fromMs == null) return null;
 
   return {
-    fromMs: nyWallTimeMs(sessionYmd, GLANCE_RTH_LAST_HOUR_START_MIN),
+    fromMs,
     omitPriorAnchor: true,
   };
 }
@@ -124,33 +149,30 @@ export function glanceItemForTileChart(
   };
 }
 
-export type GlanceTileChartItemRef = Pick<
-  UsMarketGlanceItem,
-  "futuresKind" | "instrumentKind" | "extendedPhase" | "extendedSeries"
->;
-
 function resolveGlanceTrimFromMs(
   ctx: GlanceTileChartWindowCtx,
   item?: GlanceTileChartItemRef | GlanceTileChartItemRef[],
 ): number | null {
-  const sessionYmd = (ctx.sessionYmd ?? nyYmd(new Date())).trim();
+  const sessionYmd = (ctx.sessionYmd ?? nyYmd(new Date(ctxNowMs(ctx)))).trim();
   if (!sessionYmd) return null;
 
   const items = item == null ? [] : Array.isArray(item) ? item : [item];
   let trimFromMs: number | null = null;
   for (const entry of items) {
     if (!isUsEquityGlanceItem(entry)) continue;
-    const window = resolveGlanceTileChartWindow(entry, ctx);
-    if (!window) continue;
-    trimFromMs = trimFromMs == null ? window.fromMs : Math.min(trimFromMs, window.fromMs);
+    const anchor = resolveGlanceTrimAnchorMs(ctx, entry);
+    if (anchor == null) continue;
+    trimFromMs = trimFromMs == null ? anchor : Math.min(trimFromMs, anchor);
   }
   if (trimFromMs != null) return trimFromMs;
 
-  if (ctx.marketOpen) return nyWallTimeMs(sessionYmd, GLANCE_PREMARKET_REF_START_MIN);
-  return nyWallTimeMs(sessionYmd, GLANCE_RTH_LAST_HOUR_START_MIN);
+  return resolveGlanceTrimAnchorMs(ctx);
 }
 
-const GLANCE_AXIS_MIN_SPAN_MS = 60_000;
+/** Full fixed span from trim anchor (14 wall-clock hours). */
+export function glanceTileChartAxisEndMs(trimFromMs: number): number {
+  return trimFromMs + GLANCE_TILE_CHART_AXIS_HOURS * MS_PER_HOUR;
+}
 
 /** Latest timestamp on a glance chart row series (ignores null/invalid values). */
 export function lastGlanceChartDataTsMs(rows: Array<{ tsMs?: number | null }>): number | null {
@@ -162,14 +184,14 @@ export function lastGlanceChartDataTsMs(rows: Array<{ tsMs?: number | null }>): 
 }
 
 /**
- * Fixed 14-hour wall-clock x-axis anchored at the trim point (08:30 open, 15:00 post-close).
- * The right edge tracks the latest data so the session grows left-to-right across the chart
- * until the 14-hour cap is reached.
+ * Fixed 14-hour wall-clock x-axis anchored at the trim point (08:30 open hour, 15:00 from the last RTH hour / after the close).
+ * The domain always spans the full 14 hours so intraday data plots left-to-right on a consistent scale (as on quick-glance tiles).
+ * Once data would extend past the right edge, later ticks clip (`allowDataOverflow`) while the scale stays fixed.
  */
 export function resolveGlanceTileChartAxisDomain(
   ctx: GlanceTileChartWindowCtx,
   item?: GlanceTileChartItemRef | GlanceTileChartItemRef[],
-  lastDataTsMs?: number | null,
+  _lastDataTsMs?: number | null,
 ): { startMs: number; endMs: number } | null {
   const items = item == null ? [] : Array.isArray(item) ? item : [item];
   if (items.length === 1 && !isUsEquityGlanceItem(items[0]!)) return null;
@@ -178,20 +200,7 @@ export function resolveGlanceTileChartAxisDomain(
   const trimFromMs = resolveGlanceTrimFromMs(ctx, item);
   if (trimFromMs == null) return null;
 
-  const maxSpanMs = GLANCE_TILE_CHART_AXIS_HOURS * MS_PER_HOUR;
-  const maxEndMs = trimFromMs + maxSpanMs;
-
-  let endMs = maxEndMs;
-  if (lastDataTsMs != null && Number.isFinite(lastDataTsMs)) {
-    endMs = Math.min(maxEndMs, Math.max(trimFromMs + GLANCE_AXIS_MIN_SPAN_MS, lastDataTsMs));
-  }
-
-  let startMs = trimFromMs;
-  if (endMs - startMs >= maxSpanMs) {
-    startMs = endMs - maxSpanMs;
-  }
-
-  return { startMs, endMs };
+  return { startMs: trimFromMs, endMs: glanceTileChartAxisEndMs(trimFromMs) };
 }
 
 /** Gray extended-hours band bounds on the fixed time axis. */

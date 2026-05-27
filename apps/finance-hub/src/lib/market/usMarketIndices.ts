@@ -24,6 +24,7 @@ import {
   toIndexedSeries,
   yahooIntradayRangeForGlance,
 } from "@/lib/market/glanceSession";
+import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import { ensureCandles, getCachedCandles, type CandleWindow } from "@/lib/terminal/ohlcv";
 import { fetchYahooIntradayChart, yahooChartSymbol } from "@/lib/market/yahooChartFetch";
 import { ensureBenchmarkHistory, getCachedBenchmarkSeries } from "@/lib/market/benchmarks";
@@ -295,6 +296,9 @@ async function buildIndexCard(
   grid?: GlanceTimedGrid,
 ): Promise<UsMarketIndexCard> {
   const ctx = glanceChartContext(now);
+  const sessionOpen = isUsEquityRegularSessionOpen(now);
+  /** Keep after-hours on closed-session charts even outside the live 16:00–20:00 window. */
+  const includeExtendedChart = ctx.showExtended || !sessionOpen;
   const sessionYmd = ctx.sessionYmd;
   const sym = def.symbol.toUpperCase();
   let last: number | null = null;
@@ -326,7 +330,7 @@ async function buildIndexCard(
         asNum(meta?.regularMarketPreviousClose) ??
         null;
       last =
-        ctx.showExtended && extendedTimed.length > 0
+        includeExtendedChart && extendedTimed.length > 0
           ? extendedTimed[extendedTimed.length - 1]!.close
           : regularTimed.length > 0
             ? regularTimed[regularTimed.length - 1]!.close
@@ -336,7 +340,7 @@ async function buildIndexCard(
     if (regularTimed.length < 2) {
       await ensureCandles(sym, "5m", schwabWindow);
       regularTimed = schwabTimedPoints(sym, sessionYmd, schwabWindow, "regular");
-      if (ctx.showExtended && (grid.extended.length > 0 || extPhase === "pre")) {
+      if (includeExtendedChart && (grid.extended.length > 0 || extPhase === "pre")) {
         extendedTimed = schwabTimedPoints(
           sym,
           extPhase === "pre" ? ctx.chartYmd : sessionYmd,
@@ -351,12 +355,12 @@ async function buildIndexCard(
     series = toGlanceSeries(resampledRegular);
     sessionClose = series.length > 0 ? series[series.length - 1]!.close : null;
 
-    if (ctx.showExtended && grid.extended.length > 0 && sessionClose != null) {
+    if (includeExtendedChart && grid.extended.length > 0 && sessionClose != null) {
       const resampledExt = resampleTimedPointsToGrid(extendedTimed, grid.extended);
       extendedSeries = buildAlignedExtendedSeries(series, resampledExt, sessionClose);
       extendedPhase = extPhase;
     } else if (
-      ctx.showExtended &&
+      includeExtendedChart &&
       extendedSeries.length === 0 &&
       extendedTimed.length >= 2 &&
       sessionClose != null
@@ -424,7 +428,7 @@ async function buildIndexCard(
     sessionClose = series[series.length - 1]!.close;
   }
 
-  if (ctx.showExtended && extendedSeries.length === 0 && sessionClose != null && last != null) {
+  if (includeExtendedChart && extendedSeries.length === 0 && sessionClose != null && last != null) {
     if (alignedToGrid) {
       const yahooExt = await fetchYahooIntradayChart(sym, "5d", { includePrePost: true });
       if (yahooExt?.result) {
@@ -452,7 +456,7 @@ async function buildIndexCard(
   const regularAnchor = sessionClose ?? series.at(-1)?.close ?? null;
   series = normalizeSeriesForChart(series, previousClose, regularAnchor);
 
-  if (!ctx.showExtended) {
+  if (!includeExtendedChart) {
     extendedSeries = [];
     extendedPhase = null;
   }

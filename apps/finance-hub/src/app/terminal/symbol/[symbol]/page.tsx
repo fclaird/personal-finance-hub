@@ -22,7 +22,7 @@ import { SymbolPositionsTable } from "@/app/components/SymbolPositionsTable";
 
 import { NewsFeedPanel } from "@/app/components/terminal/NewsFeedPanel";
 import { GlanceIntradayOverlayChart } from "@/app/components/terminal/GlanceIntradayOverlayChart";
-import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
+import { sharedSparklineYDomain, type UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
 import { SymbolNotesSection } from "./SymbolNotesSection";
 import type { GlanceTileChartWindowCtx } from "@/lib/market/glanceTileChartWindow";
 import type { GlanceChartLine } from "@/lib/terminal/marketGlanceChart";
@@ -365,10 +365,18 @@ export default function TerminalSymbolPage() {
     const symKey = sym.toUpperCase();
     return [
       { id: symKey, label: sym, color: "#0f766e" },
-      { id: "QQQ", label: "QQQ", color: "#0891b2" },
-      { id: "SPY", label: "SPY", color: "#16a34a" },
+      { id: "QQQ", label: "Nasdaq (QQQ)", color: "#0891b2" },
+      { id: "SPY", label: "S&P 500 (SPY)", color: "#16a34a" },
     ];
   }, [sym]);
+
+  const intradayChartYDomain = useMemo(
+    () =>
+      intradayPerf?.items.length
+        ? sharedSparklineYDomain(intradayPerf.items, intradayPerf.windowCtx)
+        : undefined,
+    [intradayPerf],
+  );
 
   const perfData = useMemo(() => {
     if (windowKey === "1D") return [];
@@ -566,7 +574,7 @@ export default function TerminalSymbolPage() {
                   {intradayPerf.showingPriorSession
                     ? `Showing ${intradayPerf.sessionLabel}`
                     : intradayPerf.sessionLabel}{" "}
-                  · intraday session (same window as quick glance tiles)
+                  · same chart window, shading, and scale as quick glance tiles
                 </div>
               ) : null}
             </div>
@@ -588,30 +596,18 @@ export default function TerminalSymbolPage() {
               ))}
             </div>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-zinc-600 dark:text-zinc-400">
-            <div className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#0f766e" }} />
-              <span className="font-medium text-zinc-700 dark:text-zinc-200">{sym}</span>
-            </div>
-            <div className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#0891b2" }} />
-              <span className="font-medium text-zinc-700 dark:text-zinc-200">QQQ</span>
-            </div>
-            <div className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#16a34a" }} />
-              <span className="font-medium text-zinc-700 dark:text-zinc-200">SPY</span>
-            </div>
-          </div>
           {windowKey === "1D" ? (
             !intradayReady ? (
               <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Loading intraday session…</div>
             ) : (
-              <div className="mt-2">
+              <div className="mt-2 rounded-xl border border-zinc-300 bg-zinc-50 p-3 dark:border-white/15 dark:bg-zinc-900/80">
                 <GlanceIntradayOverlayChart
                   items={intradayPerf!.items}
                   lines={intradayLines}
                   windowCtx={intradayPerf!.windowCtx}
                   primaryLineId={sym.toUpperCase()}
+                  chartYDomain={intradayChartYDomain}
+                  showFooter
                 />
               </div>
             )

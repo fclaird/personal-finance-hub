@@ -20,13 +20,22 @@ function tsAt(minutes: number): number {
   return nyWallTimeMs(SESSION, minutes);
 }
 
-test("resolveGlanceTileChartWindow uses 08:30 ET when RTH is open", () => {
+test("resolveGlanceTileChartWindow uses 08:30 ET before the last RTH hour", () => {
   const win = resolveGlanceTileChartWindow(
     { futuresKind: undefined, instrumentKind: undefined, extendedPhase: null, extendedSeries: undefined },
-    { marketOpen: true, sessionYmd: SESSION },
+    { marketOpen: true, sessionYmd: SESSION, nowMs: tsAt(10 * 60) },
   );
   assert.ok(win);
   assert.equal(win!.fromMs, tsAt(GLANCE_PREMARKET_REF_START_MIN));
+});
+
+test("resolveGlanceTileChartWindow uses 15:00 ET during the last RTH hour", () => {
+  const win = resolveGlanceTileChartWindow(
+    { futuresKind: undefined, instrumentKind: undefined, extendedPhase: null, extendedSeries: undefined },
+    { marketOpen: true, sessionYmd: SESSION, nowMs: tsAt(15 * 60 + 20) },
+  );
+  assert.ok(win);
+  assert.equal(win!.fromMs, tsAt(GLANCE_RTH_LAST_HOUR_START_MIN));
 });
 
 test("resolveGlanceTileChartWindow uses 15:00 ET after the regular close", () => {
@@ -80,31 +89,43 @@ test("resolveGlanceTileChartWindow skips futures tiles", () => {
 });
 
 test("resolveGlanceTileChartAxisDomain uses full 14 hours when no latest tick is known", () => {
-  const axis = resolveGlanceTileChartAxisDomain({ marketOpen: true, sessionYmd: SESSION });
+  const axis = resolveGlanceTileChartAxisDomain({
+    marketOpen: true,
+    sessionYmd: SESSION,
+    nowMs: tsAt(10 * 60),
+  });
   assert.ok(axis);
   assert.equal(axis!.startMs, tsAt(GLANCE_PREMARKET_REF_START_MIN));
   assert.equal(axis!.endMs, tsAt(GLANCE_PREMARKET_REF_START_MIN) + GLANCE_TILE_CHART_AXIS_HOURS * 60 * 60 * 1000);
 });
 
-test("resolveGlanceTileChartAxisDomain grows right edge with latest data before the 14-hour cap", () => {
+test("resolveGlanceTileChartAxisDomain keeps fixed 14-hour span while data is within the window", () => {
   const last = tsAt(10 * 60);
-  const axis = resolveGlanceTileChartAxisDomain({ marketOpen: true, sessionYmd: SESSION }, undefined, last);
+  const axis = resolveGlanceTileChartAxisDomain(
+    { marketOpen: true, sessionYmd: SESSION, nowMs: last },
+    undefined,
+    last,
+  );
   assert.ok(axis);
   assert.equal(axis!.startMs, tsAt(GLANCE_PREMARKET_REF_START_MIN));
-  assert.equal(axis!.endMs, last);
+  assert.equal(axis!.endMs, tsAt(GLANCE_PREMARKET_REF_START_MIN) + GLANCE_TILE_CHART_AXIS_HOURS * 60 * 60 * 1000);
 });
 
-test("resolveGlanceTileChartAxisDomain post-close grows from 15:00 ET toward latest after-hours tick", () => {
+test("resolveGlanceTileChartAxisDomain post-close uses fixed 14 hours from 15:00 ET", () => {
   const last = tsAt(16 * 60 + 45);
   const axis = resolveGlanceTileChartAxisDomain({ marketOpen: false, sessionYmd: SESSION }, undefined, last);
   assert.ok(axis);
   assert.equal(axis!.startMs, tsAt(GLANCE_RTH_LAST_HOUR_START_MIN));
-  assert.equal(axis!.endMs, last);
+  assert.equal(axis!.endMs, tsAt(GLANCE_RTH_LAST_HOUR_START_MIN) + GLANCE_TILE_CHART_AXIS_HOURS * 60 * 60 * 1000);
 });
 
 test("resolveGlanceTileChartAxisDomain clamps to 14 hours once the session span is full", () => {
   const last = tsAt(GLANCE_PREMARKET_REF_START_MIN) + GLANCE_TILE_CHART_AXIS_HOURS * 60 * 60 * 1000 + 60_000;
-  const axis = resolveGlanceTileChartAxisDomain({ marketOpen: true, sessionYmd: SESSION }, undefined, last);
+  const axis = resolveGlanceTileChartAxisDomain(
+    { marketOpen: true, sessionYmd: SESSION, nowMs: tsAt(10 * 60) },
+    undefined,
+    last,
+  );
   assert.ok(axis);
   assert.equal(axis!.endMs, tsAt(GLANCE_PREMARKET_REF_START_MIN) + GLANCE_TILE_CHART_AXIS_HOURS * 60 * 60 * 1000);
   assert.equal(axis!.startMs, axis!.endMs - GLANCE_TILE_CHART_AXIS_HOURS * 60 * 60 * 1000);
@@ -138,11 +159,15 @@ test("resolveGlanceTileChartAxisDomain uses pre-market trim from overlay items w
   );
   assert.ok(axis);
   assert.equal(axis!.startMs, tsAt(GLANCE_PREMARKET_REF_START_MIN));
-  assert.equal(axis!.endMs, last);
+  assert.equal(axis!.endMs, tsAt(GLANCE_PREMARKET_REF_START_MIN) + GLANCE_TILE_CHART_AXIS_HOURS * 60 * 60 * 1000);
 });
 
 test("resolveGlanceExtendedShadeX shades pre-market from axis start to 09:30 ET when open", () => {
-  const axis = resolveGlanceTileChartAxisDomain({ marketOpen: true, sessionYmd: SESSION })!;
+  const axis = resolveGlanceTileChartAxisDomain({
+    marketOpen: true,
+    sessionYmd: SESSION,
+    nowMs: tsAt(10 * 60),
+  })!;
   const shade = resolveGlanceExtendedShadeX({ marketOpen: true, sessionYmd: SESSION }, axis, tsAt(12 * 60));
   assert.ok(shade);
   assert.equal(shade!.fromMs, tsAt(GLANCE_PREMARKET_REF_START_MIN));

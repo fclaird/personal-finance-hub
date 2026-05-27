@@ -235,7 +235,11 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
               ))}
             </div>
           ) : (
-            <MarketGlanceCombinedChart items={displayItems} windowCtx={tileChartWindowCtx} />
+            <MarketGlanceCombinedChart
+              items={displayItems}
+              windowCtx={tileChartWindowCtx}
+              chartYDomain={tileChartYDomain}
+            />
           )}
           <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
             {viewMode === "combined"

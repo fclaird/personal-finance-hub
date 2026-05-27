@@ -9,11 +9,7 @@ import {
   indexedGlanceValueToRebasedPct,
   mergeGlanceSeriesForChart,
 } from "@/lib/terminal/marketGlanceChart";
-import {
-  glanceItemForTileChart,
-  isUsEquityGlanceItem,
-  type GlanceTileChartWindowCtx,
-} from "@/lib/market/glanceTileChartWindow";
+import type { GlanceTileChartWindowCtx } from "@/lib/market/glanceTileChartWindow";
 
 export type SymbolPerformanceIntradayPoint = {
   tsMs: number | null;
@@ -36,7 +32,11 @@ export async function fetchSymbolPerformanceIntraday(
   const sessionYmd = glanceSessionYmd(now);
   const grid = await fetchCanonicalGlanceGrid(sessionYmd, now);
   const session = usEquitySessionStatus(now);
-  const windowCtx: GlanceTileChartWindowCtx = { marketOpen: session.isOpen, sessionYmd };
+  const windowCtx: GlanceTileChartWindowCtx = {
+    marketOpen: session.isOpen,
+    sessionYmd,
+    nowMs: now.getTime(),
+  };
   const cards = await Promise.all(
     normalized.map((symbol) => buildSymbolGlanceCard({ id: symbol, label: symbol, symbol }, now, grid)),
   );
@@ -44,8 +44,7 @@ export async function fetchSymbolPerformanceIntraday(
     ...card,
     id: card.symbol.toUpperCase(),
   }));
-  const trimmedItems = items.map((entry) => glanceItemForTileChart(entry, windowCtx).item);
-  const merged = mergeGlanceSeriesForChart(trimmedItems, windowCtx);
+  const merged = mergeGlanceSeriesForChart(items, windowCtx);
   const points: SymbolPerformanceIntradayPoint[] = merged.map((row) => {
     const point: SymbolPerformanceIntradayPoint = {
       tsMs: row.tsMs,
@@ -64,7 +63,7 @@ export async function fetchSymbolPerformanceIntraday(
     showingPriorSession: glanceSessionUsesPriorDay(now),
     marketOpen: session.isOpen,
     windowCtx,
-    items: trimmedItems,
+    items,
     points,
   };
 }
