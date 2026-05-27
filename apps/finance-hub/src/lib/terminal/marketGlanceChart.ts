@@ -1,4 +1,10 @@
 import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
+import { GLANCE_CHART_BASELINE, yDomainFromChartRange } from "@/app/components/terminal/MarketGlanceCard";
+import {
+  glanceItemForTileChart,
+  type GlanceTileChartWindowCtx,
+} from "@/lib/market/glanceTileChartWindow";
+import { nyWallTimeMs } from "@/lib/market/futuresGlanceSession";
 
 export type GlanceChartLine = {
   id: string;
@@ -8,8 +14,8 @@ export type GlanceChartLine = {
 
 export const GLANCE_CHART_LINES: GlanceChartLine[] = [
   { id: "portfolio", label: "Portfolio", color: "#2563eb" },
-  { id: "sp500", label: "S&P 500", color: "#16a34a" },
   { id: "nasdaq", label: "Nasdaq", color: "#0891b2" },
+  { id: "sp500", label: "S&P 500", color: "#16a34a" },
 ];
 
 export const GLANCE_ALTERNATE_CHART_LINES: GlanceChartLine[] = [
@@ -184,8 +190,14 @@ function mergeGlanceSeriesByTimestamp(
 }
 
 /** Resample all glance series to a shared x-axis for a multi-line chart. */
-export function mergeGlanceSeriesForChart(items: UsMarketGlanceItem[]): GlanceCombinedChartRow[] {
-  const indexed = items.map((item) => ({
+export function mergeGlanceSeriesForChart(
+  items: UsMarketGlanceItem[],
+  windowCtx?: GlanceTileChartWindowCtx,
+): GlanceCombinedChartRow[] {
+  const source = windowCtx
+    ? items.map((item) => glanceItemForTileChart(item, windowCtx).item)
+    : items;
+  const indexed = source.map((item) => ({
     id: item.id,
     points: indexedGlanceSeries(item),
   }));
@@ -194,28 +206,323 @@ export function mergeGlanceSeriesForChart(items: UsMarketGlanceItem[]): GlanceCo
   return mergeGlanceSeriesByIndex(indexed);
 }
 
+/** First merged row at or after the extended-hours window (RTH close or trim anchor). */
+export function extendedOverlayStartIdx(
+  rows: GlanceCombinedChartRow[],
+  windowCtx: GlanceTileChartWindowCtx,
+): number {
+  if (rows.length === 0) return 0;
+  const sessionYmd = windowCtx.sessionYmd ?? "";
+  if (!sessionYmd) return rows.length - 1;
+
+  const boundaryMs = windowCtx.marketOpen
+    ? nyWallTimeMs(sessionYmd, 9 * 60 + 30)
+    : nyWallTimeMs(sessionYmd, 16 * 60);
+
+  for (let i = 0; i < rows.length; i++) {
+    const ts = rows[i]!.tsMs;
+    if (ts != null && Number.isFinite(ts) && ts >= boundaryMs) return i;
+  }
+  return Math.max(0, rows.length - 1);
+}
+
+export function priorCloseReferenceEndIdx(
+  rows: GlanceCombinedChartRow[],
+  windowCtx: GlanceTileChartWindowCtx,
+): number {
+  if (windowCtx.marketOpen) return rows.length - 1;
+  const start = extendedOverlayStartIdx(rows, windowCtx);
+  return Math.max(0, start);
+}
+
+/** 16:00 ET session-close x-position for overlay charts when the US market is closed. */
+export function overlaySessionCloseBoundaryMs(windowCtx: GlanceTileChartWindowCtx): number | null {
+  if (windowCtx.marketOpen || !windowCtx.sessionYmd) return null;
+  return nyWallTimeMs(windowCtx.sessionYmd, 16 * 60);
+}
+
+/** Start gray overlay halfway between the last RTH tick and the 4:00 PM bell. */
+export function overlayExtendedShadeStartX(
+  rows: GlanceCombinedChartRow[],
+  windowCtx: GlanceTileChartWindowCtx,
+): number | null {
+  const boundaryMs = overlaySessionCloseBoundaryMs(windowCtx);
+  if (boundaryMs == null || rows.length < 2) return boundaryMs;
+
+  const splitIdx = extendedOverlayStartIdx(rows, windowCtx);
+  const lastRthIdx = Math.max(0, splitIdx - 1);
+  const lastTs = rows[lastRthIdx]?.tsMs;
+  if (lastTs != null && Number.isFinite(lastTs) && lastTs < boundaryMs) {
+    return (lastTs + boundaryMs) / 2;
+  }
+  return boundaryMs;
+}
+
+/** Insert a synthetic row at the 4:00 PM ET bell so price/fill lines do not gap before after-hours ticks. */
+export function insertOverlaySessionCloseBridge(
+  rows: GlanceCombinedChartRow[],
+  windowCtx: GlanceTileChartWindowCtx,
+): GlanceCombinedChartRow[] {
+  const boundaryMs = overlaySessionCloseBoundaryMs(windowCtx);
+  if (boundaryMs == null || rows.length < 2) return rows;
+
+  const splitIdx = extendedOverlayStartIdx(rows, windowCtx);
+  const lastRthIdx = splitIdx > 0 ? splitIdx - 1 : -1;
+  if (lastRthIdx < 0) return rows;
+
+  const lastRth = rows[lastRthIdx]!;
+  const lastTs = lastRth.tsMs;
+  if (lastTs == null || !Number.isFinite(lastTs) || lastTs >= boundaryMs) return rows;
+
+  const firstExtTs = rows[splitIdx]?.tsMs;
+  if (firstExtTs != null && Number.isFinite(firstExtTs) && firstExtTs <= boundaryMs) return rows;
+
+  const bridge: GlanceCombinedChartRow = { idx: 0, tsMs: boundaryMs };
+  for (const [key, value] of Object.entries(lastRth)) {
+    if (key === "idx" || key === "tsMs") continue;
+    bridge[key] = value;
+  }
+
+  const out = [...rows.slice(0, splitIdx), bridge, ...rows.slice(splitIdx)];
+  return out.map((row, idx) => ({ ...row, idx }));
+}
+
+export function sessionCloseReferenceY(item: UsMarketGlanceItem): number | null {
+  const prev = item.previousClose;
+  const close = item.sessionClose;
+  if (prev == null || prev <= 0 || close == null || !Number.isFinite(close)) return null;
+  return (close / prev) * GLANCE_CHART_BASELINE;
+}
+
+/** Gray extended-hours band on merged overlay charts (pre-market during RTH, after-hours when closed). */
+export function extendedOverlayShadeRange(
+  rows: GlanceCombinedChartRow[],
+  windowCtx: GlanceTileChartWindowCtx,
+  items?: UsMarketGlanceItem[],
+): { fromIdx: number; toIdx: number } | null {
+  const sessionYmd = windowCtx.sessionYmd ?? "";
+  if (!sessionYmd || rows.length < 2) return null;
+  const hasTimestamps = rows.some((row) => row.tsMs != null && Number.isFinite(row.tsMs));
+  if (!hasTimestamps) return null;
+
+  if (!windowCtx.marketOpen) {
+    const fromIdx = extendedOverlayStartIdx(rows, windowCtx);
+    const toIdx = rows.length - 1;
+    if (fromIdx >= toIdx) return null;
+    return { fromIdx, toIdx };
+  }
+
+  const openMs = nyWallTimeMs(sessionYmd, 9 * 60 + 30);
+  const firstTs = rows[0]?.tsMs;
+  if (firstTs == null || !Number.isFinite(firstTs) || firstTs >= openMs) {
+    return null;
+  }
+
+  let toIdx = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const ts = rows[i]!.tsMs;
+    if (ts != null && Number.isFinite(ts) && ts >= openMs) {
+      toIdx = Math.max(0, i - 1);
+      return toIdx > 0 ? { fromIdx: 0, toIdx } : null;
+    }
+    toIdx = i;
+  }
+  return toIdx > 0 ? { fromIdx: 0, toIdx } : null;
+}
+
+export type OverlayPrimaryBandRow = GlanceCombinedChartRow & {
+  gainFill?: number | null;
+  lossFill?: number | null;
+  extGainFill?: number | null;
+  extLossFill?: number | null;
+  gainStroke?: number | null;
+  lossStroke?: number | null;
+  extGainStroke?: number | null;
+  extLossStroke?: number | null;
+};
+
+function overlayPriceStrokeFromFill(
+  fill: number | null | undefined,
+  referenceY: number,
+): number | null {
+  if (fill == null || !Number.isFinite(fill)) return null;
+  if (Math.abs(fill - referenceY) <= 1e-9) return null;
+  return fill;
+}
+
+function assignOverlayBandStrokes(
+  row: OverlayPrimaryBandRow,
+  priorRefY: number,
+  sessionRefY: number | null,
+): OverlayPrimaryBandRow {
+  const rthCross =
+    row.gainFill != null &&
+    row.lossFill != null &&
+    Math.abs(row.gainFill - priorRefY) <= 1e-9 &&
+    Math.abs(row.lossFill - priorRefY) <= 1e-9;
+  const extCross =
+    sessionRefY != null &&
+    row.extGainFill != null &&
+    row.extLossFill != null &&
+    Math.abs(row.extGainFill - sessionRefY) <= 1e-9 &&
+    Math.abs(row.extLossFill - sessionRefY) <= 1e-9;
+
+  return {
+    ...row,
+    gainStroke: rthCross ? priorRefY : overlayPriceStrokeFromFill(row.gainFill, priorRefY),
+    lossStroke: rthCross ? priorRefY : overlayPriceStrokeFromFill(row.lossFill, priorRefY),
+    extGainStroke: extCross ? sessionRefY : row.extGainFill ?? null,
+    extLossStroke: extCross ? sessionRefY : row.extLossFill ?? null,
+  };
+}
+
+/** Green/red fill keys for the primary overlay line vs prior close, then session close after the bell. */
+export function enrichOverlayPrimaryLineBands(
+  rows: GlanceCombinedChartRow[],
+  primaryId: string,
+  windowCtx: GlanceTileChartWindowCtx,
+  primaryItem: UsMarketGlanceItem | undefined,
+): OverlayPrimaryBandRow[] {
+  const bridged = insertOverlaySessionCloseBridge(rows, windowCtx);
+  const splitIdx = extendedOverlayStartIdx(bridged, windowCtx);
+  const priorRefY = GLANCE_CHART_BASELINE;
+  const sessionRefY =
+    !windowCtx.marketOpen && primaryItem ? sessionCloseReferenceY(primaryItem) : null;
+
+  const out: OverlayPrimaryBandRow[] = [];
+  let lastRth: number | null = null;
+  let lastExt: number | null = null;
+
+  for (let i = 0; i < bridged.length; i++) {
+    const row = bridged[i]!;
+    const price = row[primaryId];
+    const useSessionRef = !windowCtx.marketOpen && i >= splitIdx && sessionRefY != null;
+    const refY = useSessionRef ? sessionRefY! : priorRefY;
+
+    if (price != null && Number.isFinite(price)) {
+      if (
+        !useSessionRef &&
+        lastRth != null &&
+        (lastRth >= priorRefY) !== (price >= priorRefY)
+      ) {
+        out.push(
+          assignOverlayBandStrokes(
+            {
+              ...row,
+              gainFill: priorRefY,
+              lossFill: priorRefY,
+              extGainFill: null,
+              extLossFill: null,
+            },
+            priorRefY,
+            sessionRefY,
+          ),
+        );
+      }
+      if (
+        useSessionRef &&
+        lastExt != null &&
+        (lastExt >= refY) !== (price >= refY)
+      ) {
+        out.push(
+          assignOverlayBandStrokes(
+            {
+              ...row,
+              gainFill: null,
+              lossFill: null,
+              extGainFill: refY,
+              extLossFill: refY,
+            },
+            priorRefY,
+            sessionRefY,
+          ),
+        );
+      } else if (
+        useSessionRef &&
+        lastExt == null &&
+        sessionRefY != null &&
+        lastRth != null &&
+        (lastRth >= sessionRefY) !== (price >= sessionRefY)
+      ) {
+        out.push(
+          assignOverlayBandStrokes(
+            {
+              ...row,
+              gainFill: null,
+              lossFill: null,
+              extGainFill: sessionRefY,
+              extLossFill: sessionRefY,
+            },
+            priorRefY,
+            sessionRefY,
+          ),
+        );
+      }
+    }
+
+    const next: OverlayPrimaryBandRow = { ...row };
+    if (price == null || !Number.isFinite(price)) {
+      next.gainFill = null;
+      next.lossFill = null;
+      next.extGainFill = null;
+      next.extLossFill = null;
+    } else if (!useSessionRef) {
+      const above = price >= priorRefY;
+      next.gainFill = above ? price : null;
+      next.lossFill = above ? null : price;
+      next.extGainFill = null;
+      next.extLossFill = null;
+      if (!windowCtx.marketOpen && sessionRefY != null && i === splitIdx - 1 && splitIdx > 0) {
+        const aboveExt = price >= sessionRefY;
+        next.extGainFill = aboveExt ? price : null;
+        next.extLossFill = aboveExt ? null : price;
+      }
+      lastRth = price;
+    } else {
+      const aboveExt = price >= refY;
+      next.extGainFill = aboveExt ? price : null;
+      next.extLossFill = aboveExt ? null : price;
+      const abovePrior = price >= priorRefY;
+      if (i === splitIdx) {
+        next.gainFill = abovePrior ? price : null;
+        next.lossFill = abovePrior ? null : price;
+      } else {
+        next.gainFill = null;
+        next.lossFill = null;
+      }
+      lastExt = price;
+    }
+    out.push(assignOverlayBandStrokes(next, priorRefY, sessionRefY));
+  }
+
+  return out;
+}
+
 export function glanceChartYDomain(
   data: Array<Record<string, number | null>>,
   lineIds: string[],
+  items?: UsMarketGlanceItem[],
+  windowCtx?: GlanceTileChartWindowCtx,
 ): [number, number] {
-  const vals: number[] = [100];
+  const vals: number[] = [];
   for (const row of data) {
     for (const id of lineIds) {
       const v = row[id];
       if (v != null && Number.isFinite(v)) vals.push(v);
     }
   }
-  if (vals.length === 0) return [99, 101];
-  let min = Math.min(...vals);
-  let max = Math.max(...vals);
-  if (min === max) {
-    const bump = 0.15;
-    min -= bump;
-    max += bump;
-  } else {
-    const pad = Math.max((max - min) * 0.05, 0.02);
-    min -= pad;
-    max += pad;
+  if (vals.length === 0) return [GLANCE_CHART_BASELINE - 0.03, GLANCE_CHART_BASELINE + 0.03];
+
+  const refs: number[] = [GLANCE_CHART_BASELINE];
+  if (items && windowCtx && !windowCtx.marketOpen) {
+    for (const item of items) {
+      const prev = item.previousClose;
+      const close = item.sessionClose;
+      if (prev != null && prev > 0 && close != null && Number.isFinite(close)) {
+        refs.push((close / prev) * GLANCE_CHART_BASELINE);
+      }
+    }
   }
-  return [min, max];
+
+  return yDomainFromChartRange(Math.min(...vals), Math.max(...vals), refs);
 }

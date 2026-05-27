@@ -13,6 +13,7 @@ import {
   pickGlanceAlternateCard,
   type GlanceAlternateInstrumentId,
 } from "@/lib/market/glanceAlternateInstrumentIds";
+import type { GlanceTileChartWindowCtx } from "@/lib/market/glanceTileChartWindow";
 import {
   readGlanceAlternateInstrument,
   readGlanceSourceMode,
@@ -94,9 +95,18 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
     return alternateItem ? [...base, alternateItem] : base;
   }, [alternateItem, sourceMode, usMarkets?.futuresGlanceItems, usMarkets?.items]);
 
+  const tileChartWindowCtx = useMemo(
+    (): GlanceTileChartWindowCtx => ({
+      marketOpen: usMarkets?.session.isOpen ?? false,
+      sessionYmd: usMarkets?.session.sessionYmd,
+    }),
+    [usMarkets?.session.isOpen, usMarkets?.session.sessionYmd],
+  );
+
   const tileChartYDomain = useMemo(
-    () => (displayItems.length > 0 ? sharedSparklineYDomain(displayItems) : undefined),
-    [displayItems],
+    () =>
+      displayItems.length > 0 ? sharedSparklineYDomain(displayItems, tileChartWindowCtx) : undefined,
+    [displayItems, tileChartWindowCtx],
   );
 
   return (
@@ -225,7 +235,7 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
               ))}
             </div>
           ) : (
-            <MarketGlanceCombinedChart items={displayItems} />
+            <MarketGlanceCombinedChart items={displayItems} windowCtx={tileChartWindowCtx} />
           )}
           <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
             {viewMode === "combined"
@@ -234,7 +244,7 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
                 : "Combined view indexes each line to 100 at prior close so portfolio and index day moves are comparable. Extended pre/after-hours segments are included when available."
               : sourceMode === "futures"
                 ? "ES/NQ are CME Globex futures. Nikkei 225 is the Tokyo cash index (not a future). Russell 2000 tracks IWM with US equity session hours. Amber header = that market is closed."
-                : "Portfolio tile uses Schwab liquidation/account values for linked accounts, plus 529 and other external holdings. The 4th tile title opens a menu (Russell 2000, Gold, Bitcoin, WTI Crude, Nikkei 225, FTSE 100). Default is WTI Crude (CL futures, Globex hours). Tile charts share one Y scale indexed to prior close (dashed line)."}
+                : "Portfolio tile uses Schwab liquidation/account values for linked accounts, plus 529 and other external holdings. The 4th tile title opens a menu (Russell 2000, Gold, Bitcoin, WTI Crude, Nikkei 225, FTSE 100). Default is WTI Crude (CL futures, Globex hours). Tile charts zoom to the last RTH hour after the close (from 15:00 ET) or pre-market plus session after the open (from 08:30 ET). When a market is closed the dashed line sits at session close and extended hours are shaded gray."}
           </div>
         </>
       ) : (

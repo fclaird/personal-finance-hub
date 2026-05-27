@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
 
-import { indexedGlanceSeries, indexedGlanceValueToRebasedPct, mergeGlanceSeriesForChart, formatGlanceCombinedChartTime } from "./marketGlanceChart";
+import { indexedGlanceSeries, indexedGlanceValueToRebasedPct, mergeGlanceSeriesForChart, formatGlanceCombinedChartTime, enrichOverlayPrimaryLineBands, extendedOverlayShadeRange, insertOverlaySessionCloseBridge } from "./marketGlanceChart";
 
 function item(
   id: string,
@@ -93,4 +93,43 @@ test("indexedGlanceValueToRebasedPct converts indexed glance values to day chang
   const pct = indexedGlanceValueToRebasedPct(100.42);
   assert.ok(pct != null && Math.abs(pct - 0.42) < 1e-9);
   assert.equal(indexedGlanceValueToRebasedPct(null), null);
+});
+
+test("enrichOverlayPrimaryLineBands fills gain above prior close and loss below", () => {
+  const rows = [
+    { idx: 0, tsMs: 1, RKLB: 99.5 },
+    { idx: 1, tsMs: 2, RKLB: 99.2 },
+  ];
+  const out = enrichOverlayPrimaryLineBands(rows, "RKLB", { marketOpen: true, sessionYmd: "2026-05-22" }, undefined);
+  assert.equal(out[0]!.lossFill, 99.5);
+  assert.equal(out[0]!.gainFill, null);
+  assert.equal(out[1]!.lossFill, 99.2);
+  assert.equal(out[1]!.gainFill, null);
+});
+
+test("extendedOverlayShadeRange shades after-hours when market is closed", () => {
+  const sessionYmd = "2026-05-22";
+  const closeMs = Date.parse("2026-05-22T16:00:00-04:00");
+  const ahMs = Date.parse("2026-05-22T16:30:00-04:00");
+  const rows = [
+    { idx: 0, tsMs: closeMs, sp500: 100 },
+    { idx: 1, tsMs: ahMs, sp500: 100.1 },
+  ];
+  const range = extendedOverlayShadeRange(rows, { marketOpen: false, sessionYmd });
+  assert.deepEqual(range, { fromIdx: 0, toIdx: 1 });
+});
+
+test("insertOverlaySessionCloseBridge adds a 4pm row when after-hours ticks start late", () => {
+  const sessionYmd = "2026-05-22";
+  const rthMs = Date.parse("2026-05-22T15:59:00-04:00");
+  const ahMs = Date.parse("2026-05-22T16:06:00-04:00");
+  const closeMs = Date.parse("2026-05-22T16:00:00-04:00");
+  const rows = [
+    { idx: 0, tsMs: rthMs, RKLB: 100.2 },
+    { idx: 1, tsMs: ahMs, RKLB: 100.1 },
+  ];
+  const bridged = insertOverlaySessionCloseBridge(rows, { marketOpen: false, sessionYmd });
+  assert.equal(bridged.length, 3);
+  assert.equal(bridged[1]!.tsMs, closeMs);
+  assert.equal(bridged[1]!.RKLB, 100.2);
 });

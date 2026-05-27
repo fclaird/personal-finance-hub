@@ -2,12 +2,14 @@ import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceC
 import { formatGlanceSessionLabel, glanceSessionYmd, glanceSessionUsesPriorDay } from "@/lib/market/glanceSession";
 import { fetchCanonicalGlanceGrid } from "@/lib/market/glanceSessionGrid";
 import { normalizeSchwabQuoteSymbol } from "@/lib/market/schwabSymbol";
+import { usEquitySessionStatus } from "@/lib/market/usEquitySession";
 import { buildSymbolGlanceCard } from "@/lib/market/usMarketIndices";
 import {
   formatGlanceCombinedChartTime,
   indexedGlanceValueToRebasedPct,
   mergeGlanceSeriesForChart,
 } from "@/lib/terminal/marketGlanceChart";
+import type { GlanceTileChartWindowCtx } from "@/lib/market/glanceTileChartWindow";
 
 export type SymbolPerformanceIntradayPoint = {
   tsMs: number | null;
@@ -21,11 +23,16 @@ export async function fetchSymbolPerformanceIntraday(
   sessionYmd: string;
   sessionLabel: string;
   showingPriorSession: boolean;
+  marketOpen: boolean;
+  windowCtx: GlanceTileChartWindowCtx;
+  items: UsMarketGlanceItem[];
   points: SymbolPerformanceIntradayPoint[];
 }> {
   const normalized = [...new Set(symbols.map((s) => normalizeSchwabQuoteSymbol(s)).filter(Boolean))];
   const sessionYmd = glanceSessionYmd(now);
   const grid = await fetchCanonicalGlanceGrid(sessionYmd, now);
+  const session = usEquitySessionStatus(now);
+  const windowCtx: GlanceTileChartWindowCtx = { marketOpen: session.isOpen, sessionYmd };
   const cards = await Promise.all(
     normalized.map((symbol) => buildSymbolGlanceCard({ id: symbol, label: symbol, symbol }, now, grid)),
   );
@@ -33,7 +40,7 @@ export async function fetchSymbolPerformanceIntraday(
     ...card,
     id: card.symbol.toUpperCase(),
   }));
-  const merged = mergeGlanceSeriesForChart(items);
+  const merged = mergeGlanceSeriesForChart(items, windowCtx);
   const points: SymbolPerformanceIntradayPoint[] = merged.map((row) => {
     const point: SymbolPerformanceIntradayPoint = {
       tsMs: row.tsMs,
@@ -50,6 +57,9 @@ export async function fetchSymbolPerformanceIntraday(
     sessionYmd,
     sessionLabel: formatGlanceSessionLabel(sessionYmd),
     showingPriorSession: glanceSessionUsesPriorDay(now),
+    marketOpen: session.isOpen,
+    windowCtx,
+    items,
     points,
   };
 }

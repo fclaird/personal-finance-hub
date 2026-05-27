@@ -21,7 +21,11 @@ import type { Row } from "@/app/components/PositionsGroupedTable";
 import { SymbolPositionsTable } from "@/app/components/SymbolPositionsTable";
 
 import { NewsFeedPanel } from "@/app/components/terminal/NewsFeedPanel";
+import { GlanceIntradayOverlayChart } from "@/app/components/terminal/GlanceIntradayOverlayChart";
+import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
 import { SymbolNotesSection } from "./SymbolNotesSection";
+import type { GlanceTileChartWindowCtx } from "@/lib/market/glanceTileChartWindow";
+import type { GlanceChartLine } from "@/lib/terminal/marketGlanceChart";
 import { formatInt, formatNum, formatUsd2 } from "@/lib/format";
 import { formatDisplayDate } from "@/lib/formatDate";
 import { computeSymbolPageExposure } from "@/lib/analytics/symbolPageExposure";
@@ -148,11 +152,12 @@ export default function TerminalSymbolPage() {
   const [company, setCompany] = useState<CompanyPayload | null>(null);
   const [benchSeries, setBenchSeries] = useState<Record<string, Array<{ date: string; close: number }>>>({});
   const [intradayPerf, setIntradayPerf] = useState<{
-    points: Array<{ label: string; tsMs: number | null } & Record<string, number | null>>;
+    items: UsMarketGlanceItem[];
+    windowCtx: GlanceTileChartWindowCtx;
     sessionLabel?: string;
     showingPriorSession?: boolean;
   } | null>(null);
-  const [windowKey, setWindowKey] = useState<WindowKey>("6M");
+  const [windowKey, setWindowKey] = useState<WindowKey>("1D");
   const [nowMs, setNowMs] = useState<number>(0);
   const [positions, setPositions] = useState<Row[]>([]);
   const [about, setAbout] = useState<AboutState | null>(null);
@@ -168,18 +173,20 @@ export default function TerminalSymbolPage() {
     }
     try {
       const resp = await fetch(
-        `/api/terminal/symbol-performance-intraday?symbols=${encodeURIComponent([sym, "SPY", "QQQ"].join(","))}`,
+        `/api/terminal/symbol-performance-intraday?symbols=${encodeURIComponent([sym, "QQQ", "SPY"].join(","))}`,
         { cache: "no-store" },
       );
       const json = (await resp.json()) as {
         ok: boolean;
-        points?: Array<{ label: string; tsMs: number | null } & Record<string, number | null>>;
+        items?: UsMarketGlanceItem[];
+        windowCtx?: GlanceTileChartWindowCtx;
         sessionLabel?: string;
         showingPriorSession?: boolean;
       };
-      if (json.ok) {
+      if (json.ok && json.items && json.windowCtx) {
         setIntradayPerf({
-          points: json.points ?? [],
+          items: json.items,
+          windowCtx: json.windowCtx,
           sessionLabel: json.sessionLabel,
           showingPriorSession: json.showingPriorSession,
         });
@@ -354,19 +361,17 @@ export default function TerminalSymbolPage() {
     return new Date(now - durMs).toISOString().slice(0, 10);
   }, [windowKey, nowMs]);
 
+  const intradayLines = useMemo((): GlanceChartLine[] => {
+    const symKey = sym.toUpperCase();
+    return [
+      { id: symKey, label: sym, color: "#0f766e" },
+      { id: "QQQ", label: "QQQ", color: "#0891b2" },
+      { id: "SPY", label: "SPY", color: "#16a34a" },
+    ];
+  }, [sym]);
+
   const perfData = useMemo(() => {
-    if (windowKey === "1D") {
-      const points = intradayPerf?.points ?? [];
-      if (points.length < 2) return [];
-      return points
-        .map((p) => ({
-          date: p.label,
-          sym: p[sym] ?? null,
-          SPY: p.SPY ?? null,
-          QQQ: p.QQQ ?? null,
-        }))
-        .filter((row): row is { date: string; sym: number; SPY: number | null; QQQ: number | null } => row.sym != null);
-    }
+    if (windowKey === "1D") return [];
 
     const s = benchSeries[sym] ?? [];
     const spy = benchSeries.SPY ?? [];
@@ -417,7 +422,9 @@ export default function TerminalSymbolPage() {
         };
       })
       .filter((x): x is { date: string; sym: number; SPY: number | null; QQQ: number | null } => !!x);
-  }, [benchSeries, intradayPerf, sym, windowKey, windowStartIso]);
+  }, [benchSeries, sym, windowKey, windowStartIso]);
+
+  const intradayReady = (intradayPerf?.items.length ?? 0) >= 2;
 
   const nameForHeader =
     company == null ? null : company.ok ? ((company.companyName ?? "").trim() || sym) : "Company name unavailable";
@@ -550,6 +557,93 @@ export default function TerminalSymbolPage() {
           </div>
         </div>
 
+        <div className="mt-4 min-w-0 rounded-xl border border-zinc-300 bg-white/60 p-4 dark:border-white/20 dark:bg-black/20">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">Performance overlay (% rebased)</div>
+              {windowKey === "1D" && intradayPerf?.sessionLabel ? (
+                <div className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
+                  {intradayPerf.showingPriorSession
+                    ? `Showing ${intradayPerf.sessionLabel}`
+                    : intradayPerf.sessionLabel}{" "}
+                  · intraday session (same window as quick glance tiles)
+                </div>
+              ) : null}
+            </div>
+            <div className="grid grid-cols-8 gap-1">
+              {(["1D", "5D", "1M", "3M", "6M", "1Y", "3Y", "5Y"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setWindowKey(k)}
+                  className={
+                    "h-8 rounded-md px-2 text-xs font-semibold " +
+                    (windowKey === k
+                      ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
+                      : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
+                  }
+                >
+                  {k}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-zinc-600 dark:text-zinc-400">
+            <div className="inline-flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#0f766e" }} />
+              <span className="font-medium text-zinc-700 dark:text-zinc-200">{sym}</span>
+            </div>
+            <div className="inline-flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#0891b2" }} />
+              <span className="font-medium text-zinc-700 dark:text-zinc-200">QQQ</span>
+            </div>
+            <div className="inline-flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#16a34a" }} />
+              <span className="font-medium text-zinc-700 dark:text-zinc-200">SPY</span>
+            </div>
+          </div>
+          {windowKey === "1D" ? (
+            !intradayReady ? (
+              <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Loading intraday session…</div>
+            ) : (
+              <div className="mt-2">
+                <GlanceIntradayOverlayChart
+                  items={intradayPerf!.items}
+                  lines={intradayLines}
+                  windowCtx={intradayPerf!.windowCtx}
+                  primaryLineId={sym.toUpperCase()}
+                />
+              </div>
+            )
+          ) : perfData.length < 2 ? (
+            <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Not enough cached history yet.</div>
+          ) : (
+            <div className="mt-2 h-72 w-full min-w-0">
+              <ResponsiveContainer
+                width="100%"
+                height="100%"
+                minWidth={0}
+                minHeight={288}
+                initialDimension={{ width: 400, height: 288 }}
+              >
+                <LineChart data={perfData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tick={false} />
+                  <YAxis
+                    tickFormatter={(v) =>
+                      `${Number(v).toFixed(windowKey === "1D" ? 1 : 0)}%`
+                    }
+                  />
+                  <Tooltip formatter={(v) => `${Number(v).toFixed(2)}%`} labelFormatter={(l) => String(l)} />
+                  <Line type="monotone" dataKey="sym" name={sym} strokeWidth={2} dot={false} stroke="#0f766e" />
+                  <Line type="monotone" dataKey="QQQ" name="QQQ" strokeWidth={2} dot={false} stroke="#0891b2" />
+                  <Line type="monotone" dataKey="SPY" name="SPY" strokeWidth={2} dot={false} stroke="#16a34a" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+
         <div className="mt-4 rounded-xl border border-zinc-300 bg-white/60 p-4 dark:border-white/20 dark:bg-black/20">
           <NewsFeedPanel
             title="News"
@@ -630,82 +724,6 @@ export default function TerminalSymbolPage() {
         </div>
 
         <SymbolNotesSection symbol={sym} />
-
-        <div className="mt-4 min-w-0 rounded-xl border border-zinc-300 bg-white/60 p-4 dark:border-white/20 dark:bg-black/20">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold">Performance overlay (% rebased)</div>
-              {windowKey === "1D" && intradayPerf?.sessionLabel ? (
-                <div className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
-                  {intradayPerf.showingPriorSession
-                    ? `Showing ${intradayPerf.sessionLabel}`
-                    : intradayPerf.sessionLabel}{" "}
-                  · intraday session (same window as quick glance tiles)
-                </div>
-              ) : null}
-            </div>
-            <div className="grid grid-cols-8 gap-1">
-              {(["1D", "5D", "1M", "3M", "6M", "1Y", "3Y", "5Y"] as const).map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  onClick={() => setWindowKey(k)}
-                  className={
-                    "h-8 rounded-md px-2 text-xs font-semibold " +
-                    (windowKey === k
-                      ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
-                      : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
-                  }
-                >
-                  {k}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-zinc-600 dark:text-zinc-400">
-            <div className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#0f766e" }} />
-              <span className="font-medium text-zinc-700 dark:text-zinc-200">{sym}</span>
-            </div>
-            <div className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#2563eb" }} />
-              <span className="font-medium text-zinc-700 dark:text-zinc-200">SPY</span>
-            </div>
-            <div className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#0891b2" }} />
-              <span className="font-medium text-zinc-700 dark:text-zinc-200">QQQ</span>
-            </div>
-          </div>
-          {perfData.length < 2 ? (
-            <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              {windowKey === "1D" ? "Loading intraday session…" : "Not enough cached history yet."}
-            </div>
-          ) : (
-            <div className="mt-2 h-72 w-full min-w-0">
-              <ResponsiveContainer
-                width="100%"
-                height="100%"
-                minWidth={0}
-                minHeight={288}
-                initialDimension={{ width: 400, height: 288 }}
-              >
-                <LineChart data={perfData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" tick={false} />
-                  <YAxis
-                    tickFormatter={(v) =>
-                      `${Number(v).toFixed(windowKey === "1D" ? 1 : 0)}%`
-                    }
-                  />
-                  <Tooltip formatter={(v) => `${Number(v).toFixed(2)}%`} labelFormatter={(l) => String(l)} />
-                  <Line type="monotone" dataKey="sym" name={sym} strokeWidth={2} dot={false} stroke="#0f766e" />
-                  <Line type="monotone" dataKey="SPY" name="SPY" strokeWidth={2} dot={false} stroke="#2563eb" />
-                  <Line type="monotone" dataKey="QQQ" name="QQQ" strokeWidth={2} dot={false} stroke="#0891b2" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
               </>
             ),
           },

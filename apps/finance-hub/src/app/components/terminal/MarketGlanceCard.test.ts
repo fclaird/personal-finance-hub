@@ -12,7 +12,12 @@ import {
   indexTileChartValue,
   indexValueToDayPct,
   resolvePriorSessionClose,
+  resolveChartReferenceY,
+  resolveChartReferenceBand,
   sharedSparklineYDomain,
+  sparklineYDomainFromChartData,
+  tileExtendedShadeStartX,
+  yDomainFromChartRange,
   yDomainFromIndexedRange,
 } from "@/app/components/terminal/MarketGlanceCard";
 import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
@@ -101,27 +106,29 @@ test("enrichTileChartRowsForBaselineChart splits green above and red below prior
   assert.equal(rows[0]!.lossFill, null);
   const cross = rows.find((r) => r.gainFill === prior && r.lossFill === prior);
   assert.ok(cross, "expected baseline crossing point");
+  assert.equal(cross!.gainStroke, prior);
+  assert.equal(cross!.lossStroke, prior);
   const last = rows[rows.length - 1]!;
   assert.equal(last.gainFill, null);
   assert.equal(last.lossFill, 99);
 });
 
-test("enrichTileChartRowsForBaselineChart colors extended pre-market vs prior close", () => {
+test("enrichTileChartRowsForBaselineChart colors extended after-hours vs session close", () => {
   const prior = 100;
+  const close = 100.16;
   const rows = enrichTileChartRowsForBaselineChart(
     [
-      { idx: 0, regular: 100.16, extended: 100.16, segment: "regular", tsMs: 1 },
+      { idx: 0, regular: close, extended: close, segment: "regular", tsMs: 1 },
       { idx: 1, regular: null, extended: 99.35, segment: "extended", tsMs: 2 },
     ],
     prior,
+    { priorReferenceY: prior, sessionCloseReferenceY: close, splitRowIdx: 0 },
   );
-  assert.equal(rows[0]!.gainFill, 100.16);
+  assert.equal(rows[0]!.gainFill, close);
   assert.equal(rows[0]!.lossFill, null);
-  const cross = rows.find((r) => r.gainFill === prior && r.lossFill === prior);
-  assert.ok(cross, "expected crossing from RTH gain into extended loss");
   const last = rows[rows.length - 1]!;
-  assert.equal(last.gainFill, null);
-  assert.equal(last.lossFill, 99.35);
+  assert.equal(last.extGainFill, null);
+  assert.equal(last.extLossFill, 99.35);
 });
 
 test("buildTileChartRows anchors prior close then connects to first intraday point", () => {
@@ -199,7 +206,7 @@ test("indexTileChartRows anchors prior close at shared baseline", () => {
   assert.equal(rows[rows.length - 1]!.regular, 100.6);
 });
 
-test("sharedSparklineYDomain uses one scale across tiles and pins baseline low on up days", () => {
+test("sharedSparklineYDomain uses one tight scale across US equity tiles only", () => {
   const nasdaq: UsMarketGlanceItem = {
     id: "nasdaq",
     label: "Nasdaq",
@@ -220,24 +227,110 @@ test("sharedSparklineYDomain uses one scale across tiles and pins baseline low o
     previousClose: 500,
     series: [{ idx: 0, close: 508, tsMs: 1 }],
   };
-  const domain = sharedSparklineYDomain([sp500, nasdaq]);
-  assert.ok(domain[1] > 103);
-  const baselineFraction = (GLANCE_CHART_BASELINE - domain[0]!) / (domain[1]! - domain[0]!);
-  assert.ok(baselineFraction < 0.2, "baseline should sit in the lower band of the chart");
-  assert.ok(domain[0]! > GLANCE_CHART_BASELINE - 0.12);
+  const wti: UsMarketGlanceItem = {
+    id: "us-cl",
+    label: "WTI Crude",
+    symbol: "CL=F",
+    last: 91.5,
+    change: -4.5,
+    changePct: -4.7,
+    previousClose: 96,
+    series: [{ idx: 0, close: 91.5, tsMs: 1 }],
+    futuresKind: "cme_equity_index",
+    instrumentKind: "future",
+  };
+  const domain = sharedSparklineYDomain([sp500, nasdaq, wti]);
+  assert.ok(domain);
+  assert.ok(domain![0]! > 100);
+  assert.ok(domain![1] < 104);
+  assert.ok(domain![1] - domain![0]! < 4, "equity shared domain should stay tight");
+});
+
+test("yDomainFromChartRange includes nearby reference lines and minimal padding", () => {
+  const domain = yDomainFromChartRange(100.55, 102.45, [100, 102.5]);
+  assert.ok(domain[0]! <= 100);
+  assert.ok(domain[1]! >= 102.5);
+  assert.ok(domain[1]! - domain[0]! < 3.5);
+});
+
+test("yDomainFromChartRange ignores prior close when it is far off the trimmed window", () => {
+  const domain = yDomainFromChartRange(100.55, 102.45, [100]);
+  assert.ok(domain[0]! > 100.4, "prior close off-window should not flatten the scale");
+});
+
+test("sparklineYDomainFromChartData fits enriched tile rows", () => {
+  const domain = sparklineYDomainFromChartData(
+    [
+      { idx: 0, regular: 100.62, extended: null, segment: "regular", gainFill: 100.62, lossFill: null },
+      { idx: 1, regular: null, extended: 100.58, segment: "extended", extGainFill: null, extLossFill: 100.58 },
+    ],
+    { priorReferenceY: 100, sessionCloseReferenceY: 100.65, splitRowIdx: 0 },
+  );
+  assert.ok(domain[1]! - domain[0]! < 0.2);
 });
 
 test("yDomainFromIndexedRange pins baseline high when all values are below prior close", () => {
   const domain = yDomainFromIndexedRange(98.2, 99.8);
-  const baselineFraction = (GLANCE_CHART_BASELINE - domain[0]!) / (domain[1]! - domain[0]!);
-  assert.ok(baselineFraction > 0.8);
-  assert.equal(domain[0], 98.2);
+  assert.ok(domain[0]! <= 98.2);
+  assert.ok(domain[1]! >= 100);
 });
 
-test("yDomainFromIndexedRange sets mixed extremes on the domain bounds", () => {
-  const domain = yDomainFromIndexedRange(95.56, 102.52);
-  assert.equal(domain[0], 95.56);
-  assert.equal(domain[1], 102.52);
+test("yDomainFromChartRange sets mixed extremes with padding", () => {
+  const domain = yDomainFromChartRange(95.56, 102.52, []);
+  assert.ok(domain[0]! < 95.56);
+  assert.ok(domain[1]! > 102.52);
+});
+
+test("resolveChartReferenceBand keeps prior close through RTH and adds session close after the bell", () => {
+  const item: UsMarketGlanceItem = {
+    id: "sp500",
+    label: "S&P 500",
+    symbol: "SPY",
+    last: 502,
+    change: 2,
+    changePct: 0.4,
+    previousClose: 500,
+    series: [{ idx: 0, close: 501, tsMs: 1 }],
+    extendedSeries: [
+      { idx: 0, close: 501, tsMs: 1 },
+      { idx: 1, close: 502, tsMs: 2 },
+    ],
+    sessionClose: 501,
+    extendedPhase: "post",
+  };
+  const band = resolveChartReferenceBand(item, {
+    showExtendedChart: true,
+    extendedPhase: "post",
+    marketClosed: true,
+    atClose: 501,
+    priorSessionClose: 500,
+    chartBaseline: GLANCE_CHART_BASELINE,
+    sessionCloseRowIdx: 1,
+  });
+  assert.equal(band?.priorReferenceY, GLANCE_CHART_BASELINE);
+  assert.equal(band?.sessionCloseReferenceY, 100.2);
+  assert.equal(band?.splitRowIdx, 1);
+});
+
+test("resolveChartReferenceY stays at prior close while market is open", () => {
+  const item: UsMarketGlanceItem = {
+    id: "sp500",
+    label: "S&P 500",
+    symbol: "SPY",
+    last: 502,
+    change: 2,
+    changePct: 0.4,
+    previousClose: 500,
+    series: [{ idx: 0, close: 502, tsMs: 1 }],
+  };
+  const ref = resolveChartReferenceY(item, {
+    marketClosed: false,
+    showExtendedChart: false,
+    atClose: 502,
+    priorSessionClose: 500,
+    chartBaseline: GLANCE_CHART_BASELINE,
+  });
+  assert.equal(ref, GLANCE_CHART_BASELINE);
 });
 
 test("indexed tile chart starts on baseline and shares prior-close anchor", () => {
@@ -255,4 +348,21 @@ test("indexed tile chart starts on baseline and shares prior-close anchor", () =
   const enriched = enrichTileChartRowsForBaselineChart(rows, GLANCE_CHART_BASELINE);
   assert.equal(enriched[0]!.gainFill, GLANCE_CHART_BASELINE);
   assert.equal(enriched[1]!.gainFill, 100.2);
+});
+
+test("bridgeTileShadingAtSessionClose fills RTH shading into the first after-hours row", () => {
+  const prior = 100;
+  const close = 100.16;
+  const enriched = enrichTileChartRowsForBaselineChart(
+    [
+      { idx: 0, regular: close, extended: close, segment: "regular", tsMs: 1 },
+      { idx: 1, regular: null, extended: 99.35, segment: "extended", tsMs: 2 },
+    ],
+    prior,
+    { priorReferenceY: prior, sessionCloseReferenceY: close, splitRowIdx: 0 },
+  );
+  const firstExt = enriched.find((row) => row.regular == null && row.extended != null);
+  assert.ok(firstExt?.gainFill != null || firstExt?.lossFill != null);
+  const shadeX = tileExtendedShadeStartX(enriched, 0);
+  assert.ok(shadeX > 0 && shadeX < (enriched.at(-1)?.idx ?? 1));
 });

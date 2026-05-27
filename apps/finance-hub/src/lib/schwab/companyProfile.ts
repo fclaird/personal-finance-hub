@@ -173,6 +173,29 @@ function mergeProfiles(
   };
 }
 
+function mergeMissingFundamentals(
+  base: SchwabCompanyPayload,
+  quoteEntry: unknown,
+  sym: string,
+): SchwabCompanyPayload {
+  if (!quoteEntry) return base;
+  const fromQuote = parseSchwabInstrumentFundamental({ [sym]: quoteEntry }, sym);
+  return {
+    symbol: base.symbol,
+    companyName: base.companyName ?? fromQuote.companyName,
+    sector: base.sector ?? fromQuote.sector,
+    industry: base.industry ?? fromQuote.industry,
+    marketCap: base.marketCap ?? fromQuote.marketCap,
+    pe: base.pe ?? fromQuote.pe,
+    divYield: base.divYield ?? fromQuote.divYield,
+    beta: base.beta ?? fromQuote.beta,
+    week52High: base.week52High ?? fromQuote.week52High,
+    week52Low: base.week52Low ?? fromQuote.week52Low,
+    avgVol: base.avgVol ?? fromQuote.avgVol,
+    raw: { ...fromQuote.raw, ...base.raw },
+  };
+}
+
 /**
  * Fresh company profile: Schwab instrument fundamentals + live quote + cached taxonomy (sync one symbol if cap missing).
  */
@@ -191,13 +214,12 @@ export async function fetchEnrichedCompanyProfile(symbol: string): Promise<Enric
 
   let base: SchwabCompanyPayload = fundamentalResult ?? emptyBase(sym);
 
-  if (!fundamentalResult && quoteBundle.entry) {
-    const reParsed = parseSchwabInstrumentFundamental({ [sym]: quoteBundle.entry }, sym);
-    base = { symbol: sym, ...reParsed };
+  if (quoteBundle.entry) {
+    base = mergeMissingFundamentals(base, quoteBundle.entry, sym);
   }
 
   let tax = readTaxonomy(sym);
-  if (tax.marketCap == null && !tax.sector) {
+  if (tax.marketCap == null) {
     await syncTaxonomyFromSchwab([sym]).catch(() => null);
     tax = readTaxonomy(sym);
   }

@@ -40,8 +40,8 @@ export type UsMarketIndexDefinition = {
 };
 
 export const US_MARKET_INDEXES: UsMarketIndexDefinition[] = [
-  { id: "sp500", label: "S&P 500", symbol: "SPY" },
   { id: "nasdaq", label: "Nasdaq", symbol: "QQQ" },
+  { id: "sp500", label: "S&P 500", symbol: "SPY" },
 ];
 
 /** Russell 2000 is shown on the Futures quick-glance tab (IWM). */

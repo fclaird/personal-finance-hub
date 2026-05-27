@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import {
   Area,
   AreaChart,
+  Line,
   ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
@@ -14,6 +15,16 @@ import {
 
 import type { GlanceExtendedPhase } from "@/lib/market/glanceExtendedHours";
 import { extendedPhaseLabel } from "@/lib/market/glanceExtendedHours";
+import {
+  glanceItemForTileChart,
+  glanceShowExtendedChartSegment,
+  GLANCE_RTH_CLOSE_MIN,
+  lastGlanceChartDataTsMs,
+  resolveGlanceExtendedShadeX,
+  resolveGlanceTileChartAxisDomain,
+  type GlanceTileChartWindowCtx,
+} from "@/lib/market/glanceTileChartWindow";
+import { nyWallTimeMs } from "@/lib/market/futuresGlanceSession";
 import { cashIndexSegmentLabel, formatLondonGlancePointTime, formatTokyoGlancePointTime } from "@/lib/market/cashIndexGlanceSession";
 import type { FuturesGlanceKind } from "@/lib/market/futuresGlanceSession";
 import { futuresExtendedPhaseLabel, futuresSegmentLabel } from "@/lib/market/futuresGlanceSession";
@@ -68,6 +79,89 @@ export type MarketGlanceCardProps = {
 /** Prior session close on the indexed tile chart scale (flat day = 100). */
 export const GLANCE_CHART_BASELINE = 100;
 
+export type GlanceChartReferenceBand = {
+  priorReferenceY: number;
+  sessionCloseReferenceY: number | null;
+  splitRowIdx: number | null;
+};
+
+/** Prior close (100) through RTH; session-close level for after-hours once the bell rings. */
+export function resolveChartReferenceBand(
+  item: UsMarketGlanceItem,
+  options: {
+    showExtendedChart: boolean;
+    extendedPhase?: GlanceExtendedPhase | null;
+    marketClosed: boolean;
+    atClose: number | null;
+    priorSessionClose: number | null;
+    chartBaseline: number | null;
+    sessionCloseRowIdx: number;
+  },
+): GlanceChartReferenceBand | null {
+  const {
+    showExtendedChart,
+    extendedPhase,
+    marketClosed,
+    atClose,
+    priorSessionClose,
+    chartBaseline,
+    sessionCloseRowIdx,
+  } = options;
+  if (chartBaseline == null || !Number.isFinite(chartBaseline)) return null;
+
+  const priorReferenceY = chartBaseline;
+  let sessionCloseReferenceY: number | null = null;
+  const useSessionCloseRef =
+    showExtendedChart && (extendedPhase === "post" || (marketClosed && extendedPhase !== "pre"));
+  if (
+    useSessionCloseRef &&
+    atClose != null &&
+    Number.isFinite(atClose) &&
+    priorSessionClose != null &&
+    Number.isFinite(priorSessionClose)
+  ) {
+    sessionCloseReferenceY = indexTileChartValue(atClose, priorSessionClose, isIndexedGlanceChartItem(item));
+  }
+
+  return {
+    priorReferenceY,
+    sessionCloseReferenceY,
+    splitRowIdx:
+      sessionCloseReferenceY != null && Number.isFinite(sessionCloseReferenceY)
+        ? sessionCloseRowIdx
+        : null,
+  };
+}
+
+/** @deprecated Use resolveChartReferenceBand — kept for tests migrating to split reference. */
+export function resolveChartReferenceY(
+  item: UsMarketGlanceItem,
+  options: {
+    marketClosed: boolean;
+    showExtendedChart: boolean;
+    atClose: number | null;
+    priorSessionClose: number | null;
+    chartBaseline: number | null;
+  },
+): number | null {
+  const band = resolveChartReferenceBand(item, {
+    showExtendedChart: options.showExtendedChart,
+    atClose: options.atClose,
+    priorSessionClose: options.priorSessionClose,
+    chartBaseline: options.chartBaseline,
+    sessionCloseRowIdx: 0,
+  });
+  if (!band) return null;
+  if (
+    options.marketClosed &&
+    options.showExtendedChart &&
+    band.sessionCloseReferenceY != null
+  ) {
+    return band.sessionCloseReferenceY;
+  }
+  return band.priorReferenceY;
+}
+
 /** Fixed layout zones so every quick-glance tile aligns in the grid. */
 export const GLANCE_TILE_HEADER_HEIGHT_CLASS = "h-[2rem]";
 export const GLANCE_TILE_CHART_HEIGHT_CLASS = "h-[5.5rem]";
@@ -96,14 +190,29 @@ export type TileChartRow = {
   extended: number | null;
   tsMs?: number;
   segment: "prior" | "regular" | "extended";
-  /** Price path above prior close (green line + fill to baseline). */
+  /** RTH / prior path above prior close (green band to reference). */
   gainFill?: number | null;
-  /** Price path below prior close (red line + fill to baseline). */
+  /** RTH / prior path below prior close (red band to reference). */
   lossFill?: number | null;
+  /** After-hours path above session close (green band to reference). */
+  extGainFill?: number | null;
+  /** After-hours path below session close (red band to reference). */
+  extLossFill?: number | null;
+  /** Price stroke above active RTH reference (no stroke when value sits on the reference). */
+  gainStroke?: number | null;
+  lossStroke?: number | null;
+  extGainStroke?: number | null;
+  extLossStroke?: number | null;
 };
 
 const UP_STROKE = "#22c55e";
 const DOWN_STROKE = "#ef4444";
+
+function priceStrokeFromFill(fill: number | null | undefined, referenceY: number): number | null {
+  if (fill == null || !Number.isFinite(fill)) return null;
+  if (Math.abs(fill - referenceY) <= 1e-9) return null;
+  return fill;
+}
 
 export function isIndexedGlanceChartItem(item: UsMarketGlanceItem): boolean {
   return item.id === "portfolio" || item.valueMode === "percent";
@@ -135,7 +244,7 @@ export function indexTileChartRows(rows: TileChartRow[], item: UsMarketGlanceIte
 function collectIndexedChartValues(rows: TileChartRow[]): number[] {
   const vals: number[] = [];
   for (const row of rows) {
-    for (const v of [row.regular, row.extended, row.gainFill, row.lossFill]) {
+    for (const v of [row.regular, row.extended, row.gainFill, row.lossFill, row.extGainFill, row.extLossFill]) {
       if (v != null && Number.isFinite(v)) vals.push(v);
     }
   }
@@ -143,54 +252,101 @@ function collectIndexedChartValues(rows: TileChartRow[]): number[] {
 }
 
 /**
- * Shared tile Y domain: one scale across tiles. The most extreme data point sits on the
- * relevant top/bottom bound; baseline keeps a sliver of room on the opposite side only.
+ * Tight Y domain for trimmed sparklines: fit visible prices + nearby reference lines,
+ * with a small pad so bands and dashes stay readable.
  */
+export function yDomainFromChartRange(
+  dataMin: number,
+  dataMax: number,
+  referenceYs: number[] = [],
+): [number, number] {
+  let minVal = dataMin;
+  let maxVal = dataMax;
+  if (!Number.isFinite(minVal) || !Number.isFinite(maxVal)) {
+    return [GLANCE_CHART_BASELINE - 0.03, GLANCE_CHART_BASELINE + 0.03];
+  }
+  if (minVal > maxVal) [minVal, maxVal] = [maxVal, minVal];
+
+  const span = Math.max(maxVal - minVal, 0.008);
+  const nearMargin = span * 0.4;
+  for (const ref of referenceYs) {
+    if (ref == null || !Number.isFinite(ref)) continue;
+    if (ref >= minVal - nearMargin && ref <= maxVal + nearMargin) {
+      minVal = Math.min(minVal, ref);
+      maxVal = Math.max(maxVal, ref);
+    }
+  }
+
+  const pad = Math.max((maxVal - minVal) * 0.05, 0.008);
+  return [minVal - pad, maxVal + pad];
+}
+
+/** @deprecated Use yDomainFromChartRange — kept for older tests. */
 export function yDomainFromIndexedRange(dataMin: number, dataMax: number): [number, number] {
-  const baseline = GLANCE_CHART_BASELINE;
-  const minVal = Math.min(dataMin, baseline);
-  const maxVal = Math.max(dataMax, baseline);
-  const above = maxVal - baseline;
-  const below = baseline - minVal;
-  const atBaselineEpsilon = 0.012;
-  /** Small slack so the dashed baseline stays visible when all moves are one-sided. */
-  const baselineSlack = 0.008;
-
-  if (below <= atBaselineEpsilon && above > atBaselineEpsilon) {
-    return [baseline - Math.min(baselineSlack, above * 0.04), maxVal];
-  }
-
-  if (above <= atBaselineEpsilon && below > atBaselineEpsilon) {
-    return [minVal, baseline + Math.min(baselineSlack, below * 0.04)];
-  }
-
-  if (above <= atBaselineEpsilon && below <= atBaselineEpsilon) {
-    const bump = 0.03;
-    return [baseline - bump, baseline + bump];
-  }
-
-  // Mixed up/down — extremes touch top and bottom bounds.
-  return [minVal, maxVal];
+  return yDomainFromChartRange(dataMin, dataMax, [GLANCE_CHART_BASELINE]);
 }
 
-function sparklineYDomainFromRows(rows: TileChartRow[], baseline: number | null): [number, number] {
+function referenceYsFromBand(band: GlanceChartReferenceBand | null): number[] {
+  if (!band) return [GLANCE_CHART_BASELINE];
+  const refs = [band.priorReferenceY];
+  if (band.sessionCloseReferenceY != null && Number.isFinite(band.sessionCloseReferenceY)) {
+    refs.push(band.sessionCloseReferenceY);
+  }
+  return refs;
+}
+
+export function sparklineYDomainFromChartData(
+  rows: TileChartRow[],
+  band: GlanceChartReferenceBand | null,
+): [number, number] {
   const vals = collectIndexedChartValues(rows);
-  if (vals.length === 0 || baseline == null || !Number.isFinite(baseline)) {
-    return yDomainFromIndexedRange(GLANCE_CHART_BASELINE - 0.08, GLANCE_CHART_BASELINE + 0.08);
+  const refs = referenceYsFromBand(band);
+  if (vals.length === 0) {
+    return yDomainFromChartRange(GLANCE_CHART_BASELINE - 0.02, GLANCE_CHART_BASELINE + 0.02, refs);
   }
-  return yDomainFromIndexedRange(Math.min(...vals), Math.max(...vals));
+  return yDomainFromChartRange(Math.min(...vals), Math.max(...vals), refs);
 }
 
-/** Shared Y domain for all quick-glance tiles (prior close always at baseline). */
-export function sharedSparklineYDomain(items: UsMarketGlanceItem[]): [number, number] {
+/** Shared Y domain for US equity quick-glance tiles (portfolio + benchmarks). */
+export function sharedSparklineYDomain(
+  items: UsMarketGlanceItem[],
+  windowCtx?: GlanceTileChartWindowCtx,
+): [number, number] | undefined {
+  const equityItems = items.filter(
+    (item) => item.futuresKind == null && item.instrumentKind !== "cash_index",
+  );
+  if (equityItems.length === 0) return undefined;
+
   const vals: number[] = [];
-  for (const item of items) {
-    vals.push(...collectIndexedChartValues(indexTileChartRows(buildTileChartRows(item), item)));
+  const refs: number[] = [];
+
+  for (const item of equityItems) {
+    const { item: chartItem, omitPriorAnchor } = windowCtx
+      ? glanceItemForTileChart(item, windowCtx)
+      : { item, omitPriorAnchor: false };
+    const rows = indexTileChartRows(
+      buildTileChartRows(chartItem, { omitPriorAnchor }),
+      item,
+    );
+    for (const row of rows) {
+      for (const v of [row.regular, row.extended]) {
+        if (v != null && Number.isFinite(v)) vals.push(v);
+      }
+    }
+    refs.push(GLANCE_CHART_BASELINE);
+    const prior = resolvePriorSessionClose(item);
+    const atClose =
+      chartItem.sessionClose ??
+      rows.filter((r) => r.regular != null).at(-1)?.regular ??
+      null;
+    if (atClose != null && chartItem.extendedPhase === "post") {
+      const y = indexTileChartValue(atClose, prior, isIndexedGlanceChartItem(item));
+      if (y != null) refs.push(y);
+    }
   }
-  if (vals.length === 0) {
-    return yDomainFromIndexedRange(GLANCE_CHART_BASELINE - 0.08, GLANCE_CHART_BASELINE + 0.08);
-  }
-  return yDomainFromIndexedRange(Math.min(...vals), Math.max(...vals));
+
+  if (vals.length === 0) return undefined;
+  return yDomainFromChartRange(Math.min(...vals), Math.max(...vals), refs);
 }
 
 function nearPrice(a: number, b: number): boolean {
@@ -198,66 +354,209 @@ function nearPrice(a: number, b: number): boolean {
   return Math.abs(a - b) / ref < 0.00005;
 }
 
-function pathValueForBaseline(row: TileChartRow): number | null {
-  if (row.regular != null && Number.isFinite(row.regular)) return row.regular;
-  if (row.extended != null && Number.isFinite(row.extended)) return row.extended;
-  return null;
+function usesSessionCloseReference(rowIdx: number, row: TileChartRow, splitRowIdx: number): boolean {
+  if (row.extended == null || row.segment === "prior") return false;
+  return rowIdx >= splitRowIdx;
 }
 
-/** Green/red line and fill split at prior session close (RTH + extended/pre/post). */
+function extendedReferenceY(
+  rowIdx: number,
+  row: TileChartRow,
+  priorReferenceY: number,
+  splitRowIdx: number | null,
+  sessionCloseReferenceY: number | null,
+): number {
+  if (
+    splitRowIdx != null &&
+    sessionCloseReferenceY != null &&
+    usesSessionCloseReference(rowIdx, row, splitRowIdx)
+  ) {
+    return sessionCloseReferenceY;
+  }
+  return priorReferenceY;
+}
+
+/** Green/red bands between price and the active reference (prior close, then session close after the bell). */
 export function enrichTileChartRowsForBaselineChart(
   rows: TileChartRow[],
-  priorSessionClose: number | null,
+  priorReferenceY: number | null,
+  band?: GlanceChartReferenceBand | null,
 ): TileChartRow[] {
-  if (priorSessionClose == null || !Number.isFinite(priorSessionClose)) {
+  if (priorReferenceY == null || !Number.isFinite(priorReferenceY)) {
     return rows;
   }
 
+  const splitRowIdx = band?.splitRowIdx ?? null;
+  const sessionCloseReferenceY = band?.sessionCloseReferenceY ?? null;
+
   const out: TileChartRow[] = [];
-  let lastPath: number | null = null;
+  let lastRegular: number | null = null;
+  let lastExtended: number | null = null;
 
-  for (const row of rows) {
-    const r = pathValueForBaseline(row);
-    if (r == null || !Number.isFinite(r)) {
-      out.push({ ...row, gainFill: null, lossFill: null });
-      lastPath = null;
-      continue;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    const regular = row.regular;
+    const extended = row.extended;
+    const extRefY = extendedReferenceY(i, row, priorReferenceY, splitRowIdx, sessionCloseReferenceY);
+
+    if (regular != null && Number.isFinite(regular)) {
+      if (
+        lastRegular != null &&
+        (lastRegular >= priorReferenceY) !== (regular >= priorReferenceY)
+      ) {
+        out.push({
+          idx: out.length,
+          regular: null,
+          extended: null,
+          gainFill: priorReferenceY,
+          lossFill: priorReferenceY,
+          gainStroke: priorReferenceY,
+          lossStroke: priorReferenceY,
+          segment: row.segment,
+          tsMs: row.tsMs,
+        });
+      }
     }
 
-    if (
-      lastPath != null &&
-      Number.isFinite(lastPath) &&
-      (lastPath - priorSessionClose) * (r - priorSessionClose) < 0
-    ) {
-      out.push({
-        idx: out.length,
-        regular: null,
-        extended: null,
-        gainFill: priorSessionClose,
-        lossFill: priorSessionClose,
-        segment: row.segment,
-        tsMs: row.tsMs,
-      });
+    if (extended != null && Number.isFinite(extended)) {
+      if (
+        lastExtended != null &&
+        (lastExtended >= extRefY) !== (extended >= extRefY)
+      ) {
+        out.push({
+          idx: out.length,
+          regular: null,
+          extended: null,
+          extGainFill: extRefY,
+          extLossFill: extRefY,
+          extGainStroke: extRefY,
+          extLossStroke: extRefY,
+          segment: row.segment,
+          tsMs: row.tsMs,
+        });
+      }
     }
 
-    const above = r >= priorSessionClose;
+    const aboveRegular = regular != null && Number.isFinite(regular) && regular >= priorReferenceY;
+    const aboveExtended = extended != null && Number.isFinite(extended) && extended >= extRefY;
+
+    const gainFill = regular != null && Number.isFinite(regular) ? (aboveRegular ? regular : null) : null;
+    const lossFill = regular != null && Number.isFinite(regular) ? (aboveRegular ? null : regular) : null;
+    const extGainFill =
+      extended != null && Number.isFinite(extended) ? (aboveExtended ? extended : null) : null;
+    const extLossFill =
+      extended != null && Number.isFinite(extended) ? (aboveExtended ? null : extended) : null;
+
     out.push({
       ...row,
-      gainFill: above ? r : null,
-      lossFill: above ? null : r,
+      gainFill,
+      lossFill,
+      extGainFill,
+      extLossFill,
+      gainStroke: priceStrokeFromFill(gainFill, priorReferenceY),
+      lossStroke: priceStrokeFromFill(lossFill, priorReferenceY),
+      extGainStroke: extGainFill,
+      extLossStroke: extLossFill,
     });
-    lastPath = r;
+
+    if (regular != null && Number.isFinite(regular)) lastRegular = regular;
+    if (extended != null && Number.isFinite(extended)) lastExtended = extended;
+  }
+
+  return bridgeTileShadingAtSessionClose(reindexTileChartRows(out), priorReferenceY);
+}
+
+export function resolveTileExtendedHandoff(
+  rows: TileChartRow[],
+): { lastRegularIdx: number; firstExtendedOnlyIdx: number } | null {
+  let lastRegularIdx = -1;
+  let firstExtendedOnlyIdx = -1;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    if (row.regular != null && Number.isFinite(row.regular)) lastRegularIdx = i;
+    if (
+      firstExtendedOnlyIdx < 0 &&
+      row.extended != null &&
+      Number.isFinite(row.extended) &&
+      row.regular == null &&
+      row.segment !== "prior"
+    ) {
+      firstExtendedOnlyIdx = i;
+    }
+  }
+  if (lastRegularIdx < 0 || firstExtendedOnlyIdx < 0 || firstExtendedOnlyIdx <= lastRegularIdx) {
+    return null;
+  }
+  return { lastRegularIdx, firstExtendedOnlyIdx };
+}
+
+/** Carry RTH fill and gray-zone fills across the session-close handoff so nothing gaps. */
+export function bridgeTileShadingAtSessionClose(
+  rows: TileChartRow[],
+  priorReferenceY: number,
+): TileChartRow[] {
+  const handoff = resolveTileExtendedHandoff(rows);
+  if (!handoff) return rows;
+
+  const { lastRegularIdx, firstExtendedOnlyIdx } = handoff;
+  const closePrice = rows[lastRegularIdx]!.regular;
+  if (closePrice == null || !Number.isFinite(closePrice)) return rows;
+
+  const above = closePrice >= priorReferenceY;
+  const bridgeGain = above ? closePrice : null;
+  const bridgeLoss = above ? null : closePrice;
+
+  const out = rows.map((row) => ({ ...row }));
+
+  for (let i = lastRegularIdx + 1; i < firstExtendedOnlyIdx; i++) {
+    const row = out[i]!;
+    if (row.gainFill == null && row.lossFill == null) {
+      row.gainFill = bridgeGain;
+      row.lossFill = bridgeLoss;
+      row.gainStroke = row.gainStroke ?? priceStrokeFromFill(bridgeGain, priorReferenceY);
+      row.lossStroke = row.lossStroke ?? priceStrokeFromFill(bridgeLoss, priorReferenceY);
+    }
+  }
+
+  const firstExt = out[firstExtendedOnlyIdx]!;
+  if (firstExt.gainFill == null && firstExt.lossFill == null) {
+    firstExt.gainFill = bridgeGain;
+    firstExt.lossFill = bridgeLoss;
+    firstExt.gainStroke = firstExt.gainStroke ?? priceStrokeFromFill(bridgeGain, priorReferenceY);
+    firstExt.lossStroke = firstExt.lossStroke ?? priceStrokeFromFill(bridgeLoss, priorReferenceY);
   }
 
   return reindexTileChartRows(out);
 }
 
+export function tileExtendedShadeStartX(rows: TileChartRow[], shadeFromIdx: number): number {
+  const handoff = resolveTileExtendedHandoff(rows);
+  if (handoff) {
+    const leftRow = rows[handoff.lastRegularIdx];
+    const rightRow = rows[handoff.firstExtendedOnlyIdx];
+    const leftTs = leftRow?.tsMs;
+    const rightTs = rightRow?.tsMs;
+    if (leftTs != null && rightTs != null && Number.isFinite(leftTs) && Number.isFinite(rightTs)) {
+      return (leftTs + rightTs) / 2;
+    }
+    const left = leftRow?.idx ?? handoff.lastRegularIdx;
+    const right = rightRow?.idx ?? handoff.firstExtendedOnlyIdx;
+    return (left + right) / 2;
+  }
+  const row = rows[shadeFromIdx];
+  if (row?.tsMs != null && Number.isFinite(row.tsMs)) return row.tsMs;
+  return row?.idx ?? shadeFromIdx;
+}
+
 /** RTH path in regular column; pre/post in extended (gray). Prior close anchors the left. */
-export function buildTileChartRows(item: UsMarketGlanceItem): TileChartRow[] {
+export function buildTileChartRows(
+  item: UsMarketGlanceItem,
+  options?: { omitPriorAnchor?: boolean },
+): TileChartRow[] {
   const prev = item.previousClose;
   const rows: TileChartRow[] = [];
 
-  if (prev != null && Number.isFinite(prev)) {
+  if (prev != null && Number.isFinite(prev) && !options?.omitPriorAnchor) {
     rows.push({ idx: 0, regular: prev, extended: null, segment: "prior" });
   }
 
@@ -453,6 +752,7 @@ function GlanceChartTooltip({
 export function MarketGlanceCard({
   item,
   marketOpen = true,
+  sessionYmd,
   chartYDomain,
   className,
   alternateTitleSelector,
@@ -461,12 +761,25 @@ export function MarketGlanceCard({
   const up = pct == null ? true : pct >= 0;
   const gradGainId = `usmk-${item.id}-gain`;
   const gradLossId = `usmk-${item.id}-loss`;
+  const gradExtGainId = `usmk-${item.id}-ext-gain`;
+  const gradExtLossId = `usmk-${item.id}-ext-loss`;
   const percentMode = isPercentGlanceItem(item);
   const sessionOpen =
     item.instrumentKind === "cash_index" || item.futuresKind != null
       ? (item.tradableOpen ?? false)
       : marketOpen;
-  const chartData = useMemo(() => buildTileChartRows(item), [item]);
+  const chartWindowCtx = useMemo(
+    (): GlanceTileChartWindowCtx => ({ marketOpen: sessionOpen, sessionYmd }),
+    [sessionOpen, sessionYmd],
+  );
+  const { item: chartItem, omitPriorAnchor } = useMemo(
+    () => glanceItemForTileChart(item, chartWindowCtx),
+    [item, chartWindowCtx],
+  );
+  const chartData = useMemo(
+    () => buildTileChartRows(chartItem, { omitPriorAnchor }),
+    [chartItem, omitPriorAnchor],
+  );
   const priorSessionClose = useMemo(() => resolvePriorSessionClose(item), [item]);
   const chartBaseline =
     priorSessionClose != null && Number.isFinite(priorSessionClose) ? GLANCE_CHART_BASELINE : null;
@@ -475,28 +788,86 @@ export function MarketGlanceCard({
     () => (chartUsesIndexedScale ? indexTileChartRows(chartData, item) : chartData),
     [chartData, chartUsesIndexedScale, item],
   );
-  const baselineChartData = useMemo(
-    () => enrichTileChartRowsForBaselineChart(indexedChartData, chartBaseline),
-    [indexedChartData, chartBaseline],
-  );
-  const yDomain = chartYDomain ?? sparklineYDomainFromRows(indexedChartData, chartBaseline);
-  const hasExtended = (item.extendedSeries?.length ?? 0) >= 2;
-  const showExtendedChart =
-    hasExtended &&
-    !(
-      sessionOpen &&
-      item.futuresKind == null &&
-      item.instrumentKind !== "cash_index"
-    );
+  const hasExtended = (chartItem.extendedSeries?.length ?? 0) >= 2;
+  const showExtendedChart = glanceShowExtendedChartSegment(chartItem, {
+    sessionOpen,
+    sessionYmd,
+  });
   const marketClosed = !sessionOpen;
-  const lastIdx = baselineChartData.length - 1;
   const rthEndIdx = useMemo(() => {
-    for (let i = baselineChartData.length - 1; i >= 0; i--) {
+    for (let i = chartData.length - 1; i >= 0; i--) {
+      const row = chartData[i]!;
+      if (row.regular != null || row.extended != null) return i;
+    }
+    return 0;
+  }, [chartData]);
+  const atClose =
+    item.sessionClose ??
+    (chartData[rthEndIdx]?.regular != null
+      ? chartData[rthEndIdx]!.regular
+      : chartData[rthEndIdx]?.extended ?? null);
+  const sessionCloseChartIdx = useMemo(() => {
+    for (let i = 0; i < indexedChartData.length; i++) {
+      const row = indexedChartData[i]!;
+      if (row.extended != null && row.regular == null && i > 0) return i - 1;
+    }
+    for (let i = indexedChartData.length - 1; i >= 0; i--) {
+      if (indexedChartData[i]!.regular != null) return i;
+    }
+    return 0;
+  }, [indexedChartData]);
+  const referenceBand = useMemo(
+    () =>
+      resolveChartReferenceBand(item, {
+        showExtendedChart,
+        extendedPhase: item.extendedPhase,
+        marketClosed,
+        atClose,
+        priorSessionClose,
+        chartBaseline,
+        sessionCloseRowIdx: sessionCloseChartIdx,
+      }),
+    [
+      item,
+      showExtendedChart,
+      marketClosed,
+      atClose,
+      priorSessionClose,
+      chartBaseline,
+      sessionCloseChartIdx,
+    ],
+  );
+  const baselineChartData = useMemo(
+    () => enrichTileChartRowsForBaselineChart(indexedChartData, chartBaseline, referenceBand),
+    [indexedChartData, chartBaseline, referenceBand],
+  );
+  const enrichedSessionCloseIdx = useMemo(() => {
+    for (let i = 0; i < baselineChartData.length; i++) {
       const row = baselineChartData[i]!;
-      if (row.gainFill != null || row.lossFill != null || row.regular != null) return i;
+      if (row.extended != null && row.regular == null && i > 0) return i - 1;
+    }
+    for (let i = baselineChartData.length - 1; i >= 0; i--) {
+      if (baselineChartData[i]!.regular != null) return i;
     }
     return 0;
   }, [baselineChartData]);
+  const useSharedEquityDomain = item.futuresKind == null && item.instrumentKind !== "cash_index";
+  const chartAxisDomain = useMemo(() => {
+    if (!useSharedEquityDomain) return null;
+    const lastTs = lastGlanceChartDataTsMs(baselineChartData);
+    return resolveGlanceTileChartAxisDomain(chartWindowCtx, item, lastTs);
+  }, [useSharedEquityDomain, chartWindowCtx, item, baselineChartData]);
+  const useFixedTimeAxis = useMemo(
+    () =>
+      chartAxisDomain != null &&
+      baselineChartData.some((row) => row.tsMs != null && Number.isFinite(row.tsMs)),
+    [chartAxisDomain, baselineChartData],
+  );
+  const yDomain = useMemo(() => {
+    if (useSharedEquityDomain && chartYDomain) return chartYDomain;
+    return sparklineYDomainFromChartData(baselineChartData, referenceBand);
+  }, [useSharedEquityDomain, chartYDomain, baselineChartData, referenceBand]);
+  const lastIdx = baselineChartData.length - 1;
   const extendedShade = useMemo(() => {
     if (!showExtendedChart) return null;
     let first = -1;
@@ -510,28 +881,70 @@ export function MarketGlanceCard({
     if (first < 0 || last < 0) return null;
     return { first, last };
   }, [baselineChartData, showExtendedChart]);
-  const shadeFromIdx = extendedShade?.first ?? rthEndIdx;
+  const shadeFromIdx =
+    marketClosed && showExtendedChart
+      ? enrichedSessionCloseIdx
+      : (extendedShade?.first ?? enrichedSessionCloseIdx);
   const shadeToIdx = extendedShade?.last ?? lastIdx;
-  const atClose =
-    item.sessionClose ??
-    (chartData[rthEndIdx]?.regular != null
-      ? chartData[rthEndIdx]!.regular
-      : chartData[rthEndIdx]?.extended ?? null);
+  const shadeBounds = useMemo(() => {
+    if (!showExtendedChart || !useFixedTimeAxis || !chartAxisDomain) return null;
+    const lastTs = baselineChartData[lastIdx]?.tsMs ?? null;
+    return resolveGlanceExtendedShadeX(chartWindowCtx, chartAxisDomain, lastTs);
+  }, [showExtendedChart, useFixedTimeAxis, chartAxisDomain, chartWindowCtx, baselineChartData, lastIdx]);
+  const shadeAreaX1 = shadeBounds?.fromMs ?? tileExtendedShadeStartX(baselineChartData, shadeFromIdx);
+  const shadeAreaX2 =
+    shadeBounds?.toMs ?? baselineChartData[shadeToIdx]?.tsMs ?? baselineChartData[shadeToIdx]?.idx ?? shadeToIdx;
   const atClosePct = indexValueToDayPct(
     chartUsesIndexedScale ? indexTileChartValue(atClose, priorSessionClose, isIndexedGlanceChartItem(item)) : atClose,
   );
   const extendedPct = item.extendedChangePct ?? indexValueToDayPct(item.extendedLast);
+  const indexedFooter = chartUsesIndexedScale;
+  const showExtendedFooterCols = showExtendedChart;
+
+  const priorReferenceY = referenceBand?.priorReferenceY ?? chartBaseline;
+  const sessionCloseReferenceY = referenceBand?.sessionCloseReferenceY ?? null;
+  const firstChartIdx = baselineChartData[0]?.idx ?? 0;
+  const closeChartIdx = baselineChartData[enrichedSessionCloseIdx]?.idx ?? enrichedSessionCloseIdx;
+  const lastChartIdx = baselineChartData[lastIdx]?.idx ?? lastIdx;
+  const sessionCloseBoundaryMs =
+    marketClosed && sessionYmd ? nyWallTimeMs(sessionYmd, GLANCE_RTH_CLOSE_MIN) : null;
+  const firstChartX = useFixedTimeAxis ? chartAxisDomain!.startMs : firstChartIdx;
+  const lastChartX = useFixedTimeAxis
+    ? (baselineChartData[lastIdx]?.tsMs ?? chartAxisDomain!.endMs)
+    : lastChartIdx;
+  const closeChartX = useFixedTimeAxis
+    ? (baselineChartData[enrichedSessionCloseIdx]?.tsMs ?? sessionCloseBoundaryMs ?? closeChartIdx)
+    : closeChartIdx;
+  const priorRefEndX =
+    sessionCloseReferenceY != null && showExtendedChart ? closeChartX : lastChartX;
 
   const renderLastDot = (
-    series: "gainFill" | "lossFill",
+    series: "gainStroke" | "lossStroke" | "extGainStroke" | "extLossStroke",
     props: { index?: number; cx?: number; cy?: number; payload?: TileChartRow },
   ) => {
     const { index, cx, cy, payload } = props;
     if (cx == null || cy == null || payload == null) return null;
     if (index !== lastIdx) return null;
-    const value = series === "gainFill" ? payload.gainFill : payload.lossFill;
+    const lastRow = baselineChartData[lastIdx];
+    const useExtended =
+      lastRow != null &&
+      (lastRow.extGainStroke != null || lastRow.extLossStroke != null) &&
+      (series === "extGainStroke" || series === "extLossStroke");
+    const useRegular =
+      lastRow != null &&
+      (lastRow.gainStroke != null || lastRow.lossStroke != null) &&
+      (series === "gainStroke" || series === "lossStroke");
+    if (!useExtended && !useRegular) return null;
+    const value =
+      series === "gainStroke"
+        ? payload.gainStroke
+        : series === "lossStroke"
+          ? payload.lossStroke
+          : series === "extGainStroke"
+            ? payload.extGainStroke
+            : payload.extLossStroke;
     if (value == null || !Number.isFinite(value)) return null;
-    const dotFill = series === "gainFill" ? UP_STROKE : DOWN_STROKE;
+    const dotFill = series === "gainStroke" || series === "extGainStroke" ? UP_STROKE : DOWN_STROKE;
     return (
       <circle cx={cx} cy={cy} r={3.5} fill={dotFill} stroke="#fff" strokeWidth={1.5} className="dark:stroke-zinc-900" />
     );
@@ -600,7 +1013,17 @@ export function MarketGlanceCard({
           <div className="h-full w-full min-w-0">
             <ResponsiveContainer width="100%" height="100%" minWidth={64} minHeight={72}>
               <AreaChart data={baselineChartData} margin={CHART_MARGIN}>
-                <XAxis dataKey="idx" hide type="number" domain={["dataMin", "dataMax"]} />
+                {useFixedTimeAxis ? (
+                  <XAxis
+                    dataKey="tsMs"
+                    hide
+                    type="number"
+                    domain={[chartAxisDomain!.startMs, chartAxisDomain!.endMs]}
+                    allowDataOverflow
+                  />
+                ) : (
+                  <XAxis dataKey="idx" hide type="number" domain={["dataMin", "dataMax"]} />
+                )}
                 <YAxis hide domain={yDomain} />
                 <Tooltip
                   content={
@@ -615,26 +1038,52 @@ export function MarketGlanceCard({
                 />
                 <defs>
                   <linearGradient id={gradGainId} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={UP_STROKE} stopOpacity={0.35} />
-                    <stop offset="100%" stopColor={UP_STROKE} stopOpacity={0.03} />
+                    <stop offset="0%" stopColor={UP_STROKE} stopOpacity={0.88} />
+                    <stop offset="100%" stopColor={UP_STROKE} stopOpacity={0.42} />
                   </linearGradient>
                   <linearGradient id={gradLossId} x1="0" y1="1" x2="0" y2="0">
-                    <stop offset="0%" stopColor={DOWN_STROKE} stopOpacity={0.35} />
-                    <stop offset="100%" stopColor={DOWN_STROKE} stopOpacity={0.03} />
+                    <stop offset="0%" stopColor={DOWN_STROKE} stopOpacity={0.88} />
+                    <stop offset="100%" stopColor={DOWN_STROKE} stopOpacity={0.42} />
+                  </linearGradient>
+                  <linearGradient id={gradExtGainId} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={UP_STROKE} stopOpacity={0.88} />
+                    <stop offset="100%" stopColor={UP_STROKE} stopOpacity={0.42} />
+                  </linearGradient>
+                  <linearGradient id={gradExtLossId} x1="0" y1="1" x2="0" y2="0">
+                    <stop offset="0%" stopColor={DOWN_STROKE} stopOpacity={0.88} />
+                    <stop offset="100%" stopColor={DOWN_STROKE} stopOpacity={0.42} />
                   </linearGradient>
                 </defs>
-                {chartBaseline != null && Number.isFinite(chartBaseline) ? (
+                {priorReferenceY != null && Number.isFinite(priorReferenceY) ? (
                   <ReferenceLine
-                    y={chartBaseline}
+                    segment={[
+                      { x: firstChartX, y: priorReferenceY },
+                      { x: priorRefEndX, y: priorReferenceY },
+                    ]}
                     stroke={REF_LINE}
                     strokeDasharray="4 4"
                     strokeOpacity={0.75}
+                    ifOverflow="extendDomain"
+                  />
+                ) : null}
+                {sessionCloseReferenceY != null &&
+                Number.isFinite(sessionCloseReferenceY) &&
+                showExtendedChart ? (
+                  <ReferenceLine
+                    segment={[
+                      { x: closeChartX, y: sessionCloseReferenceY },
+                      { x: lastChartX, y: sessionCloseReferenceY },
+                    ]}
+                    stroke={REF_LINE}
+                    strokeDasharray="4 4"
+                    strokeOpacity={0.75}
+                    ifOverflow="extendDomain"
                   />
                 ) : null}
                 {showExtendedChart ? (
                   <ReferenceArea
-                    x1={baselineChartData[shadeFromIdx]?.idx ?? shadeFromIdx}
-                    x2={baselineChartData[shadeToIdx]?.idx ?? shadeToIdx}
+                    x1={shadeAreaX1}
+                    x2={shadeAreaX2}
                     fill="#94a3b8"
                     fillOpacity={0.22}
                     ifOverflow="extendDomain"
@@ -645,25 +1094,95 @@ export function MarketGlanceCard({
                     <Area
                       type="linear"
                       dataKey="gainFill"
-                      baseValue={chartBaseline}
-                      stroke={UP_STROKE}
+                      baseValue={priorReferenceY ?? chartBaseline}
+                      stroke="none"
                       fill={`url(#${gradGainId})`}
-                      strokeWidth={2}
-                      dot={(props) => renderLastDot("gainFill", props)}
+                      strokeWidth={0}
                       isAnimationActive={false}
                       connectNulls
+                      legendType="none"
                     />
                     <Area
                       type="linear"
                       dataKey="lossFill"
-                      baseValue={chartBaseline}
-                      stroke={DOWN_STROKE}
+                      baseValue={priorReferenceY ?? chartBaseline}
+                      stroke="none"
                       fill={`url(#${gradLossId})`}
-                      strokeWidth={2}
-                      dot={(props) => renderLastDot("lossFill", props)}
+                      strokeWidth={0}
                       isAnimationActive={false}
                       connectNulls
+                      legendType="none"
                     />
+                    <Line
+                      type="linear"
+                      dataKey="gainStroke"
+                      stroke={UP_STROKE}
+                      strokeWidth={2}
+                      dot={(props) => renderLastDot("gainStroke", props)}
+                      fill="none"
+                      isAnimationActive={false}
+                      connectNulls={false}
+                      legendType="none"
+                    />
+                    <Line
+                      type="linear"
+                      dataKey="lossStroke"
+                      stroke={DOWN_STROKE}
+                      strokeWidth={2}
+                      dot={(props) => renderLastDot("lossStroke", props)}
+                      fill="none"
+                      isAnimationActive={false}
+                      connectNulls={false}
+                      legendType="none"
+                    />
+                    {sessionCloseReferenceY != null && showExtendedChart ? (
+                      <>
+                        <Area
+                          type="linear"
+                          dataKey="extGainFill"
+                          baseValue={sessionCloseReferenceY}
+                          stroke="none"
+                          fill={`url(#${gradExtGainId})`}
+                          strokeWidth={0}
+                          isAnimationActive={false}
+                          connectNulls
+                          legendType="none"
+                        />
+                        <Area
+                          type="linear"
+                          dataKey="extLossFill"
+                          baseValue={sessionCloseReferenceY}
+                          stroke="none"
+                          fill={`url(#${gradExtLossId})`}
+                          strokeWidth={0}
+                          isAnimationActive={false}
+                          connectNulls
+                          legendType="none"
+                        />
+                        <Line
+                          type="linear"
+                          dataKey="extGainStroke"
+                          stroke={UP_STROKE}
+                          strokeWidth={2}
+                          dot={(props) => renderLastDot("extGainStroke", props)}
+                          fill="none"
+                          isAnimationActive={false}
+                          connectNulls={false}
+                          legendType="none"
+                        />
+                        <Line
+                          type="linear"
+                          dataKey="extLossStroke"
+                          stroke={DOWN_STROKE}
+                          strokeWidth={2}
+                          dot={(props) => renderLastDot("extLossStroke", props)}
+                          fill="none"
+                          isAnimationActive={false}
+                          connectNulls={false}
+                          legendType="none"
+                        />
+                      </>
+                    ) : null}
                   </>
                 ) : (
                   <Area
@@ -688,37 +1207,49 @@ export function MarketGlanceCard({
         <div
           className={
             "mt-2 grid gap-2 border-t border-zinc-200/80 pt-2 dark:border-white/10 " +
-            (percentMode
-              ? showExtendedChart
+            (indexedFooter
+              ? showExtendedFooterCols
                 ? "grid-cols-2 sm:grid-cols-4"
-                : "grid-cols-2"
+                : percentMode
+                  ? "grid-cols-2"
+                  : "grid-cols-2 sm:grid-cols-4"
               : hasExtended
                 ? "grid-cols-2 sm:grid-cols-4"
                 : "grid-cols-3")
           }
         >
-          {percentMode ? (
+          {indexedFooter ? (
             <>
               <div>
                 <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Day start</div>
                 <div className="text-xs font-medium tabular-nums text-zinc-800 dark:text-zinc-100">0.00%</div>
               </div>
-              {showExtendedChart ? (
+              {showExtendedFooterCols ? (
                 <div>
                   <div className="text-[10px] text-zinc-500 dark:text-zinc-400">At close</div>
                   <div className={"text-xs font-medium tabular-nums " + posNegClass(atClosePct)}>
                     {formatGlanceDayPct(atClosePct)}
                   </div>
                 </div>
-              ) : null}
-              {showExtendedChart ? (
+              ) : (
+                <div>
+                  <div className="text-[10px] text-zinc-500 dark:text-zinc-400">At close</div>
+                  <div className="text-xs font-medium tabular-nums text-zinc-500 dark:text-zinc-400">—</div>
+                </div>
+              )}
+              {showExtendedFooterCols ? (
                 <div>
                   <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Extended</div>
                   <div className={"text-xs font-medium tabular-nums " + posNegClass(extendedPct)}>
                     {formatGlanceDayPct(extendedPct)}
                   </div>
                 </div>
-              ) : null}
+              ) : (
+                <div>
+                  <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Extended</div>
+                  <div className="text-xs font-medium tabular-nums text-zinc-500 dark:text-zinc-400">—</div>
+                </div>
+              )}
               <div>
                 <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Day</div>
                 <div className={"text-xs font-medium tabular-nums " + posNegClass(pct)}>
