@@ -12,6 +12,7 @@ export function DraggableColumnHeader<T extends string>({
   className,
   scope = "col",
   "aria-sort": ariaSort,
+  title = "Drag column header to reorder",
   children,
 }: {
   colId: T;
@@ -20,6 +21,7 @@ export function DraggableColumnHeader<T extends string>({
   className?: string;
   scope?: ThHTMLAttributes<HTMLTableHeaderCellElement>["scope"];
   "aria-sort"?: ThHTMLAttributes<HTMLTableHeaderCellElement>["aria-sort"];
+  title?: string;
   children: ReactNode;
 }) {
   return (
@@ -44,7 +46,7 @@ export function DraggableColumnHeader<T extends string>({
         if (from >= 0 && to >= 0) moveColumn(from, to);
       }}
       className={className}
-      title="Drag column header to reorder"
+      title={title}
     >
       {children}
     </th>
