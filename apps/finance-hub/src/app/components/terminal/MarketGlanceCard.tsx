@@ -164,6 +164,7 @@ export function resolveChartReferenceY(
 ): number | null {
   const band = resolveChartReferenceBand(item, {
     showExtendedChart: options.showExtendedChart,
+    marketClosed: options.marketClosed,
     atClose: options.atClose,
     priorSessionClose: options.priorSessionClose,
     chartBaseline: options.chartBaseline,

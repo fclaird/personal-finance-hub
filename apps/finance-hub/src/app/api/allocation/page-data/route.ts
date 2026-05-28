@@ -30,24 +30,10 @@ export async function GET(req: Request) {
     let syntheticEquityMv = 0;
 
     if (includeAllocation) {
-      const allocation = includeSynthetic
-        ? {
-            ...getConsolidatedAllocation(false, mode),
-            syntheticEquityMv: exposure.reduce((sum, e) => sum + e.syntheticMarketValue, 0),
-          }
-        : { ...getConsolidatedAllocation(false, mode), syntheticEquityMv: 0 };
-      if (includeSynthetic) {
-        const byEquity = allocation.byAssetClass.find((b) => b.key === "equity");
-        if (byEquity) byEquity.marketValue += allocation.syntheticEquityMv;
-        else allocation.byAssetClass.push({ key: "equity", marketValue: allocation.syntheticEquityMv, weight: 0 });
-        allocation.totalMarketValue = allocation.byAssetClass.reduce((sum, b) => sum + b.marketValue, 0);
-        allocation.byAssetClass = allocation.byAssetClass
-          .map((b) => ({ ...b, weight: allocation.totalMarketValue ? b.marketValue / allocation.totalMarketValue : 0 }))
-          .sort((a, b) => b.marketValue - a.marketValue);
-      }
+      const allocation = getConsolidatedAllocation(includeSynthetic, mode, equityMarks);
       byAssetClass = allocation.byAssetClass;
       totalMarketValue = allocation.totalMarketValue;
-      syntheticEquityMv = allocation.syntheticEquityMv;
+      syntheticEquityMv = includeSynthetic ? exposure.reduce((sum, e) => sum + e.syntheticMarketValue, 0) : 0;
       accounts = getAllocationByAccount(includeSynthetic, mode, equityMarks);
     } else {
       syntheticEquityMv = exposure.reduce((sum, e) => sum + e.syntheticMarketValue, 0);

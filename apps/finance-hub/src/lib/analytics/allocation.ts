@@ -53,8 +53,8 @@ export function getConsolidatedAllocation(
   includeSynthetic: boolean,
   mode: DataMode = "auto",
   equityMarkMap?: Map<string, number>,
+  db = getDb(),
 ): AllocationResult {
-  const db = getDb();
   const scope = latestSnapshotScopeForMode(mode);
   const snapshotIds = latestSnapshotIds(db, scope);
   if (snapshotIds.length === 0) return { totalMarketValue: 0, byAssetClass: [] };
@@ -90,7 +90,7 @@ export function getConsolidatedAllocation(
 
   if (includeSynthetic) {
     // Add synthetic option delta exposure into equities bucket.
-    const exposures = getUnderlyingExposureRollup(mode, equityMarkMap);
+    const exposures = getUnderlyingExposureRollup(mode, equityMarkMap, db);
     const syntheticEquityMv = exposures.reduce((sum, e) => sum + e.syntheticMarketValue, 0);
     buckets.set("equity", (buckets.get("equity") ?? 0) + syntheticEquityMv);
   }

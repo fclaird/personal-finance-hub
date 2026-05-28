@@ -14,7 +14,7 @@ import type { GlanceTileChartWindowCtx } from "@/lib/market/glanceTileChartWindo
 export type SymbolPerformanceIntradayPoint = {
   tsMs: number | null;
   label: string;
-} & Record<string, number | null>;
+} & Record<string, number | string | null>;
 
 export async function fetchSymbolPerformanceIntraday(
   symbols: string[],

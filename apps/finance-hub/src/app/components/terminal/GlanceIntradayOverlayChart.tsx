@@ -49,6 +49,7 @@ import {
   overlayShowsExtendedSegment,
   sampleIndexedValueAtTime,
   sessionCloseReferenceY,
+  type GlanceCombinedChartRow,
   type GlanceChartLine,
 } from "@/lib/terminal/marketGlanceChart";
 import { posNegClass } from "@/lib/terminal/colors";
@@ -60,7 +61,7 @@ const DOWN_STROKE = "#ef4444";
 const NY_TZ = "America/New_York";
 const CHART_MARGIN = { top: 4, right: 4, left: 0, bottom: 22 } as const;
 
-type OverlayChartRow = TileChartRow & Record<string, number | null>;
+type OverlayChartRow = TileChartRow & Record<string, number | string | null | undefined>;
 
 function attachOverlayLinesToTileRows(
   rows: TileChartRow[],
@@ -223,8 +224,8 @@ export function GlanceIntradayOverlayChart({
   const sessionCloseRefY =
     !windowCtx.marketOpen && primaryItem ? sessionCloseReferenceY(primaryItem) : null;
   const sessionCloseRowIdx = useMemo(() => {
-    if (usesTilePipeline) return resolveSessionCloseChartIdx(chartData);
-    return overlaySessionCloseRowIdx(chartData, windowCtx);
+    if (usesTilePipeline) return resolveSessionCloseChartIdx(chartData as OverlayChartRow[]);
+    return overlaySessionCloseRowIdx(chartData as GlanceCombinedChartRow[], windowCtx);
   }, [usesTilePipeline, chartData, windowCtx]);
 
   const lastIdx = Math.max(0, chartData.length - 1);
@@ -306,7 +307,10 @@ export function GlanceIntradayOverlayChart({
   const priorRefEndX =
     sessionCloseRefY != null && showExtendedChart ? closeChartX : lastChartX;
   const shadeAreaX1 =
-    shadeBounds?.fromMs ?? tileExtendedShadeStartX(chartData, shadeFromIdx);
+    shadeBounds?.fromMs ??
+    (usesTilePipeline
+      ? tileExtendedShadeStartX(chartData as OverlayChartRow[], shadeFromIdx)
+      : (chartData[shadeFromIdx]?.tsMs ?? chartData[shadeFromIdx]?.idx ?? shadeFromIdx));
   const shadeAreaX2 =
     shadeBounds?.toMs ??
     chartData[shadeToIdx]?.tsMs ??
