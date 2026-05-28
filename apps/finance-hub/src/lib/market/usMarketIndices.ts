@@ -8,6 +8,9 @@ import {
   nyBarPhase,
   resolveGlanceSplitContext,
   splitTimedPointsForGlance,
+  type GlanceExtendedFields,
+  type GlanceExtendedPhase,
+  type TimedClosePoint,
 } from "@/lib/market/glanceExtendedHours";
 import {
   buildAlignedExtendedSeries,

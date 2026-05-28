@@ -297,7 +297,7 @@ export function overlayShowsExtendedSegment(
 export function overlayChartYDomain(
   items: UsMarketGlanceItem[],
   windowCtx: GlanceTileChartWindowCtx,
-  chartData: Array<Record<string, number | null>>,
+  chartData: Array<Record<string, number | null | undefined | string>>,
   lineIds: string[],
 ): [number, number] {
   const shared = sharedSparklineYDomain(items, windowCtx);
@@ -570,7 +570,7 @@ export function enrichOverlayPrimaryLineBands(
 }
 
 export function glanceChartYDomain(
-  data: Array<Record<string, number | null>>,
+  data: Array<Record<string, number | null | undefined | string>>,
   lineIds: string[],
   items?: UsMarketGlanceItem[],
   windowCtx?: GlanceTileChartWindowCtx,
@@ -579,7 +579,7 @@ export function glanceChartYDomain(
   for (const row of data) {
     for (const id of lineIds) {
       const v = row[id];
-      if (v != null && Number.isFinite(v)) vals.push(v);
+      if (typeof v === "number" && Number.isFinite(v)) vals.push(v);
     }
   }
   if (vals.length === 0) return [GLANCE_CHART_BASELINE - 0.03, GLANCE_CHART_BASELINE + 0.03];

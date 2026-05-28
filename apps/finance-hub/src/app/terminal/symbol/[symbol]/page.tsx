@@ -626,9 +626,7 @@ export default function TerminalSymbolPage() {
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="date" tick={false} />
                   <YAxis
-                    tickFormatter={(v) =>
-                      `${Number(v).toFixed(windowKey === "1D" ? 1 : 0)}%`
-                    }
+                    tickFormatter={(v) => `${Number(v).toFixed(0)}%`}
                   />
                   <Tooltip formatter={(v) => `${Number(v).toFixed(2)}%`} labelFormatter={(l) => String(l)} />
                   <Line type="monotone" dataKey="sym" name={sym} strokeWidth={2} dot={false} stroke="#0f766e" />
