@@ -307,7 +307,10 @@ export function GlanceIntradayOverlayChart({
   const priorRefEndX =
     sessionCloseRefY != null && showExtendedChart ? closeChartX : lastChartX;
   const shadeAreaX1 =
-    shadeBounds?.fromMs ?? tileExtendedShadeStartX(chartData, shadeFromIdx);
+    shadeBounds?.fromMs ??
+    (usesTilePipeline
+      ? tileExtendedShadeStartX(chartData as OverlayChartRow[], shadeFromIdx)
+      : (chartData[shadeFromIdx]?.tsMs ?? chartData[shadeFromIdx]?.idx ?? shadeFromIdx));
   const shadeAreaX2 =
     shadeBounds?.toMs ??
     chartData[shadeToIdx]?.tsMs ??
