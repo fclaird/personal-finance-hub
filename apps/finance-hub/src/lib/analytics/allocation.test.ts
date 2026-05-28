@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 
 import { bucketFromAccount } from "@/lib/accountBuckets";
 import { classifyAsset } from "@/lib/analytics/assetClass";
+import { getConsolidatedAllocation } from "@/lib/analytics/allocation";
 import { latestSnapshotIds } from "@/lib/holdings/latestSnapshots";
 import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
 
@@ -127,6 +128,38 @@ describe("allocation bucket splits", () => {
       .get({ snaps: JSON.stringify(snapshotIds) }) as { mv: number };
 
     assert.equal(rows.mv, 1250);
+  });
+
+  it("synthetic allocation replaces option marks with delta equity exposure", () => {
+    const db = createTestDb();
+    db.prepare(
+      `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('c1', 'schwab', 'S', 'active')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO accounts (id, connection_id, name, account_bucket, type) VALUES ('schwab_a', 'c1', 'Taxable', 'brokerage', 'brokerage')`,
+    ).run();
+    db.prepare(`INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('snap_new', 'schwab_a', '2025-06-01')`).run();
+
+    db.prepare(`INSERT INTO securities (id, symbol, name, security_type) VALUES ('sec_AAPL', 'AAPL', 'AAPL', 'equity')`).run();
+    db.prepare(
+      `INSERT INTO securities (id, symbol, name, security_type, underlying_security_id) VALUES ('sec_AAPL_CALL', 'AAPL 250620C00100000', 'AAPL Call', 'option', 'sec_AAPL')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('p_stock', 'snap_new', 'sec_AAPL', 10, 100, 1000)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('p_call', 'snap_new', 'sec_AAPL_CALL', 1, 2, 200)`,
+    ).run();
+    db.prepare(`INSERT INTO option_greeks (id, position_id, delta) VALUES ('g_call', 'p_call', 0.5)`).run();
+
+    const withoutSynthetic = getConsolidatedAllocation(false, "auto", new Map([["AAPL", 100]]), db);
+    assert.equal(withoutSynthetic.totalMarketValue, 1200);
+    assert.equal(withoutSynthetic.byAssetClass.find((b) => b.key === "option")?.marketValue, 200);
+
+    const withSynthetic = getConsolidatedAllocation(true, "auto", new Map([["AAPL", 100]]), db);
+    assert.equal(withSynthetic.totalMarketValue, 6000);
+    assert.equal(withSynthetic.byAssetClass.find((b) => b.key === "equity")?.marketValue, 6000);
+    assert.equal(withSynthetic.byAssetClass.find((b) => b.key === "option"), undefined);
   });
 
   it("manual fund holdings classify as fund and count in schwab_only scope", () => {

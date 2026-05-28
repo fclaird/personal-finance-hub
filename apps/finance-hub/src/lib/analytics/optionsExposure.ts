@@ -249,15 +249,16 @@ export function rollupExposureBuckets(buckets: BucketExposure[]): ExposureRow[] 
 export function getUnderlyingExposureRollup(
   mode: DataMode = "auto",
   equityMarkMap?: Map<string, number>,
+  db: ReturnType<typeof getDb> = getDb(),
 ): ExposureRow[] {
-  return rollupExposureBuckets(getUnderlyingExposureByBucket(mode, equityMarkMap));
+  return rollupExposureBuckets(getUnderlyingExposureByBucket(mode, equityMarkMap, db));
 }
 
 export function getUnderlyingExposureByBucket(
   mode: DataMode = "auto",
   equityMarkMap?: Map<string, number>,
+  db: ReturnType<typeof getDb> = getDb(),
 ): BucketExposure[] {
-  const db = getDb();
   const scope = latestSnapshotScopeForMode(mode);
   const snapshotIds = latestSnapshotIds(db, scope);
   if (snapshotIds.length === 0) return [];
