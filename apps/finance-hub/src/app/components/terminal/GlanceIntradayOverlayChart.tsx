@@ -60,7 +60,7 @@ const DOWN_STROKE = "#ef4444";
 const NY_TZ = "America/New_York";
 const CHART_MARGIN = { top: 4, right: 4, left: 0, bottom: 22 } as const;
 
-type OverlayChartRow = TileChartRow & Record<string, number | null>;
+type OverlayChartRow = TileChartRow & Record<string, number | string | null | undefined>;
 
 function attachOverlayLinesToTileRows(
   rows: TileChartRow[],
