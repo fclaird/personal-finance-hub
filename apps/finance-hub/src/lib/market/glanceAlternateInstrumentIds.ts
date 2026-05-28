@@ -1,5 +1,3 @@
-import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
-
 export const GLANCE_ALTERNATE_INSTRUMENT_IDS = [
   "russell2000",
   "gold",
@@ -29,9 +27,9 @@ export function isGlanceAlternateInstrumentId(value: string): value is GlanceAlt
   return (GLANCE_ALTERNATE_INSTRUMENT_IDS as readonly string[]).includes(value);
 }
 
-export function pickGlanceAlternateCard(
-  cards: UsMarketGlanceItem[],
+export function pickGlanceAlternateCard<T extends { id: string }>(
+  cards: T[],
   id: GlanceAlternateInstrumentId,
-): UsMarketGlanceItem | null {
+): T | null {
   return cards.find((card) => card.id === id) ?? cards[0] ?? null;
 }
