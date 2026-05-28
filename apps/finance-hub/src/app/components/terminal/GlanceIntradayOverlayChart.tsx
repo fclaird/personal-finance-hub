@@ -49,6 +49,7 @@ import {
   overlayShowsExtendedSegment,
   sampleIndexedValueAtTime,
   sessionCloseReferenceY,
+  type GlanceCombinedChartRow,
   type GlanceChartLine,
 } from "@/lib/terminal/marketGlanceChart";
 import { posNegClass } from "@/lib/terminal/colors";
@@ -223,8 +224,8 @@ export function GlanceIntradayOverlayChart({
   const sessionCloseRefY =
     !windowCtx.marketOpen && primaryItem ? sessionCloseReferenceY(primaryItem) : null;
   const sessionCloseRowIdx = useMemo(() => {
-    if (usesTilePipeline) return resolveSessionCloseChartIdx(chartData);
-    return overlaySessionCloseRowIdx(chartData, windowCtx);
+    if (usesTilePipeline) return resolveSessionCloseChartIdx(chartData as OverlayChartRow[]);
+    return overlaySessionCloseRowIdx(chartData as GlanceCombinedChartRow[], windowCtx);
   }, [usesTilePipeline, chartData, windowCtx]);
 
   const lastIdx = Math.max(0, chartData.length - 1);
