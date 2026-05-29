@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { logError } from "@/lib/log";
+import { buildFundStatementBasis } from "@/lib/market/planFundPricing";
 import { isManualAccountId, upsertManualPosition, type ManualPositionInput } from "@/lib/manual/manualAccounts";
 
 type RouteCtx = { params: Promise<{ id: string }> };
@@ -22,15 +23,27 @@ export async function POST(req: Request, ctx: RouteCtx) {
       return NextResponse.json({ ok: false, error: "Invalid security type" }, { status: 400 });
     }
 
-  const result = upsertManualPosition(id, {
+    const symbol = (body.symbol ?? "").trim().toUpperCase();
+    const marketValue = body.marketValue != null ? Number(body.marketValue) : null;
+    // Statement anchor date must be when the balance was observed — not purchase date (2011 NAV
+    // would scale today's 529 balance by ~3× on every load).
+    const statementDate = new Date().toISOString().slice(0, 10);
+
+    let fundBasis = undefined as ManualPositionInput["fundBasis"];
+    if (securityType === "fund" && marketValue != null && Number.isFinite(marketValue) && marketValue > 0 && symbol) {
+      fundBasis = await buildFundStatementBasis(symbol, marketValue, statementDate);
+    }
+
+    const result = upsertManualPosition(id, {
       positionId: body.positionId,
       symbol: body.symbol ?? "",
       securityType,
       quantity: Number(body.quantity),
       purchasePrice: body.purchasePrice != null ? Number(body.purchasePrice) : null,
-      marketValue: body.marketValue != null ? Number(body.marketValue) : null,
+      marketValue,
       purchaseDate: body.purchaseDate ?? null,
       notes: body.notes ?? null,
+      fundBasis,
     });
 
     return NextResponse.json({ ok: true, ...result });

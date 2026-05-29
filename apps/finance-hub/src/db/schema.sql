@@ -151,6 +151,7 @@ CREATE TABLE IF NOT EXISTS account_value_points (
   as_of TEXT NOT NULL, -- ISO datetime
   equity_value REAL NOT NULL, -- account equity / liquidation value proxy
   cash_value REAL, -- if available
+  prior_equity_value REAL, -- Schwab previousDayEquity* at sync time (day-over-day baseline)
   source TEXT NOT NULL, -- 'schwab_balances' | 'manual' | etc.
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (account_id, as_of)
@@ -416,6 +417,17 @@ CREATE TABLE IF NOT EXISTS x_symbol_cache (
   symbol TEXT PRIMARY KEY COLLATE NOCASE,
   generated_at TEXT NOT NULL,
   payload_json TEXT NOT NULL
+);
+
+-- Terminal quick-glance payload cache. One row per (cache_key, session_ymd); the assembled
+-- us-markets JSON is served from here so page opens are a local read, not an external fan-out.
+-- Refreshed in the background (stale-while-revalidate) and warmed by the scheduler tick.
+CREATE TABLE IF NOT EXISTS glance_cache (
+  cache_key TEXT NOT NULL,
+  session_ymd TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (cache_key, session_ymd)
 );
 
 -- Schwab (and future brokers) transaction history for strategy views.

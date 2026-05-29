@@ -43,12 +43,13 @@ export function pickEquityUsd(cb: Record<string, unknown> | undefined): number |
 
 /** Prior session equity when Schwab exposes it on the balances payload. */
 export function pickPriorEquityUsd(cb: Record<string, unknown> | undefined): number | null {
+  return pickSchwabPriorDayEquityUsd(cb);
+}
+
+/** Schwab day-over-day baseline — excludes unrelated balance keys like `previousClose`. */
+export function pickSchwabPriorDayEquityUsd(cb: Record<string, unknown> | undefined): number | null {
   if (!cb) return null;
-  const keys = [
-    "previousDayEquityWithLoanValue",
-    "previousDayEquity",
-    "previousClose",
-  ];
+  const keys = ["previousDayEquityWithLoanValue", "previousDayEquity"];
   for (const k of keys) {
     const n = asBalanceNumber(cb[k]);
     if (n != null) return n;

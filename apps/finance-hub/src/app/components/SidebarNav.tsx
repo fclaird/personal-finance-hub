@@ -16,7 +16,13 @@ type DataMode = "auto" | "schwab";
 const NAV_DRAG_HANDLE =
   "flex shrink-0 cursor-grab items-center px-1.5 text-zinc-400 active:cursor-grabbing dark:text-zinc-500";
 
-export function SidebarNav() {
+export function SidebarNav({
+  collapsed = false,
+  onToggleCollapse,
+}: {
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
+}) {
   const pathname = usePathname();
   const [mode, setMode] = useState<DataMode>("auto");
   const [avail, setAvail] = useState<{ hasSchwab: boolean }>({ hasSchwab: false });
@@ -81,21 +87,37 @@ export function SidebarNav() {
     }
   }
 
+  if (collapsed) return null;
+
   return (
     <aside className="sticky top-0 hidden h-dvh w-64 shrink-0 overflow-y-auto border-r border-zinc-300 bg-white/70 p-5 backdrop-blur dark:border-white/20 dark:bg-black/40 md:block">
       <div className="px-1 py-1">
         <div className="flex items-center justify-between gap-2">
           <div className="text-[15px] font-semibold tracking-tight">Finance Hub</div>
-          <div
-            className={
-              "rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide " +
-              (modeLabel === "REAL"
-                ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-500/20 dark:text-emerald-200"
-                : "bg-zinc-100 text-zinc-700 dark:bg-white/10 dark:text-zinc-300")
-            }
-            title="Data mode for the dashboard"
-          >
-            {modeLabel}
+          <div className="flex shrink-0 items-center gap-1.5">
+            <div
+              className={
+                "rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide " +
+                (modeLabel === "REAL"
+                  ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-500/20 dark:text-emerald-200"
+                  : "bg-zinc-100 text-zinc-700 dark:bg-white/10 dark:text-zinc-300")
+              }
+              title="Data mode for the dashboard"
+            >
+              {modeLabel}
+            </div>
+            {onToggleCollapse ? (
+              <button
+                type="button"
+                onClick={onToggleCollapse}
+                aria-expanded={true}
+                aria-label="Collapse sidebar"
+                className="rounded-md px-1.5 py-0.5 text-sm text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-white/10"
+                title="Collapse sidebar"
+              >
+                «
+              </button>
+            ) : null}
           </div>
         </div>
         <div className="mt-1 text-[13px] leading-snug text-zinc-600 dark:text-zinc-400">Local-first</div>

@@ -101,6 +101,12 @@ function migrate(db: Database.Database) {
   if (hasDmSimMonthly) {
     ensureColumn(db, "dividend_model_portfolio_sim_monthly", "price_only_rebased_pct", "price_only_rebased_pct REAL");
   }
+  const hasAccountValuePoints = db
+    .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='account_value_points' LIMIT 1`)
+    .get();
+  if (hasAccountValuePoints) {
+    ensureColumn(db, "account_value_points", "prior_equity_value", "prior_equity_value REAL");
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS symbol_notes (
       symbol TEXT PRIMARY KEY COLLATE NOCASE,

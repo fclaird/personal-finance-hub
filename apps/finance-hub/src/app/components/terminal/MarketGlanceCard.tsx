@@ -20,10 +20,17 @@ import {
   glanceShowExtendedChartSegment,
   GLANCE_RTH_CLOSE_MIN,
   lastGlanceChartDataTsMs,
-  resolveGlanceExtendedShadeX,
   resolveGlanceTileChartAxisDomain,
   type GlanceTileChartWindowCtx,
 } from "@/lib/market/glanceTileChartWindow";
+import {
+  enrichGlanceRowsWithPlotMs,
+  glanceChartXDataKey,
+  glanceChartXDomain,
+  glanceWallMsToPlot,
+  resolveGlanceExtendedShadePlotSegments,
+  resolveGlancePlotAxis,
+} from "@/lib/market/glancePlotTimeAxis";
 import { nyWallTimeMs } from "@/lib/market/futuresGlanceSession";
 import { cashIndexSegmentLabel, formatLondonGlancePointTime, formatTokyoGlancePointTime } from "@/lib/market/cashIndexGlanceSession";
 import type { FuturesGlanceKind } from "@/lib/market/futuresGlanceSession";
@@ -31,7 +38,7 @@ import { futuresExtendedPhaseLabel, futuresSegmentLabel } from "@/lib/market/fut
 import { PortfolioGlanceValue } from "@/app/components/terminal/PortfolioGlanceValue";
 import { GlanceAlternateTileTitle } from "@/app/components/terminal/GlanceAlternateTileTitle";
 import { posNegClass } from "@/lib/terminal/colors";
-import type { GlanceAlternateInstrumentId } from "@/lib/market/glanceAlternateInstrumentIds";
+import type { GlanceTileInstrumentId } from "@/lib/market/glanceTileInstruments";
 import type { GlanceInstrumentKind, GlanceValueMode } from "@/lib/market/usMarketIndices";
 import {
   buildTileChartRows,
@@ -82,15 +89,17 @@ export type MarketGlanceCardProps = {
   marketOpen?: boolean;
   sessionLabel?: string;
   sessionYmd?: string;
+  chartYmd?: string;
+  showingPriorSession?: boolean;
   updatedAt?: string | null;
   /** Shared Y domain across quick-glance tiles (indexed to 100 at prior close). */
   chartYDomain?: [number, number];
   className?: string;
   /** Swappable alternate tile title menu (Markets tab 4th slot). */
   alternateTitleSelector?: {
-    options: ReadonlyArray<{ id: GlanceAlternateInstrumentId; label: string }>;
-    value: GlanceAlternateInstrumentId;
-    onChange: (id: GlanceAlternateInstrumentId) => void;
+    options: ReadonlyArray<{ id: GlanceTileInstrumentId; label: string }>;
+    value: GlanceTileInstrumentId;
+    onChange: (id: GlanceTileInstrumentId) => void;
   };
 };
 
@@ -192,7 +201,14 @@ const NY_TZ = "America/New_York";
 function collectIndexedChartValues(rows: TileChartRow[]): number[] {
   const vals: number[] = [];
   for (const row of rows) {
-    for (const v of [row.regular, row.extended, row.gainFill, row.lossFill, row.extGainFill, row.extLossFill]) {
+    for (const v of [
+      row.regular,
+      row.extended,
+      row.gainStroke,
+      row.lossStroke,
+      row.extGainStroke,
+      row.extLossStroke,
+    ]) {
       if (v != null && Number.isFinite(v)) vals.push(v);
     }
   }
@@ -215,8 +231,8 @@ export function yDomainFromChartRange(
   }
   if (minVal > maxVal) [minVal, maxVal] = [maxVal, minVal];
 
-  const span = Math.max(maxVal - minVal, 0.008);
-  const nearMargin = span * 0.4;
+  const span = Math.max(maxVal - minVal, 0.004);
+  const nearMargin = span * 0.12;
   for (const ref of referenceYs) {
     if (ref == null || !Number.isFinite(ref)) continue;
     if (ref >= minVal - nearMargin && ref <= maxVal + nearMargin) {
@@ -225,7 +241,7 @@ export function yDomainFromChartRange(
     }
   }
 
-  const pad = Math.max((maxVal - minVal) * 0.05, 0.008);
+  const pad = Math.max((maxVal - minVal) * 0.03, 0.004);
   return [minVal - pad, maxVal + pad];
 }
 
@@ -362,8 +378,8 @@ export function enrichTileChartRowsForBaselineChart(
           extended: null,
           gainFill: priorReferenceY,
           lossFill: priorReferenceY,
-          gainStroke: priorReferenceY,
-          lossStroke: priorReferenceY,
+          gainStroke: null,
+          lossStroke: null,
           segment: row.segment,
           tsMs: row.tsMs,
         });
@@ -381,8 +397,8 @@ export function enrichTileChartRowsForBaselineChart(
           extended: null,
           extGainFill: extRefY,
           extLossFill: extRefY,
-          extGainStroke: extRefY,
-          extLossStroke: extRefY,
+          extGainStroke: null,
+          extLossStroke: null,
           segment: row.segment,
           tsMs: row.tsMs,
         });
@@ -399,16 +415,17 @@ export function enrichTileChartRowsForBaselineChart(
     const extLossFill =
       extended != null && Number.isFinite(extended) ? (aboveExtended ? null : extended) : null;
 
+    const hasRegular = regular != null && Number.isFinite(regular);
     out.push({
       ...row,
       gainFill,
       lossFill,
       extGainFill,
       extLossFill,
-      gainStroke: priceStrokeFromFill(gainFill, priorReferenceY),
-      lossStroke: priceStrokeFromFill(lossFill, priorReferenceY),
-      extGainStroke: extGainFill,
-      extLossStroke: extLossFill,
+      gainStroke: hasRegular ? priceStrokeFromFill(gainFill, priorReferenceY) : null,
+      lossStroke: hasRegular ? priceStrokeFromFill(lossFill, priorReferenceY) : null,
+      extGainStroke: priceStrokeFromFill(extGainFill, extRefY),
+      extLossStroke: priceStrokeFromFill(extLossFill, extRefY),
     });
 
     if (regular != null && Number.isFinite(regular)) lastRegular = regular;
@@ -465,8 +482,6 @@ export function bridgeTileShadingAtSessionClose(
     if (row.gainFill == null && row.lossFill == null) {
       row.gainFill = bridgeGain;
       row.lossFill = bridgeLoss;
-      row.gainStroke = row.gainStroke ?? priceStrokeFromFill(bridgeGain, priorReferenceY);
-      row.lossStroke = row.lossStroke ?? priceStrokeFromFill(bridgeLoss, priorReferenceY);
     }
   }
 
@@ -474,8 +489,6 @@ export function bridgeTileShadingAtSessionClose(
   if (firstExt.gainFill == null && firstExt.lossFill == null) {
     firstExt.gainFill = bridgeGain;
     firstExt.lossFill = bridgeLoss;
-    firstExt.gainStroke = firstExt.gainStroke ?? priceStrokeFromFill(bridgeGain, priorReferenceY);
-    firstExt.lossStroke = firstExt.lossStroke ?? priceStrokeFromFill(bridgeLoss, priorReferenceY);
   }
 
   return reindexTileChartRows(out);
@@ -613,6 +626,8 @@ export function MarketGlanceCard({
   item,
   marketOpen = true,
   sessionYmd,
+  chartYmd,
+  showingPriorSession,
   chartYDomain,
   className,
   alternateTitleSelector,
@@ -629,8 +644,14 @@ export function MarketGlanceCard({
       ? (item.tradableOpen ?? false)
       : marketOpen;
   const chartWindowCtx = useMemo(
-    (): GlanceTileChartWindowCtx => ({ marketOpen: sessionOpen, sessionYmd }),
-    [sessionOpen, sessionYmd],
+    (): GlanceTileChartWindowCtx => ({
+      marketOpen: sessionOpen,
+      sessionYmd,
+      chartYmd,
+      showingPriorSession,
+      nowMs: Date.now(),
+    }),
+    [sessionOpen, sessionYmd, chartYmd, showingPriorSession],
   );
   const { item: chartItem, omitPriorAnchor } = useMemo(
     () => glanceItemForTileChart(item, chartWindowCtx),
@@ -717,20 +738,28 @@ export function MarketGlanceCard({
     const lastTs = lastGlanceChartDataTsMs(baselineChartData);
     return resolveGlanceTileChartAxisDomain(chartWindowCtx, item, lastTs);
   }, [useSharedEquityDomain, chartWindowCtx, item, baselineChartData]);
+  const plotAxis = useMemo(() => {
+    if (!useSharedEquityDomain || !chartAxisDomain) return null;
+    const lastTs = lastGlanceChartDataTsMs(baselineChartData);
+    return resolveGlancePlotAxis(chartWindowCtx, item, lastTs);
+  }, [useSharedEquityDomain, chartWindowCtx, item, baselineChartData, chartAxisDomain]);
   const useFixedTimeAxis = useMemo(
     () =>
       chartAxisDomain != null &&
       baselineChartData.some((row) => row.tsMs != null && Number.isFinite(row.tsMs)),
     [chartAxisDomain, baselineChartData],
   );
+  const xDataKey = glanceChartXDataKey(plotAxis);
+  const xDomain = glanceChartXDomain(plotAxis, chartAxisDomain);
   const plotData = useMemo(() => {
     if (!useFixedTimeAxis) return baselineChartData;
+    if (plotAxis?.compress) return enrichGlanceRowsWithPlotMs(baselineChartData, chartWindowCtx, plotAxis);
     return baselineChartData.filter((row) => row.tsMs != null && Number.isFinite(row.tsMs));
-  }, [baselineChartData, useFixedTimeAxis]);
+  }, [baselineChartData, useFixedTimeAxis, plotAxis, chartWindowCtx]);
   const yDomain = useMemo(() => {
-    if (useSharedEquityDomain && chartYDomain) return chartYDomain;
-    return sparklineYDomainFromChartData(baselineChartData, referenceBand);
-  }, [useSharedEquityDomain, chartYDomain, baselineChartData, referenceBand]);
+    if (chartYDomain) return chartYDomain;
+    return sparklineYDomainFromChartData(plotData, referenceBand);
+  }, [chartYDomain, plotData, referenceBand]);
   const lastIdx = baselineChartData.length - 1;
   const plotLastIdx = Math.max(0, plotData.length - 1);
   const extendedShade = useMemo(() => {
@@ -752,13 +781,12 @@ export function MarketGlanceCard({
       : (extendedShade?.first ?? enrichedSessionCloseIdx);
   const shadeToIdx = extendedShade?.last ?? lastIdx;
   const shadeBounds = useMemo(() => {
-    if (!showExtendedChart || !useFixedTimeAxis || !chartAxisDomain) return null;
+    if (!showExtendedChart || !useFixedTimeAxis || !plotAxis) return null;
     const lastTs = baselineChartData[lastIdx]?.tsMs ?? null;
-    return resolveGlanceExtendedShadeX(chartWindowCtx, chartAxisDomain, lastTs);
-  }, [showExtendedChart, useFixedTimeAxis, chartAxisDomain, chartWindowCtx, baselineChartData, lastIdx]);
-  const shadeAreaX1 = shadeBounds?.fromMs ?? tileExtendedShadeStartX(baselineChartData, shadeFromIdx);
-  const shadeAreaX2 =
-    shadeBounds?.toMs ?? baselineChartData[shadeToIdx]?.tsMs ?? baselineChartData[shadeToIdx]?.idx ?? shadeToIdx;
+    return resolveGlanceExtendedShadePlotSegments(chartWindowCtx, plotAxis, lastTs);
+  }, [showExtendedChart, useFixedTimeAxis, plotAxis, chartWindowCtx, baselineChartData, lastIdx]);
+  const shadeAreaFallbackX1 = tileExtendedShadeStartX(baselineChartData, shadeFromIdx);
+  const shadeAreaFallbackX2 = baselineChartData[shadeToIdx]?.tsMs ?? baselineChartData[shadeToIdx]?.idx ?? shadeToIdx;
   const atClosePct = indexValueToDayPct(
     chartUsesIndexedScale ? indexTileChartValue(atClose, priorSessionClose, isIndexedGlanceChartItem(item)) : atClose,
   );
@@ -773,12 +801,25 @@ export function MarketGlanceCard({
   const lastChartIdx = baselineChartData[lastIdx]?.idx ?? lastIdx;
   const sessionCloseBoundaryMs =
     marketClosed && sessionYmd ? nyWallTimeMs(sessionYmd, GLANCE_RTH_CLOSE_MIN) : null;
-  const firstChartX = useFixedTimeAxis ? chartAxisDomain!.startMs : firstChartIdx;
+  const rowX = (row: TileChartRow | undefined, fallback: number) => {
+    if (!useFixedTimeAxis || !row) return fallback;
+    const plotRow = row as TileChartRow & { plotMs?: number | null };
+    if (plotAxis?.compress && plotRow.plotMs != null && Number.isFinite(plotRow.plotMs)) return plotRow.plotMs;
+    return row.tsMs ?? row.idx ?? fallback;
+  };
+  const wallX = (wallMs: number | null | undefined, fallback: number) => {
+    if (!useFixedTimeAxis || wallMs == null || !Number.isFinite(wallMs) || !plotAxis) return fallback;
+    return glanceWallMsToPlot(wallMs, plotAxis, chartWindowCtx);
+  };
+  const firstChartX = useFixedTimeAxis ? (xDomain?.[0] ?? chartAxisDomain!.startMs) : firstChartIdx;
   const lastChartX = useFixedTimeAxis
-    ? (plotData[plotLastIdx]?.tsMs ?? chartAxisDomain!.endMs)
+    ? rowX(plotData[plotLastIdx], xDomain?.[1] ?? chartAxisDomain!.endMs)
     : lastChartIdx;
   const closeChartX = useFixedTimeAxis
-    ? (baselineChartData[enrichedSessionCloseIdx]?.tsMs ?? sessionCloseBoundaryMs ?? closeChartIdx)
+    ? wallX(
+        baselineChartData[enrichedSessionCloseIdx]?.tsMs ?? sessionCloseBoundaryMs,
+        baselineChartData[enrichedSessionCloseIdx]?.tsMs ?? closeChartIdx,
+      )
     : closeChartIdx;
   const priorRefEndX =
     sessionCloseReferenceY != null && showExtendedChart ? closeChartX : lastChartX;
@@ -880,10 +921,10 @@ export function MarketGlanceCard({
               <AreaChart data={plotData} margin={CHART_MARGIN}>
                 {useFixedTimeAxis ? (
                   <XAxis
-                    dataKey="tsMs"
+                    dataKey={xDataKey}
                     hide
                     type="number"
-                    domain={[chartAxisDomain!.startMs, chartAxisDomain!.endMs]}
+                    domain={xDomain ?? undefined}
                     allowDataOverflow
                   />
                 ) : (
@@ -945,15 +986,26 @@ export function MarketGlanceCard({
                     ifOverflow="extendDomain"
                   />
                 ) : null}
-                {showExtendedChart ? (
-                  <ReferenceArea
-                    x1={shadeAreaX1}
-                    x2={shadeAreaX2}
-                    fill="#94a3b8"
-                    fillOpacity={0.22}
-                    ifOverflow="extendDomain"
-                  />
-                ) : null}
+                {showExtendedChart
+                  ? (shadeBounds?.length
+                      ? shadeBounds
+                      : [
+                          {
+                            fromMs: wallX(shadeAreaFallbackX1, shadeAreaFallbackX1),
+                            toMs: wallX(shadeAreaFallbackX2, shadeAreaFallbackX2),
+                          },
+                        ]
+                    ).map((segment, index) => (
+                      <ReferenceArea
+                        key={`ext-shade-${index}`}
+                        x1={segment.fromMs}
+                        x2={segment.toMs}
+                        fill="#94a3b8"
+                        fillOpacity={0.22}
+                        ifOverflow="extendDomain"
+                      />
+                    ))
+                  : null}
                 {chartBaseline != null && Number.isFinite(chartBaseline) ? (
                   <>
                     <Area
@@ -1086,8 +1138,19 @@ export function MarketGlanceCard({
           {indexedFooter ? (
             <>
               <div>
-                <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Day start</div>
-                <div className="text-xs font-medium tabular-nums text-zinc-800 dark:text-zinc-100">0.00%</div>
+                {item.id === "portfolio" ? (
+                  <>
+                    <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Day start</div>
+                    <div className="text-xs font-medium tabular-nums text-zinc-800 dark:text-zinc-100">0.00%</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Current</div>
+                    <div className="text-xs font-medium tabular-nums text-zinc-800 dark:text-zinc-100">
+                      {formatGlancePrice(item.last)}
+                    </div>
+                  </>
+                )}
               </div>
               {showExtendedFooterCols ? (
                 <div>

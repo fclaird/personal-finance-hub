@@ -296,7 +296,39 @@ export function ManualPositionDialog({
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
   }
 
+  async function anchorFundStatement() {
+    setSaving(true);
+    setError(null);
+    try {
+      const resp = await fetch(`/api/manual/accounts/${encodeURIComponent(positionForm.accountId)}/positions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          positionId: positionForm.positionId,
+          symbol: positionForm.symbol,
+          securityType: "fund",
+          quantity: Number(positionForm.quantity),
+          purchasePrice: positionForm.purchasePrice.trim() === "" ? null : Number(positionForm.purchasePrice),
+          marketValue: positionForm.marketValue.trim() === "" ? null : Number(positionForm.marketValue),
+          purchaseDate: positionForm.purchaseDate.trim() || null,
+          notes: positionForm.notes.trim() || null,
+        }),
+      });
+      const json = (await resp.json()) as { ok: boolean; error?: string };
+      if (!json.ok) throw new Error(json.error ?? "Failed to anchor statement balance");
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function refreshMv() {
+    if (positionForm.securityType === "fund") {
+      await anchorFundStatement();
+      return;
+    }
     const sym = positionForm.securityType === "cash" ? null : positionForm.symbol.trim().toUpperCase();
     if (!sym) return;
     const resp = await fetch("/api/quotes", {
@@ -380,21 +412,35 @@ export function ManualPositionDialog({
               inputMode="decimal"
             />
           </Field>
-          <Field label="Market value">
-            <div className="flex gap-2">
-              <input
-                className={inputClass}
-                value={positionForm.marketValue}
-                onChange={(e) => setField("marketValue", e.target.value)}
-                inputMode="decimal"
-              />
-              <button
-                type="button"
-                onClick={() => void refreshMv()}
-                className="shrink-0 rounded-md border border-zinc-300 px-3 text-xs font-medium dark:border-white/20"
-              >
-                Refresh
-              </button>
+          <Field
+            label={
+              positionForm.securityType === "fund"
+                ? "Market value (from 529 statement)"
+                : "Market value"
+            }
+          >
+            <div className="flex flex-col gap-1">
+              <div className="flex gap-2">
+                <input
+                  className={inputClass}
+                  value={positionForm.marketValue}
+                  onChange={(e) => setField("marketValue", e.target.value)}
+                  inputMode="decimal"
+                />
+                <button
+                  type="button"
+                  onClick={() => void refreshMv()}
+                  className="shrink-0 rounded-md border border-zinc-300 px-3 text-xs font-medium dark:border-white/20"
+                >
+                  {positionForm.securityType === "fund" ? "Anchor" : "Refresh"}
+                </button>
+              </div>
+              {positionForm.securityType === "fund" ? (
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Enter the balance from your 529 statement once, then Save. We update it with the fund&apos;s market
+                  return (not public NAV × shares).
+                </p>
+              ) : null}
             </div>
           </Field>
         </>

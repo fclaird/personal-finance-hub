@@ -314,22 +314,39 @@ export function getUnderlyingExposureByBucket(
           p.snapshot_id,
           COALESCE(sec.symbol, 'UNKNOWN') AS symbol,
           SUM(${POSITION_MARKET_VALUE_SQL}) AS mv,
-          SUM(COALESCE(p.quantity, 0)) AS qty
+          SUM(COALESCE(p.quantity, 0)) AS qty,
+          MAX(CASE
+            WHEN a.id LIKE 'manual_%' AND (sec.security_type = 'fund' OR a.account_bucket = '529')
+            THEN 1 ELSE 0
+          END) AS is_plan_fund
         FROM positions p
         JOIN securities sec ON sec.id = p.security_id
+        JOIN holding_snapshots hs ON hs.id = p.snapshot_id
+        JOIN accounts a ON a.id = hs.account_id
         WHERE p.snapshot_id IN (SELECT value FROM json_each(@snaps))
           AND sec.security_type != 'option'
           AND sec.security_type != 'cash'
         GROUP BY p.snapshot_id, COALESCE(sec.symbol, 'UNKNOWN')
       `,
     )
-    .all({ snaps: snapsJson }) as Array<{ snapshot_id: string; symbol: string; mv: number; qty: number }>;
+    .all({ snaps: snapsJson }) as Array<{
+    snapshot_id: string;
+    symbol: string;
+    mv: number;
+    qty: number;
+    is_plan_fund: number;
+  }>;
+
+  // Plan/529 fund share counts are synthetic proxies: heldShares × public NAV is meaningless,
+  // so keep their statement-anchored stored MV instead of re-marking against the live NAV below.
+  const planFundSymbols = new Set<string>();
 
   for (const r of spot) {
     const bucket = snapshotToBucket.get(r.snapshot_id);
     if (!bucket) continue;
     const symKey = (r.symbol ?? "").trim().toUpperCase();
     if (symKey === "CASH") continue;
+    if (r.is_plan_fund) planFundSymbols.add(symKey);
     const prev = rowFor(bucket, symKey);
     prev.spotMarketValue += r.mv;
     prev.heldShares += r.qty ?? 0;
@@ -407,6 +424,8 @@ export function getUnderlyingExposureByBucket(
     for (const row of m.values()) {
       const px = priceByUnderlying.get(row.underlyingSymbol);
       if (px == null) continue;
+      // Plan/529 funds: preserve the statement-anchored stored MV; don't re-mark synthetic shares.
+      if (planFundSymbols.has(row.underlyingSymbol)) continue;
       if (row.heldShares > 0) row.spotMarketValue = row.heldShares * px;
       row.syntheticMarketValue = row.syntheticShares * px;
     }

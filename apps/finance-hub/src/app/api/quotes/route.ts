@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 
 import { logError } from "@/lib/log";
 import { schwabQuoteDisplayPrice } from "@/lib/market/schwabQuoteDisplay";
+import { normalizeEquitySymbol } from "@/lib/market/equityMarkPrice";
+import { fetchYahooLatestPrices } from "@/lib/market/yahooLatestPrice";
 import { normalizeSchwabQuoteSymbol } from "@/lib/market/schwabSymbol";
 import { schwabCompanyNameFromQuoteEntry } from "@/lib/schwab/quoteCompanyName";
 import { fetchSchwabQuotesResponse } from "@/lib/schwab/quotesFetch";
@@ -123,6 +125,23 @@ export async function POST(req: Request) {
           companyName,
           updatedAt: nowIso,
         });
+    }
+
+    const missingYahoo = symbols.filter((sym) => {
+      const row = out.find((q) => normSym(q.symbol) === sym);
+      return row != null && row.last == null;
+    });
+    if (missingYahoo.length > 0) {
+      const yahooMarks = await fetchYahooLatestPrices(missingYahoo);
+      for (const q of out) {
+        if (q.last != null) continue;
+        const key = normalizeEquitySymbol(q.symbol);
+        const nav = yahooMarks.get(key);
+        if (nav == null) continue;
+        q.last = nav;
+        q.close = q.close ?? nav;
+        q.mark = q.mark ?? nav;
+      }
     }
 
     return NextResponse.json(

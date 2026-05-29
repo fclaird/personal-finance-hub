@@ -5,8 +5,9 @@ import { allSyncedAccountsWhereSql, latestSnapshotPerAccountJoinSql } from "@/li
 import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
 import { isAuroraExclusiveAccountId } from "@/lib/auroraExclusive";
 import { isoDateInUsEastern } from "@/lib/market/glanceSession";
-import { pickEquityUsd, pickPriorEquityUsd } from "@/lib/schwab/accountBalances";
+import { pickEquityUsd, pickSchwabPriorDayEquityUsd } from "@/lib/schwab/accountBalances";
 import { schwabFetch } from "@/lib/schwab/client";
+import { fetchSchwabSessionNetCashFlow } from "@/lib/terminal/portfolioCashFlows";
 
 type SchwabAccountPayload = {
   securitiesAccount: {
@@ -19,6 +20,10 @@ type SchwabAccountPayload = {
 export type PortfolioAccountTotals = {
   netValue: number;
   priorNetValue: number;
+  /** Schwab net cash flow today (negative = net withdrawal). */
+  netCashFlow: number;
+  /** Liquidation value adjusted for external cash flows (for day return). */
+  adjustedNetValue: number;
   schwabCurrent: number;
   schwabPrior: number;
   externalCurrent: number;
@@ -137,7 +142,10 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
     .get({ session_ymd: priorSessionYmd }) as { mv: number } | undefined;
 
   const current = currentRow?.mv ?? 0;
-  const prior = priorRow?.mv ?? current;
+  const priorRaw = priorRow?.mv;
+  // SUM() is 0 when no prior snapshot exists — must not treat as "$0 external yesterday".
+  const prior =
+    priorRaw != null && Number.isFinite(priorRaw) && priorRaw > 0 ? priorRaw : current;
   return {
     current: Number.isFinite(current) ? current : 0,
     prior: Number.isFinite(prior) ? prior : current,
@@ -145,31 +153,140 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
 }
 
 export async function fetchSchwabLiquidationLive(): Promise<{
+  byAccount: Map<string, { current: number; prior: number | null }>;
   current: number;
   prior: number | null;
 } | null> {
   try {
     const accounts = await schwabFetch<SchwabAccountPayload[]>("accounts");
+    const byAccount = new Map<string, { current: number; prior: number | null }>();
     let current = 0;
     let prior = 0;
-    let hasPrior = false;
+    let accountsWithPrior = 0;
     for (const a of accounts) {
       const accountId = schwabAccountId(a.securitiesAccount);
       if (!accountId) continue;
       const equity = pickEquityUsd(a.securitiesAccount.currentBalances);
-      if (equity == null || !Number.isFinite(equity)) continue;
+      if (equity == null || !Number.isFinite(equity) || equity <= 0) continue;
+      const prev = pickSchwabPriorDayEquityUsd(a.securitiesAccount.currentBalances);
+      byAccount.set(accountId, { current: equity, prior: prev });
       current += equity;
-      const prev = pickPriorEquityUsd(a.securitiesAccount.currentBalances);
-      if (prev != null && Number.isFinite(prev)) {
+      if (prev != null && Number.isFinite(prev) && prev > 0) {
         prior += prev;
-        hasPrior = true;
+        accountsWithPrior += 1;
       }
     }
-    if (current <= 0) return null;
-    return { current, prior: hasPrior ? prior : null };
+    if (current <= 0 || byAccount.size === 0) return null;
+    return {
+      byAccount,
+      current,
+      prior: accountsWithPrior === byAccount.size ? prior : null,
+    };
   } catch {
     return null;
   }
+}
+
+/** Latest stored Schwab prior-day equity per account (from the most recent sync). */
+export function schwabPriorEquityFromLatestSync(db: Database.Database): {
+  prior: number;
+  byAccount: Map<string, number>;
+} {
+  const rows = db
+    .prepare(
+      `
+      SELECT av.account_id AS account_id, av.prior_equity_value AS prior_equity_value
+      FROM account_value_points av
+      JOIN accounts a ON a.id = av.account_id
+      JOIN (
+        SELECT account_id, MAX(as_of) AS max_as_of
+        FROM account_value_points
+        GROUP BY account_id
+      ) latest ON latest.account_id = av.account_id AND latest.max_as_of = av.as_of
+      WHERE a.id LIKE 'schwab_%'
+        AND ${allSyncedAccountsWhereSql("a")}
+        AND av.prior_equity_value IS NOT NULL
+        AND av.prior_equity_value > 0
+    `,
+    )
+    .all() as Array<{ account_id: string; prior_equity_value: number }>;
+
+  const byAccount = new Map<string, number>();
+  let prior = 0;
+  for (const row of rows) {
+    const v = row.prior_equity_value;
+    if (!Number.isFinite(v)) continue;
+    byAccount.set(row.account_id, v);
+    prior += v;
+  }
+  return { prior, byAccount };
+}
+
+function resolveSchwabAccountTotals(
+  live: Awaited<ReturnType<typeof fetchSchwabLiquidationLive>>,
+  dbCurrent: ReturnType<typeof schwabLiquidationFromDb>,
+  dbPrior: ReturnType<typeof schwabPriorLiquidationFromDb>,
+  dbPriorEquity: ReturnType<typeof schwabPriorEquityFromLatestSync>,
+): { current: number; prior: number } {
+  const accountIds = new Set<string>([
+    ...dbCurrent.byAccount.keys(),
+    ...dbPrior.byAccount.keys(),
+    ...dbPriorEquity.byAccount.keys(),
+    ...(live?.byAccount.keys() ?? []),
+  ]);
+  let current = 0;
+  let prior = 0;
+  for (const accountId of accountIds) {
+    const liveEntry = live?.byAccount.get(accountId);
+    const cur = liveEntry?.current ?? dbCurrent.byAccount.get(accountId);
+    if (cur == null || !Number.isFinite(cur) || cur <= 0) continue;
+    // Prefer synced prior-session liquidation over live previousDayEquity when both exist —
+    // the API field can disagree with liquidation and inflate day %.
+    let pri =
+      dbPrior.byAccount.get(accountId) ??
+      liveEntry?.prior ??
+      dbPriorEquity.byAccount.get(accountId) ??
+      null;
+    if (pri == null || !Number.isFinite(pri) || pri <= 0) {
+      pri = cur;
+    }
+    current += cur;
+    prior += pri;
+  }
+  return { current, prior };
+}
+
+/** Intraday Schwab liquidation totals for one NY session day (for portfolio sparklines). */
+export function schwabIntradayTotalsFromDb(
+  db: Database.Database,
+  sessionYmd: string,
+): Array<{ asOf: string; tsMs: number; total: number }> {
+  const rows = db
+    .prepare(
+      `
+      SELECT av.as_of AS as_of, SUM(av.equity_value) AS total
+      FROM account_value_points av
+      JOIN accounts a ON a.id = av.account_id
+      WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql("a")}
+      GROUP BY av.as_of
+      ORDER BY av.as_of ASC
+    `,
+    )
+    .all() as Array<{ as_of: string; total: number }>;
+
+  return rows
+    .filter(
+      (row) =>
+        isoDateInUsEastern(Date.parse(row.as_of)) === sessionYmd &&
+        Number.isFinite(row.total) &&
+        row.total > 0,
+    )
+    .map((row) => ({
+      asOf: row.as_of,
+      tsMs: Date.parse(row.as_of),
+      total: row.total,
+    }))
+    .filter((row) => Number.isFinite(row.tsMs));
 }
 
 export async function resolvePortfolioAccountTotals(
@@ -180,23 +297,34 @@ export async function resolvePortfolioAccountTotals(
   const live = await fetchSchwabLiquidationLive();
   const dbSchwab = schwabLiquidationFromDb(db);
   const dbPriorSchwab = schwabPriorLiquidationFromDb(db, priorSessionYmd);
+  const dbPriorEquity = schwabPriorEquityFromLatestSync(db);
   const external = externalMarketValueFromDb(db, priorSessionYmd);
+  const schwabTotals = resolveSchwabAccountTotals(live, dbSchwab, dbPriorSchwab, dbPriorEquity);
 
-  const schwabCurrent = live?.current ?? dbSchwab.current;
+  const schwabCurrent = schwabTotals.current;
   if (schwabCurrent <= 0 && external.current <= 0) return null;
 
-  let schwabPrior = live?.prior ?? dbPriorSchwab.prior;
-  if (schwabPrior == null || !Number.isFinite(schwabPrior) || schwabPrior <= 0) {
-    schwabPrior = dbPriorSchwab.prior > 0 ? dbPriorSchwab.prior : schwabCurrent;
-  }
+  const schwabPrior = schwabTotals.prior > 0 ? schwabTotals.prior : schwabCurrent;
 
   const netValue = schwabCurrent + external.current;
   const priorNetValue = schwabPrior + external.prior;
   if (priorNetValue <= 0 || netValue <= 0) return null;
 
+  let netCashFlow = 0;
+  if (live != null) {
+    try {
+      netCashFlow = await fetchSchwabSessionNetCashFlow(sessionYmd, db);
+    } catch {
+      netCashFlow = 0;
+    }
+  }
+  const adjustedNetValue = netValue - netCashFlow;
+
   return {
     netValue,
     priorNetValue,
+    netCashFlow,
+    adjustedNetValue,
     schwabCurrent,
     schwabPrior,
     externalCurrent: external.current,

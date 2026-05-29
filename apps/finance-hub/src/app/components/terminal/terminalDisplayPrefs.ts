@@ -1,14 +1,21 @@
 import {
   DEFAULT_GLANCE_ALTERNATE_INSTRUMENT_ID,
+  DEFAULT_GLANCE_ALTERNATIVE_SLOTS,
+  DEFAULT_GLANCE_MARKETS_SLOTS,
   isGlanceAlternateInstrumentId,
+  normalizeGlanceAlternativeSlots,
+  normalizeGlanceMarketsSlots,
   type GlanceAlternateInstrumentId,
-} from "@/lib/market/glanceAlternateInstrumentIds";
+  type GlanceTileInstrumentId,
+} from "@/lib/market/glanceTileInstruments";
 
 const STOCKS_ONLY_KEY = "terminal_stocks_only_v1";
 const LEGACY_HIDE_PASSIVE_FUNDS_KEY = "terminal_hide_passive_funds_v1";
 const GLANCE_SOURCE_KEY = "terminal_glance_source_v1";
 const GLANCE_VIEW_KEY = "terminal_glance_view_v1";
 const GLANCE_ALTERNATE_INSTRUMENT_KEY = "terminal_glance_alternate_instrument_v1";
+const GLANCE_MARKETS_SLOTS_KEY = "terminal_glance_markets_slots_v1";
+const GLANCE_ALTERNATIVE_SLOTS_KEY = "terminal_glance_alternative_slots_v1";
 const WATCHLIST_ID_KEY = "terminal_watchlist_id_v1";
 const QUOTES_SORT_KEY = "terminal_quotes_sort_v1";
 const VOLUME_LEADERS_MODE_KEY = "terminal_volume_leaders_mode_v1";
@@ -19,7 +26,7 @@ const HEATMAP_HIDDEN_SYMBOLS_KEY = "terminal_heatmap_hidden_symbols_v1";
 
 export type GlanceSourceMode = "markets" | "futures";
 export type GlanceViewMode = "tiles" | "combined";
-export type { GlanceAlternateInstrumentId };
+export type { GlanceAlternateInstrumentId, GlanceTileInstrumentId };
 export type QuotesSortCol = "symbol" | "company" | "last" | "chgPct" | "chg" | "volume" | "volX";
 export type VolumeLeadersMode = "volume" | "volX";
 export type OptionFlowMode = "volume" | "relative";
@@ -84,6 +91,64 @@ export function writeGlanceAlternateInstrument(id: GlanceAlternateInstrumentId):
     // ignore
   }
 }
+
+export function readGlanceMarketsSlots(): [
+  GlanceTileInstrumentId,
+  GlanceTileInstrumentId,
+  GlanceTileInstrumentId,
+] {
+  try {
+    const raw = localStorage.getItem(GLANCE_MARKETS_SLOTS_KEY);
+    if (raw) {
+      return normalizeGlanceMarketsSlots(JSON.parse(raw) as unknown);
+    }
+  } catch {
+    // ignore
+  }
+  return normalizeGlanceMarketsSlots(null, readGlanceAlternateInstrument());
+}
+
+export function writeGlanceMarketsSlots(
+  slots: readonly [GlanceTileInstrumentId, GlanceTileInstrumentId, GlanceTileInstrumentId],
+): void {
+  try {
+    localStorage.setItem(GLANCE_MARKETS_SLOTS_KEY, JSON.stringify(slots));
+  } catch {
+    // ignore
+  }
+}
+
+export function readGlanceAlternativeSlots(): [
+  GlanceTileInstrumentId,
+  GlanceTileInstrumentId,
+  GlanceTileInstrumentId,
+  GlanceTileInstrumentId,
+] {
+  try {
+    const raw = localStorage.getItem(GLANCE_ALTERNATIVE_SLOTS_KEY);
+    if (raw) return normalizeGlanceAlternativeSlots(JSON.parse(raw) as unknown);
+  } catch {
+    // ignore
+  }
+  return [...DEFAULT_GLANCE_ALTERNATIVE_SLOTS];
+}
+
+export function writeGlanceAlternativeSlots(
+  slots: readonly [
+    GlanceTileInstrumentId,
+    GlanceTileInstrumentId,
+    GlanceTileInstrumentId,
+    GlanceTileInstrumentId,
+  ],
+): void {
+  try {
+    localStorage.setItem(GLANCE_ALTERNATIVE_SLOTS_KEY, JSON.stringify(slots));
+  } catch {
+    // ignore
+  }
+}
+
+export { DEFAULT_GLANCE_MARKETS_SLOTS, DEFAULT_GLANCE_ALTERNATIVE_SLOTS };
 
 export function readStocksOnlyView(): boolean {
   try {

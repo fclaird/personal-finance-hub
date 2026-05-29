@@ -23,7 +23,7 @@ export function mergeWithDefaults<T extends string>(saved: unknown, defaultOrder
   return out;
 }
 
-function readPersistedOrder<T extends string>(
+export function readPersistedOrder<T extends string>(
   storageKey: string,
   defaultOrder: readonly T[],
   legacyStorageKeys?: readonly string[],
@@ -42,19 +42,27 @@ function readPersistedOrder<T extends string>(
   return [...defaultOrder];
 }
 
+export function persistOrder<T extends string>(storageKey: string, order: readonly T[]): void {
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(order));
+  } catch {
+    /* ignore */
+  }
+}
+
 export function usePersistedOrder<T extends string>(
   storageKey: string,
   defaultOrder: readonly T[],
   legacyStorageKeys?: readonly string[],
 ) {
-  const [order, setOrder] = useState<T[]>(() => [...defaultOrder]);
+  const [order, setOrderState] = useState<T[]>(() => [...defaultOrder]);
   const ignoreNextPersist = useRef(true);
   const defaultSignature = defaultOrder.join("|");
   const legacySignature = legacyStorageKeys?.join("|") ?? "";
 
   useEffect(() => {
     ignoreNextPersist.current = true;
-    setOrder(readPersistedOrder(storageKey, defaultOrder, legacyStorageKeys));
+    setOrderState(readPersistedOrder(storageKey, defaultOrder, legacyStorageKeys));
   }, [storageKey, defaultSignature, legacySignature]);
 
   useEffect(() => {
@@ -62,33 +70,42 @@ export function usePersistedOrder<T extends string>(
       ignoreNextPersist.current = false;
       return;
     }
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(order));
-    } catch {
-      /* ignore */
-    }
+    persistOrder(storageKey, order);
   }, [storageKey, order]);
+
+  const setOrder = useCallback(
+    (value: T[] | ((prev: T[]) => T[])) => {
+      setOrderState((prev) => {
+        const next = typeof value === "function" ? value(prev) : value;
+        persistOrder(storageKey, next);
+        return next;
+      });
+    },
+    [storageKey],
+  );
 
   function moveIndex(fromIndex: number, toIndex: number) {
     if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
-    setOrder((prev) => {
+    setOrderState((prev) => {
       if (fromIndex >= prev.length || toIndex >= prev.length) return prev;
       const next = prev.slice();
       const [removed] = next.splice(fromIndex, 1);
       next.splice(toIndex, 0, removed);
+      persistOrder(storageKey, next);
       return next;
     });
   }
 
   function reorderById(sourceId: T, targetId: T) {
     if (sourceId === targetId) return;
-    setOrder((prev) => {
+    setOrderState((prev) => {
       const i = prev.indexOf(sourceId);
       const j = prev.indexOf(targetId);
       if (i < 0 || j < 0) return prev;
       const next = [...prev];
       next.splice(i, 1);
       next.splice(j, 0, sourceId);
+      persistOrder(storageKey, next);
       return next;
     });
   }

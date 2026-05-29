@@ -20,3 +20,10 @@ test("resolveEquityMarkPx falls back to price_points then snapshot implied", () 
   assert.equal(resolveEquityMarkPx("RKLB", live, pricePoints, 35.4979), 35.5);
   assert.equal(resolveEquityMarkPx("RKLB", live, new Map(), 35.4979), 35.4979);
 });
+
+test("resolveEquityMarkPx uses Yahoo live before schwab price_points", () => {
+  const live = new Map<string, number>();
+  const pricePoints = new Map([["VFFSX", 99]]);
+  const yahoo = new Map([["VFFSX", 101.25]]);
+  assert.equal(resolveEquityMarkPx("VFFSX", live, pricePoints, 98, yahoo), 101.25);
+});

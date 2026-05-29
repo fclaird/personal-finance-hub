@@ -30,3 +30,20 @@ test("filterExtendedRawForGrid keeps pre-market bars after prior RTH close", () 
   const out = filterExtendedRawForGrid(extended, regular, "pre");
   assert.deepEqual(out, [{ tsMs: 2000, close: 101 }]);
 });
+
+test("filterExtendedRawForGrid drops overnight dead-zone bars", () => {
+  const sessionYmd = "2026-05-22";
+  const regular = [{ tsMs: new Date(`${sessionYmd}T16:00:00-04:00`).getTime(), close: 100 }];
+  const deadZone = new Date(`${sessionYmd}T22:00:00-04:00`).getTime();
+  const postMarket = new Date(`${sessionYmd}T17:30:00-04:00`).getTime();
+  const out = filterExtendedRawForGrid(
+    [
+      { tsMs: deadZone, close: 99 },
+      { tsMs: postMarket, close: 101 },
+    ],
+    regular,
+    "post",
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0]!.tsMs, postMarket);
+});

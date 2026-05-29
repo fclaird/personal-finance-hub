@@ -7,6 +7,7 @@ import { logError } from "@/lib/log";
 import type { DataMode } from "@/lib/dataMode";
 import { ensureBenchmarkHistory } from "@/lib/market/benchmarks";
 import { ensureOptionGreeksOnLatestSnapshots } from "@/lib/schwab/ensureOptionGreeks";
+import { pickEquityUsd, pickSchwabPriorDayEquityUsd } from "@/lib/schwab/accountBalances";
 import { lastCompletedNyWeekday } from "@/lib/analytics/allocationNyDate";
 import { recordAllocationDailyCloseModes } from "@/lib/analytics/recordAllocationDailyClose";
 import { upsertWeekEndingPortfolioSnapshots } from "@/lib/portfolio/snapshots";
@@ -51,24 +52,6 @@ function pickCashUsd(cb: Record<string, unknown> | undefined): number | null {
     "availableFunds",
     "moneyMarketFund",
     "sweepVehicle",
-  ];
-  for (const k of keys) {
-    const n = asNumber(cb[k]);
-    if (n != null) return n;
-  }
-  return null;
-}
-
-function pickEquityUsd(cb: Record<string, unknown> | undefined): number | null {
-  if (!cb) return null;
-  const keys = [
-    "liquidationValue",
-    "netLiquidation",
-    "equity",
-    "equityValue",
-    "accountValue",
-    "totalAccountValue",
-    "totalValue",
   ];
   for (const k of keys) {
     const n = asNumber(cb[k]);
@@ -160,11 +143,12 @@ export async function runSchwabHoldingsSync(
   `);
 
     const upsertAccountValuePoint = db.prepare(`
-    INSERT INTO account_value_points (account_id, as_of, equity_value, cash_value, source)
-    VALUES (@account_id, @as_of, @equity_value, @cash_value, 'schwab_balances')
+    INSERT INTO account_value_points (account_id, as_of, equity_value, cash_value, prior_equity_value, source)
+    VALUES (@account_id, @as_of, @equity_value, @cash_value, @prior_equity_value, 'schwab_balances')
     ON CONFLICT(account_id, as_of) DO UPDATE SET
       equity_value = excluded.equity_value,
-      cash_value = excluded.cash_value
+      cash_value = excluded.cash_value,
+      prior_equity_value = excluded.prior_equity_value
   `);
 
     const tx = db.transaction(() => {
@@ -277,6 +261,7 @@ export async function runSchwabHoldingsSync(
         }
 
         const equityFromBalances = pickEquityUsd(sa.currentBalances);
+        const priorEquity = pickSchwabPriorDayEquityUsd(sa.currentBalances);
         const equityValue =
           equityFromBalances ?? (cashUsd ?? 0) + (hasAnyPosMv ? computedPositionsMv : 0);
         if (Number.isFinite(equityValue)) {
@@ -285,6 +270,7 @@ export async function runSchwabHoldingsSync(
             as_of: nowIso,
             equity_value: equityValue,
             cash_value: cashUsd,
+            prior_equity_value: priorEquity,
           });
         }
       }

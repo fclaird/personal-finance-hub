@@ -16,6 +16,7 @@ import {
   toGlanceSeries,
   type GlanceTimedGrid,
 } from "@/lib/market/glanceSessionGrid";
+import { nyWallTimeMs } from "@/lib/market/futuresGlanceSession";
 import { filterTimedPointsForGlanceSession } from "@/lib/market/glanceTimedFilters";
 import {
   filterYahooClosesToSession,
@@ -297,7 +298,7 @@ async function buildIndexCard(
 ): Promise<UsMarketIndexCard> {
   const ctx = glanceChartContext(now);
   const sessionOpen = isUsEquityRegularSessionOpen(now);
-  /** Keep after-hours on closed-session charts even outside the live 16:00–20:00 window. */
+  /** Include extended segments when closed (AH / overnight); RTH charts are 09:30–16:00 only. */
   const includeExtendedChart = ctx.showExtended || !sessionOpen;
   const sessionYmd = ctx.sessionYmd;
   const sym = def.symbol.toUpperCase();
@@ -314,7 +315,16 @@ async function buildIndexCard(
   const includePrePost = ctx.showExtended || yahooRange === "5d" || grid != null;
 
   if (grid && grid.regular.length >= 1) {
-    const extPhase = extendedPhaseForGrid(grid) ?? ctx.extendedPhase ?? "post";
+    const overnightBridge =
+      !sessionOpen && ctx.extendedPhase === "pre" && sessionYmd !== ctx.chartYmd;
+    let extPhase =
+      sessionOpen
+        ? null
+        : overnightBridge
+          ? "pre"
+          : sessionYmd !== ctx.chartYmd
+            ? "post"
+            : (extendedPhaseForGrid(grid, sessionYmd) ?? ctx.extendedPhase ?? "post");
     let regularTimed: TimedClosePoint[] = [];
     let extendedTimed: TimedClosePoint[] = [];
 
@@ -322,7 +332,15 @@ async function buildIndexCard(
     if (yahooGrid?.result) {
       const timed = filterTimedPointsForGlanceSession(extractYahooTimedCloses(yahooGrid.result), sessionYmd, ctx);
       regularTimed = timed.filter((p) => nyBarPhase(p.tsMs, sessionYmd) === "regular");
-      extendedTimed = timed.filter((p) => nyBarPhase(p.tsMs, ctx.chartYmd) === extPhase);
+      const rthEndTs = regularTimed.length > 0 ? regularTimed[regularTimed.length - 1]!.tsMs : null;
+      if (sessionOpen) {
+        extendedTimed = [];
+        extPhase = null;
+      } else if (extPhase === "pre" && !overnightBridge) {
+        extendedTimed = timed.filter((p) => nyBarPhase(p.tsMs, ctx.chartYmd) === "pre");
+      } else {
+        extendedTimed = timed.filter((p) => rthEndTs != null && p.tsMs > rthEndTs);
+      }
       const meta = yahooGrid.result.meta as Record<string, unknown> | undefined;
       previousClose =
         asNum(meta?.chartPreviousClose) ??
@@ -330,11 +348,13 @@ async function buildIndexCard(
         asNum(meta?.regularMarketPreviousClose) ??
         null;
       last =
-        includeExtendedChart && extendedTimed.length > 0
-          ? extendedTimed[extendedTimed.length - 1]!.close
-          : regularTimed.length > 0
-            ? regularTimed[regularTimed.length - 1]!.close
-            : asNum(meta?.postMarketPrice) ?? asNum(meta?.regularMarketPrice);
+        sessionOpen && regularTimed.length > 0
+          ? regularTimed[regularTimed.length - 1]!.close
+          : includeExtendedChart && extendedTimed.length > 0
+            ? extendedTimed[extendedTimed.length - 1]!.close
+            : regularTimed.length > 0
+              ? regularTimed[regularTimed.length - 1]!.close
+              : asNum(meta?.postMarketPrice) ?? asNum(meta?.regularMarketPrice);
     }
 
     if (regularTimed.length < 2) {
@@ -355,7 +375,10 @@ async function buildIndexCard(
     series = toGlanceSeries(resampledRegular);
     sessionClose = series.length > 0 ? series[series.length - 1]!.close : null;
 
-    if (includeExtendedChart && grid.extended.length > 0 && sessionClose != null) {
+    if (sessionOpen) {
+      extendedSeries = [];
+      extendedPhase = null;
+    } else if (includeExtendedChart && grid.extended.length > 0 && sessionClose != null) {
       const resampledExt = resampleTimedPointsToGrid(extendedTimed, grid.extended);
       extendedSeries = buildAlignedExtendedSeries(series, resampledExt, sessionClose);
       extendedPhase = extPhase;

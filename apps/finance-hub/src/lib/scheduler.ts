@@ -2,6 +2,7 @@ import { scheduleColdStartupDataPullOnce } from "@/lib/coldStartupDataPull";
 import { logError, logLine } from "@/lib/log";
 import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import { runSchwabRefreshSchedulerTick } from "@/lib/schwab/refreshOrchestrator";
+import { warmGlanceCache } from "@/lib/terminal/glanceCache";
 
 type SchedulerState = {
   started: boolean;
@@ -51,6 +52,8 @@ export function startSchedulerOnce() {
     } catch (e) {
       logError("scheduler_schwab_refresh_tick_failed", e);
     }
+    // Keep the terminal quick-glance payload warm so page opens are a local cache read.
+    void warmGlanceCache().catch((e) => logError("scheduler_glance_warm_failed", e));
   }
 
   const jitterMs = () => Math.floor(Math.random() * 5_000);

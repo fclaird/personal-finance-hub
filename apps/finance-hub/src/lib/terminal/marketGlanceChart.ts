@@ -5,7 +5,6 @@ import {
 } from "@/lib/market/glanceTileChartRows";
 import {
   GLANCE_CHART_BASELINE,
-  sharedSparklineYDomain,
   yDomainFromChartRange,
 } from "@/app/components/terminal/MarketGlanceCard";
 import {
@@ -32,6 +31,8 @@ export const GLANCE_ALTERNATE_CHART_LINES: GlanceChartLine[] = [
   { id: "russell2000", label: "Russell 2000", color: "#ea580c" },
   { id: "gold", label: "Gold", color: "#ca8a04" },
   { id: "bitcoin", label: "Bitcoin", color: "#f59e0b" },
+  { id: "ethereum", label: "Ethereum", color: "#8b5cf6" },
+  { id: "vix", label: "VIX", color: "#dc2626" },
   { id: "us-cl", label: "WTI Crude", color: "#ea580c" },
   { id: "jp-n225", label: "Nikkei 225", color: "#2563eb" },
   { id: "ftse100", label: "FTSE 100", color: "#0891b2" },
@@ -144,7 +145,11 @@ function sampleIndexedValue(points: Array<{ value: number }>, position: number):
   return points[lo]!.value * (1 - frac) + points[hi]!.value * frac;
 }
 
-export function sampleIndexedValueAtTime(points: IndexedGlancePoint[], tsMs: number): number | null {
+export function sampleIndexedValueAtTime(
+  points: IndexedGlancePoint[],
+  tsMs: number,
+  options?: { extrapolateAfterLast?: boolean },
+): number | null {
   const timed = points.filter((p) => p.tsMs != null && Number.isFinite(p.tsMs));
   if (timed.length === 0) return null;
   const first = timed[0]!;
@@ -152,7 +157,10 @@ export function sampleIndexedValueAtTime(points: IndexedGlancePoint[], tsMs: num
   const firstTs = first.tsMs!;
   const lastTs = last.tsMs!;
   if (tsMs <= firstTs) return first.value;
-  if (tsMs >= lastTs) return last.value;
+  if (tsMs > lastTs) {
+    return options?.extrapolateAfterLast === false ? null : last.value;
+  }
+  if (tsMs === lastTs) return last.value;
   for (let i = 1; i < timed.length; i++) {
     const hi = timed[i]!;
     const lo = timed[i - 1]!;
@@ -300,8 +308,6 @@ export function overlayChartYDomain(
   chartData: Array<Record<string, number | null>>,
   lineIds: string[],
 ): [number, number] {
-  const shared = sharedSparklineYDomain(items, windowCtx);
-  if (shared) return shared;
   return glanceChartYDomain(chartData, lineIds, items, windowCtx);
 }
 
@@ -426,24 +432,13 @@ function assignOverlayBandStrokes(
   priorRefY: number,
   sessionRefY: number | null,
 ): OverlayPrimaryBandRow {
-  const rthCross =
-    row.gainFill != null &&
-    row.lossFill != null &&
-    Math.abs(row.gainFill - priorRefY) <= 1e-9 &&
-    Math.abs(row.lossFill - priorRefY) <= 1e-9;
-  const extCross =
-    sessionRefY != null &&
-    row.extGainFill != null &&
-    row.extLossFill != null &&
-    Math.abs(row.extGainFill - sessionRefY) <= 1e-9 &&
-    Math.abs(row.extLossFill - sessionRefY) <= 1e-9;
-
+  const extRefY = sessionRefY ?? priorRefY;
   return {
     ...row,
-    gainStroke: rthCross ? priorRefY : overlayPriceStrokeFromFill(row.gainFill, priorRefY),
-    lossStroke: rthCross ? priorRefY : overlayPriceStrokeFromFill(row.lossFill, priorRefY),
-    extGainStroke: extCross ? sessionRefY : row.extGainFill ?? null,
-    extLossStroke: extCross ? sessionRefY : row.extLossFill ?? null,
+    gainStroke: overlayPriceStrokeFromFill(row.gainFill, priorRefY),
+    lossStroke: overlayPriceStrokeFromFill(row.lossFill, priorRefY),
+    extGainStroke: overlayPriceStrokeFromFill(row.extGainFill, extRefY),
+    extLossStroke: overlayPriceStrokeFromFill(row.extLossFill, extRefY),
   };
 }
 

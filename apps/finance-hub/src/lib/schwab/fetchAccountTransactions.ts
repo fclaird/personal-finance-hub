@@ -10,7 +10,7 @@ function toIsoDate(d: Date): string {
 }
 
 /** Schwab validates dates in US market calendar; UTC midnight can be "tomorrow" vs ET and triggers 400. */
-function schwabCalendarTodayIso(): string {
+export function schwabCalendarTodayIso(): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/New_York",
     year: "numeric",
@@ -67,13 +67,14 @@ export async function fetchSchwabTransactionsWindow(
   startDate: string,
   endDate: string,
   maxCalendarIso: string,
+  types = "TRADE",
 ): Promise<SchwabTxnRaw[]> {
   const norm = normalizeSchwabTransactionWindow(startDate, endDate, maxCalendarIso);
   if (!norm) return [];
   const { start, end } = norm;
 
   const qs = new URLSearchParams({
-    types: "TRADE",
+    types,
     startDate: schwabTransactionDateParam(start, "start"),
     endDate: schwabTransactionDateParam(end, "end"),
   });

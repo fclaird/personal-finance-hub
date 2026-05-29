@@ -1,15 +1,16 @@
 import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
+import { glanceChartContext } from "@/lib/market/glanceExtendedHours";
 import { formatGlanceSessionLabel, glanceSessionYmd, glanceSessionUsesPriorDay } from "@/lib/market/glanceSession";
 import { fetchCanonicalGlanceGrid } from "@/lib/market/glanceSessionGrid";
 import { normalizeSchwabQuoteSymbol } from "@/lib/market/schwabSymbol";
 import { usEquitySessionStatus } from "@/lib/market/usEquitySession";
 import { buildSymbolGlanceCard } from "@/lib/market/usMarketIndices";
+import type { GlanceTileChartWindowCtx } from "@/lib/market/glanceTileChartWindow";
 import {
   formatGlanceCombinedChartTime,
   indexedGlanceValueToRebasedPct,
   mergeGlanceSeriesForChart,
 } from "@/lib/terminal/marketGlanceChart";
-import type { GlanceTileChartWindowCtx } from "@/lib/market/glanceTileChartWindow";
 
 export type SymbolPerformanceIntradayPoint = {
   tsMs: number | null;
@@ -32,9 +33,13 @@ export async function fetchSymbolPerformanceIntraday(
   const sessionYmd = glanceSessionYmd(now);
   const grid = await fetchCanonicalGlanceGrid(sessionYmd, now);
   const session = usEquitySessionStatus(now);
+  const showingPriorSession = glanceSessionUsesPriorDay(now);
+  const chartCtx = glanceChartContext(now);
   const windowCtx: GlanceTileChartWindowCtx = {
     marketOpen: session.isOpen,
     sessionYmd,
+    chartYmd: chartCtx.chartYmd,
+    showingPriorSession,
     nowMs: now.getTime(),
   };
   const cards = await Promise.all(
@@ -60,7 +65,7 @@ export async function fetchSymbolPerformanceIntraday(
   return {
     sessionYmd,
     sessionLabel: formatGlanceSessionLabel(sessionYmd),
-    showingPriorSession: glanceSessionUsesPriorDay(now),
+    showingPriorSession,
     marketOpen: session.isOpen,
     windowCtx,
     items,

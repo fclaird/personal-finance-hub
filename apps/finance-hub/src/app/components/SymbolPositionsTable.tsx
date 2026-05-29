@@ -14,6 +14,7 @@ import {
   type PositionsColumnId,
 } from "@/lib/positions/positionsColumnOrder";
 import { usePositionsColumnOrder } from "@/lib/positions/usePositionsColumnOrder";
+import { optionMarginRoiForRow } from "@/lib/options/optionMarginRoiDisplay";
 import { symbolPageTargetFromInstrument } from "@/lib/symbolPage";
 import { posNegClass } from "@/lib/terminal/colors";
 
@@ -23,6 +24,9 @@ const SYMBOL_POSITIONS_COLUMNS: readonly PositionsColumnId[] = [
   "quantity",
   "price",
   "marketValue",
+  "marginSecured",
+  "roi",
+  "annualizedRoi",
   "delta",
   "gamma",
   "theta",
@@ -133,6 +137,30 @@ export function SymbolPositionsTable({
             {rowMark.marketValue == null ? "—" : usd2Masked(rowMark.marketValue, privacyMasked)}
           </td>
         );
+      case "marginSecured": {
+        const m = optionMarginRoiForRow(r);
+        return (
+          <td key={colId} className="whitespace-nowrap py-1 pr-4 text-right text-zinc-800 dark:text-zinc-200">
+            {m == null ? "—" : usd2Masked(m.marginSecured, privacyMasked)}
+          </td>
+        );
+      }
+      case "roi": {
+        const m = optionMarginRoiForRow(r);
+        return (
+          <td key={colId} className="whitespace-nowrap py-1 pr-4 text-right text-zinc-800 dark:text-zinc-200">
+            {m == null ? "—" : `${formatNum(m.roiPct, 2)}%`}
+          </td>
+        );
+      }
+      case "annualizedRoi": {
+        const m = optionMarginRoiForRow(r);
+        return (
+          <td key={colId} className="whitespace-nowrap py-1 pr-4 text-right text-zinc-800 dark:text-zinc-200">
+            {m == null ? "—" : `${formatNum(m.annualizedRoiPct, 2)}%`}
+          </td>
+        );
+      }
       case "delta":
         return (
           <td key={colId} className={"whitespace-nowrap py-1 pr-4 text-right " + posNegClass(r.delta)}>

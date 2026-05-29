@@ -19,13 +19,19 @@ export function resolveEquityMarkPx(
   live: Map<string, number>,
   pricePoints: Map<string, number>,
   snapshotImplied: number | null | undefined,
+  yahooLive: Map<string, number> = new Map(),
+  yahooPricePoints: Map<string, number> = new Map(),
 ): number | null {
   const key = normalizeEquitySymbol(symbol);
   if (!key || key === "CASH") return key === "CASH" ? 1 : null;
   const livePx = live.get(key);
   if (livePx != null && Number.isFinite(livePx) && livePx > 0) return livePx;
+  const yahooPx = yahooLive.get(key);
+  if (yahooPx != null && Number.isFinite(yahooPx) && yahooPx > 0) return yahooPx;
   const qpx = pricePoints.get(key);
   if (qpx != null && Number.isFinite(qpx) && qpx > 0) return qpx;
+  const yahooCached = yahooPricePoints.get(key);
+  if (yahooCached != null && Number.isFinite(yahooCached) && yahooCached > 0) return yahooCached;
   if (snapshotImplied != null && Number.isFinite(snapshotImplied) && snapshotImplied > 0) return snapshotImplied;
   return null;
 }

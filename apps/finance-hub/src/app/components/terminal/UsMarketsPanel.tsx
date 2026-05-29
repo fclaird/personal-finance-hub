@@ -1,24 +1,30 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   MarketGlanceCard,
-  sharedSparklineYDomain,
   type UsMarketGlanceItem,
 } from "@/app/components/terminal/MarketGlanceCard";
 import { MarketGlanceCombinedChart } from "@/app/components/terminal/MarketGlanceCombinedChart";
+import { resolveMarketsSlotInstrumentId } from "@/lib/market/glanceMarketsTileResolve";
 import {
+  buildGlanceCardLookup,
+  collectGlanceCards,
   GLANCE_ALTERNATE_INSTRUMENT_OPTIONS,
-  pickGlanceAlternateCard,
-  type GlanceAlternateInstrumentId,
-} from "@/lib/market/glanceAlternateInstrumentIds";
+  GLANCE_ALTERNATIVE_SLOT_OPTIONS,
+  GLANCE_MARKETS_SLOT_2_OPTIONS,
+  GLANCE_MARKETS_SLOT_3_OPTIONS,
+  type GlanceTileInstrumentId,
+} from "@/lib/market/glanceTileInstruments";
 import type { GlanceTileChartWindowCtx } from "@/lib/market/glanceTileChartWindow";
 import {
-  readGlanceAlternateInstrument,
+  readGlanceAlternativeSlots,
+  readGlanceMarketsSlots,
   readGlanceSourceMode,
   readGlanceViewMode,
-  writeGlanceAlternateInstrument,
+  writeGlanceAlternativeSlots,
+  writeGlanceMarketsSlots,
   writeGlanceSourceMode,
   writeGlanceViewMode,
   type GlanceSourceMode,
@@ -34,6 +40,7 @@ export type UsMarketsPayload = {
     showingPriorSession?: boolean;
     sessionLabel?: string;
     sessionYmd?: string;
+    chartYmd?: string;
   };
   items: UsMarketGlanceItem[];
   alternateGlanceItems?: UsMarketGlanceItem[];
@@ -54,18 +61,25 @@ function resolveGlanceMarketOpen(
   return sessionIsOpen;
 }
 
+function resolveTileCard(
+  lookup: Map<string, UsMarketGlanceItem>,
+  id: GlanceTileInstrumentId,
+): UsMarketGlanceItem | null {
+  return lookup.get(id) ?? null;
+}
+
 export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | null }) {
   const [viewMode, setViewMode] = useState<GlanceViewMode>("tiles");
   const [sourceMode, setSourceMode] = useState<GlanceSourceMode>("markets");
-  const [alternateInstrumentId, setAlternateInstrumentId] = useState<GlanceAlternateInstrumentId>(
-    readGlanceAlternateInstrument(),
-  );
+  const [marketsSlots, setMarketsSlots] = useState(readGlanceMarketsSlots);
+  const [alternativeSlots, setAlternativeSlots] = useState(readGlanceAlternativeSlots);
   const [prefsHydrated, setPrefsHydrated] = useState(false);
 
   useEffect(() => {
     setViewMode(readGlanceViewMode());
     setSourceMode(readGlanceSourceMode());
-    setAlternateInstrumentId(readGlanceAlternateInstrument());
+    setMarketsSlots(readGlanceMarketsSlots());
+    setAlternativeSlots(readGlanceAlternativeSlots());
     setPrefsHydrated(true);
   }, []);
 
@@ -81,32 +95,132 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
 
   useEffect(() => {
     if (!prefsHydrated) return;
-    writeGlanceAlternateInstrument(alternateInstrumentId);
-  }, [alternateInstrumentId, prefsHydrated]);
+    writeGlanceMarketsSlots(marketsSlots);
+  }, [marketsSlots, prefsHydrated]);
 
-  const alternateItem = useMemo(
-    () => pickGlanceAlternateCard(usMarkets?.alternateGlanceItems ?? [], alternateInstrumentId),
-    [usMarkets?.alternateGlanceItems, alternateInstrumentId],
+  useEffect(() => {
+    if (!prefsHydrated) return;
+    writeGlanceAlternativeSlots(alternativeSlots);
+  }, [alternativeSlots, prefsHydrated]);
+
+  const cardLookup = useMemo(() => {
+    if (!usMarkets) return new Map<string, UsMarketGlanceItem>();
+    return buildGlanceCardLookup(collectGlanceCards(usMarkets));
+  }, [usMarkets]);
+
+  const marketsTileSpecs = useMemo(() => {
+    const now = new Date();
+    const portfolio = usMarkets?.items[0];
+    if (!portfolio) return [];
+    const slot2Id = resolveMarketsSlotInstrumentId(2, marketsSlots[0], now);
+    const slot3Id = resolveMarketsSlotInstrumentId(3, marketsSlots[1], now);
+    const slot4Id = marketsSlots[2];
+    return [
+      { storedId: "portfolio" as const, resolvedId: "portfolio" as const, card: portfolio, adjustable: false },
+      {
+        storedId: marketsSlots[0],
+        resolvedId: slot2Id,
+        card: resolveTileCard(cardLookup, slot2Id),
+        adjustable: true,
+        slotIndex: 2 as const,
+      },
+      {
+        storedId: marketsSlots[1],
+        resolvedId: slot3Id,
+        card: resolveTileCard(cardLookup, slot3Id),
+        adjustable: true,
+        slotIndex: 3 as const,
+      },
+      {
+        storedId: slot4Id,
+        resolvedId: slot4Id,
+        card: resolveTileCard(cardLookup, slot4Id),
+        adjustable: true,
+        slotIndex: 4 as const,
+      },
+    ];
+  }, [cardLookup, marketsSlots, usMarkets?.items]);
+
+  const alternativeTileSpecs = useMemo(
+    () =>
+      alternativeSlots.map((storedId, index) => ({
+        storedId,
+        resolvedId: storedId,
+        card: resolveTileCard(cardLookup, storedId),
+        adjustable: true,
+        slotIndex: (index + 1) as 1 | 2 | 3 | 4,
+      })),
+    [alternativeSlots, cardLookup],
   );
 
-  const displayItems = useMemo(() => {
-    if (sourceMode === "futures") return usMarkets?.futuresGlanceItems ?? [];
-    const base = usMarkets?.items ?? [];
-    return alternateItem ? [...base, alternateItem] : base;
-  }, [alternateItem, sourceMode, usMarkets?.futuresGlanceItems, usMarkets?.items]);
+  const tileSpecs = sourceMode === "futures" ? alternativeTileSpecs : marketsTileSpecs;
+  const displayItems = useMemo(
+    () => tileSpecs.map((s) => s.card).filter((c): c is UsMarketGlanceItem => c != null),
+    [tileSpecs],
+  );
 
   const tileChartWindowCtx = useMemo(
     (): GlanceTileChartWindowCtx => ({
       marketOpen: usMarkets?.session.isOpen ?? false,
       sessionYmd: usMarkets?.session.sessionYmd,
+      chartYmd: usMarkets?.session.chartYmd,
+      showingPriorSession: usMarkets?.session.showingPriorSession,
+      nowMs: Date.now(),
     }),
-    [usMarkets?.session.isOpen, usMarkets?.session.sessionYmd],
+    [
+      usMarkets?.session.isOpen,
+      usMarkets?.session.sessionYmd,
+      usMarkets?.session.chartYmd,
+      usMarkets?.session.showingPriorSession,
+    ],
   );
 
-  const tileChartYDomain = useMemo(
-    () =>
-      displayItems.length > 0 ? sharedSparklineYDomain(displayItems, tileChartWindowCtx) : undefined,
-    [displayItems, tileChartWindowCtx],
+  const setMarketsSlot = useCallback((slotIndex: 2 | 3 | 4, id: GlanceTileInstrumentId) => {
+    setMarketsSlots((prev) => {
+      const next: [GlanceTileInstrumentId, GlanceTileInstrumentId, GlanceTileInstrumentId] = [...prev];
+      next[slotIndex - 2] = id;
+      return next;
+    });
+  }, []);
+
+  const setAlternativeSlot = useCallback((slotIndex: 1 | 2 | 3 | 4, id: GlanceTileInstrumentId) => {
+    setAlternativeSlots((prev) => {
+      const next: [
+        GlanceTileInstrumentId,
+        GlanceTileInstrumentId,
+        GlanceTileInstrumentId,
+        GlanceTileInstrumentId,
+      ] = [...prev];
+      next[slotIndex - 1] = id;
+      return next;
+    });
+  }, []);
+
+  const titleSelectorForSpec = useCallback(
+    (spec: (typeof tileSpecs)[number]) => {
+      if (!spec.adjustable || !("slotIndex" in spec)) return undefined;
+      if (sourceMode === "futures") {
+        const slotIndex = spec.slotIndex as 1 | 2 | 3 | 4;
+        return {
+          options: GLANCE_ALTERNATIVE_SLOT_OPTIONS,
+          value: spec.storedId,
+          onChange: (id: GlanceTileInstrumentId) => setAlternativeSlot(slotIndex, id),
+        };
+      }
+      const slotIndex = spec.slotIndex as 2 | 3 | 4;
+      const options =
+        slotIndex === 2
+          ? GLANCE_MARKETS_SLOT_2_OPTIONS
+          : slotIndex === 3
+            ? GLANCE_MARKETS_SLOT_3_OPTIONS
+            : GLANCE_ALTERNATE_INSTRUMENT_OPTIONS;
+      return {
+        options,
+        value: spec.storedId,
+        onChange: (id: GlanceTileInstrumentId) => setMarketsSlot(slotIndex, id),
+      };
+    },
+    [setAlternativeSlot, setMarketsSlot, sourceMode],
   );
 
   return (
@@ -130,7 +244,7 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
             ) : null}
             {sourceMode === "futures" ? (
               <span className="text-[11px] font-medium text-zinc-600 dark:text-zinc-300">
-                Nikkei · ES · NQ · Russell (Yahoo + Stooq)
+                Each tile is selectable (Nikkei, ES/NQ, Russell, Gold, crypto, VIX, WTI, FTSE, QQQ/SPY)
               </span>
             ) : null}
           </div>
@@ -167,7 +281,7 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
                   : " text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900")
               }
             >
-              Futures
+              Alternative
             </button>
           </div>
           <div
@@ -212,48 +326,44 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
         <>
           {viewMode === "tiles" ? (
             <div className="mt-3 grid min-w-0 grid-cols-4 gap-3 overflow-x-auto pb-1">
-              {displayItems.map((item) => (
-                <MarketGlanceCard
-                  key={item.id}
-                  item={item}
-                  chartYDomain={tileChartYDomain}
-                  className="min-w-0"
-                  marketOpen={resolveGlanceMarketOpen(item, usMarkets.session.isOpen)}
-                  sessionLabel={usMarkets.session.sessionLabel}
-                  sessionYmd={usMarkets.session.sessionYmd}
-                  updatedAt={usMarkets.updatedAt}
-                  alternateTitleSelector={
-                    sourceMode === "markets" && item.id === alternateItem?.id
-                      ? {
-                          options: GLANCE_ALTERNATE_INSTRUMENT_OPTIONS,
-                          value: alternateInstrumentId,
-                          onChange: setAlternateInstrumentId,
-                        }
-                      : undefined
-                  }
-                />
-              ))}
+              {tileSpecs.map((spec, index) => {
+                const item = spec.card;
+                if (!item) return null;
+                return (
+                  <MarketGlanceCard
+                    key={`${sourceMode}-slot-${index}`}
+                    item={item}
+                    className="min-w-0"
+                    marketOpen={resolveGlanceMarketOpen(item, usMarkets.session.isOpen)}
+                    sessionLabel={usMarkets.session.sessionLabel}
+                    sessionYmd={usMarkets.session.sessionYmd}
+                    chartYmd={usMarkets.session.chartYmd}
+                    showingPriorSession={usMarkets.session.showingPriorSession}
+                    updatedAt={usMarkets.updatedAt}
+                    alternateTitleSelector={titleSelectorForSpec(spec)}
+                  />
+                );
+              })}
             </div>
           ) : (
             <MarketGlanceCombinedChart
               items={displayItems}
               windowCtx={tileChartWindowCtx}
-              chartYDomain={tileChartYDomain}
             />
           )}
           <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
             {viewMode === "combined"
               ? sourceMode === "futures"
-                ? "Futures mode: green = Globex/cash session while that market trades (~23h ES/NQ Sun 6pm–Fri 5pm ET). Gray only for daily 5–6pm ET halt or weekend. Not US stock RTH hours."
-                : "Combined view indexes each line to 100 at prior close so portfolio and index day moves are comparable. Extended pre/after-hours segments are included when available."
+                ? "Alternative mode: green = Globex/cash session while that market trades (~23h ES/NQ Sun 6pm–Fri 5pm ET). Gray only for daily 5–6pm ET halt or weekend. Not US stock RTH hours."
+                : "Combined view indexes each line to 100 at prior close so portfolio and index day moves are comparable. Extended pre/after-hours segments are included when available (8pm–4am ET excluded)."
               : sourceMode === "futures"
-                ? "ES/NQ are CME Globex futures. Nikkei 225 is the Tokyo cash index (not a future). Russell 2000 tracks IWM with US equity session hours. Amber header = that market is closed."
-                : "Portfolio tile uses Schwab liquidation/account values for linked accounts, plus 529 and other external holdings. The 4th tile title opens a menu (Russell 2000, Gold, Bitcoin, WTI Crude, Nikkei 225, FTSE 100). Default is WTI Crude (CL futures, Globex hours). Tile charts zoom to the last RTH hour after the close (from 15:00 ET) or pre-market plus session after the open (from 08:30 ET). When a market is closed the dashed line sits at session close and extended hours are shaded gray."}
+                ? "Each tile title opens a menu. ES/NQ are CME Globex futures; Nikkei 225 is the Tokyo cash index. Amber header = that market is closed."
+                : "Portfolio uses Schwab liquidation values plus external holdings. Nasdaq and S&P tiles auto-switch to NQ/ES e-mini outside US RTH unless you pick a specific instrument. Slots 2–4 have title menus. Tile charts zoom to the last RTH hour after the close or the live session after the open. 8pm–4am ET is omitted from extended segments."}
           </div>
         </>
       ) : (
         <div className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
-          {sourceMode === "futures" ? "Loading global futures glance…" : "Loading today&apos;s glance…"}
+          {sourceMode === "futures" ? "Loading alternative glance…" : "Loading today&apos;s glance…"}
         </div>
       )}
     </>

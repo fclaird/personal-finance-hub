@@ -33,10 +33,18 @@ import {
   glanceShowExtendedChartSegment,
   lastGlanceChartDataTsMs,
   isUsEquityGlanceItem,
-  resolveGlanceExtendedShadeX,
   resolveGlanceTileChartAxisDomain,
   type GlanceTileChartWindowCtx,
 } from "@/lib/market/glanceTileChartWindow";
+import {
+  enrichGlanceRowsWithPlotMs,
+  glanceChartXDataKey,
+  glanceChartXDomain,
+  glancePlotMsToWallClock,
+  glanceWallMsToPlot,
+  resolveGlanceExtendedShadePlotSegments,
+  resolveGlancePlotAxis,
+} from "@/lib/market/glancePlotTimeAxis";
 import { nyWallTimeMs } from "@/lib/market/futuresGlanceSession";
 import {
   enrichOverlayPrimaryLineBands,
@@ -50,6 +58,7 @@ import {
   sampleIndexedValueAtTime,
   sessionCloseReferenceY,
   type GlanceChartLine,
+  type GlanceCombinedChartRow,
 } from "@/lib/terminal/marketGlanceChart";
 import { posNegClass } from "@/lib/terminal/colors";
 
@@ -59,6 +68,95 @@ const UP_STROKE = "#22c55e";
 const DOWN_STROKE = "#ef4444";
 const NY_TZ = "America/New_York";
 const CHART_MARGIN = { top: 4, right: 4, left: 0, bottom: 22 } as const;
+
+function primaryStrokeValue(row: OverlayChartRow): number | null {
+  for (const key of ["gainStroke", "lossStroke", "extGainStroke", "extLossStroke"] as const) {
+    const v = row[key];
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+  }
+  return null;
+}
+
+function OverlayChartTooltip({
+  active,
+  payload,
+  label,
+  lines,
+  items,
+  primaryLineId,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload?: OverlayChartRow }>;
+  label?: string;
+  lines: GlanceChartLine[];
+  items: UsMarketGlanceItem[];
+  primaryLineId?: string;
+}) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload;
+  if (!row) return null;
+
+  const tsMs = row.tsMs;
+  const timeLabel =
+    typeof tsMs === "number" && Number.isFinite(tsMs)
+      ? formatGlanceCombinedChartTime(tsMs)
+      : (label ?? "Session");
+
+  type Entry = { id: string; label: string; color: string; value: number };
+  const entries: Entry[] = [];
+
+  if (primaryLineId) {
+    const val = primaryStrokeValue(row);
+    const line = lines.find((l) => l.id === primaryLineId);
+    const item = items.find((i) => i.id === primaryLineId);
+    if (val != null && line) {
+      entries.push({
+        id: primaryLineId,
+        label: item?.label ?? line.label,
+        color: line.color,
+        value: val,
+      });
+    }
+  }
+
+  for (const line of lines) {
+    if (line.id === primaryLineId) continue;
+    const v = row[line.id];
+    if (typeof v !== "number" || !Number.isFinite(v)) continue;
+    const item = items.find((i) => i.id === line.id);
+    entries.push({
+      id: line.id,
+      label: item?.label ?? line.label,
+      color: line.color,
+      value: v,
+    });
+  }
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-zinc-300 bg-white px-2.5 py-2 text-[11px] shadow-md dark:border-white/15 dark:bg-zinc-950">
+      <div className="font-medium text-zinc-700 dark:text-zinc-200">{timeLabel}</div>
+      <ul className="mt-1 space-y-0.5">
+        {entries.map((entry) => {
+          const pct = entry.value - GLANCE_CHART_BASELINE;
+          const pctStr = `${pct >= 0 ? "+" : ""}${PCT2.format(pct)}%`;
+          return (
+            <li key={entry.id} className="flex items-center gap-1.5 tabular-nums">
+              <span
+                className="inline-block h-2 w-2 shrink-0 rounded-full"
+                style={{ backgroundColor: entry.color }}
+                aria-hidden
+              />
+              <span className="font-medium text-zinc-900 dark:text-zinc-50">{entry.label}</span>
+              <span className={"ml-auto font-semibold " + posNegClass(pct)}>{pctStr}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
 
 type OverlayChartRow = TileChartRow & Record<string, number | null>;
 
@@ -79,10 +177,10 @@ function attachOverlayLinesToTileRows(
     );
   }
   return rows.map((row) => {
-    const out: OverlayChartRow = { ...row };
+    const out = { ...row } as OverlayChartRow;
     if (row.tsMs == null || !Number.isFinite(row.tsMs)) return out;
     for (const [id, points] of sampled) {
-      out[id] = sampleIndexedValueAtTime(points, row.tsMs);
+      out[id] = sampleIndexedValueAtTime(points, row.tsMs, { extrapolateAfterLast: false });
     }
     return out;
   });
@@ -201,13 +299,24 @@ export function GlanceIntradayOverlayChart({
     const axisItem = usesTilePipeline && primaryItem ? primaryItem : items;
     return resolveGlanceTileChartAxisDomain(windowCtx, axisItem, lastTs);
   }, [windowCtx, items, chartData, usesTilePipeline, primaryItem]);
+  const plotAxis = useMemo(() => {
+    if (!chartAxisDomain) return null;
+    const lastTs = lastGlanceChartDataTsMs(chartData);
+    const axisItem = usesTilePipeline && primaryItem ? primaryItem : items;
+    return resolveGlancePlotAxis(windowCtx, axisItem, lastTs);
+  }, [windowCtx, items, chartData, usesTilePipeline, primaryItem, chartAxisDomain]);
   const useFixedTimeAxis = chartAxisDomain != null && hasTimestamps;
+  const xDataKey = glanceChartXDataKey(plotAxis);
+  const xDomain = glanceChartXDomain(plotAxis, chartAxisDomain);
 
   /** Recharts needs a timestamp on every row when the x-axis is wall-clock; gap rows stay in chartData for band logic only. */
   const plotData = useMemo(() => {
     if (!useFixedTimeAxis) return chartData;
+    if (plotAxis?.compress) {
+      return enrichGlanceRowsWithPlotMs(chartData as GlanceCombinedChartRow[], windowCtx, plotAxis);
+    }
     return chartData.filter((row) => row.tsMs != null && Number.isFinite(row.tsMs));
-  }, [chartData, useFixedTimeAxis]);
+  }, [chartData, useFixedTimeAxis, plotAxis, windowCtx]);
 
   const showExtendedChart = useMemo(() => {
     if (usesTilePipeline && primaryItem) {
@@ -223,16 +332,16 @@ export function GlanceIntradayOverlayChart({
   const sessionCloseRefY =
     !windowCtx.marketOpen && primaryItem ? sessionCloseReferenceY(primaryItem) : null;
   const sessionCloseRowIdx = useMemo(() => {
-    if (usesTilePipeline) return resolveSessionCloseChartIdx(chartData);
-    return overlaySessionCloseRowIdx(chartData, windowCtx);
+    if (usesTilePipeline) return resolveSessionCloseChartIdx(chartData as TileChartRow[]);
+    return overlaySessionCloseRowIdx(chartData as GlanceCombinedChartRow[], windowCtx);
   }, [usesTilePipeline, chartData, windowCtx]);
 
   const lastIdx = Math.max(0, chartData.length - 1);
   const shadeBounds = useMemo(() => {
-    if (!showExtendedChart || !chartAxisDomain || chartData.length < 2) return null;
+    if (!showExtendedChart || !plotAxis || chartData.length < 2) return null;
     const lastTs = lastGlanceChartDataTsMs(chartData);
-    return resolveGlanceExtendedShadeX(windowCtx, chartAxisDomain, lastTs);
-  }, [showExtendedChart, chartAxisDomain, windowCtx, chartData]);
+    return resolveGlanceExtendedShadePlotSegments(windowCtx, plotAxis, lastTs);
+  }, [showExtendedChart, plotAxis, windowCtx, chartData]);
 
   const extendedShade = useMemo(() => {
     if (!usesTilePipeline || !showExtendedChart) return null;
@@ -296,22 +405,30 @@ export function GlanceIntradayOverlayChart({
       ? nyWallTimeMs(windowCtx.sessionYmd, GLANCE_RTH_CLOSE_MIN)
       : null;
   const lastRowTs = plotData[plotLastIdx]?.tsMs ?? null;
-  const firstChartX = useFixedTimeAxis ? chartAxisDomain!.startMs : (plotData[0]?.tsMs ?? plotData[0]?.idx ?? 0);
+  const rowX = (row: { tsMs?: number | null; plotMs?: number | null; idx?: number } | undefined, fallback: number) => {
+    if (!useFixedTimeAxis || !row) return fallback;
+    if (plotAxis?.compress && row.plotMs != null && Number.isFinite(row.plotMs)) return row.plotMs;
+    return row.tsMs ?? row.idx ?? fallback;
+  };
+  const wallX = (wallMs: number | null | undefined, fallback: number) => {
+    if (!useFixedTimeAxis || wallMs == null || !Number.isFinite(wallMs)) return fallback;
+    return plotAxis ? glanceWallMsToPlot(wallMs, plotAxis, windowCtx) : wallMs;
+  };
+  const firstChartX = useFixedTimeAxis ? (xDomain?.[0] ?? plotData[0]?.tsMs ?? 0) : rowX(plotData[0], plotData[0]?.idx ?? 0);
   const lastChartX = useFixedTimeAxis
-    ? (lastRowTs ?? chartAxisDomain!.endMs)
-    : (plotData[plotLastIdx]?.tsMs ?? plotData[plotLastIdx]?.idx ?? plotLastIdx);
+    ? rowX(plotData[plotLastIdx], xDomain?.[1] ?? plotData[plotLastIdx]?.tsMs ?? plotLastIdx)
+    : rowX(plotData[plotLastIdx], plotLastIdx);
   const closeChartX = useFixedTimeAxis
-    ? (chartData[sessionCloseRowIdx]?.tsMs ?? sessionCloseBoundaryMs ?? sessionCloseRowIdx)
+    ? wallX(
+        chartData[sessionCloseRowIdx]?.tsMs ?? sessionCloseBoundaryMs,
+        chartData[sessionCloseRowIdx]?.tsMs ?? sessionCloseRowIdx,
+      )
     : (chartData[sessionCloseRowIdx]?.tsMs ?? sessionCloseRowIdx);
   const priorRefEndX =
     sessionCloseRefY != null && showExtendedChart ? closeChartX : lastChartX;
-  const shadeAreaX1 =
-    shadeBounds?.fromMs ?? tileExtendedShadeStartX(chartData, shadeFromIdx);
-  const shadeAreaX2 =
-    shadeBounds?.toMs ??
-    chartData[shadeToIdx]?.tsMs ??
-    chartData[shadeToIdx]?.idx ??
-    shadeToIdx;
+  const shadeAreaFallbackX2 =
+    chartData[shadeToIdx]?.tsMs ?? chartData[shadeToIdx]?.idx ?? shadeToIdx;
+  const shadeAreaFallbackX1 = tileExtendedShadeStartX(chartData as TileChartRow[], shadeFromIdx);
 
   return (
     <>
@@ -323,17 +440,25 @@ export function GlanceIntradayOverlayChart({
           >
             {useFixedTimeAxis ? (
               <XAxis
-                dataKey="tsMs"
+                dataKey={xDataKey}
                 type="number"
                 scale="linear"
-                domain={[chartAxisDomain!.startMs, chartAxisDomain!.endMs]}
+                domain={xDomain ?? undefined}
                 allowDataOverflow
-                tickFormatter={(ts) =>
+                tickFormatter={(x) =>
                   new Intl.DateTimeFormat("en-US", {
                     hour: "numeric",
                     minute: "2-digit",
                     timeZone: NY_TZ,
-                  }).format(new Date(Number(ts)))
+                  }).format(
+                    new Date(
+                      Number(
+                        plotAxis?.compress
+                          ? glancePlotMsToWallClock(Number(x), windowCtx, plotAxis.mode)
+                          : x,
+                      ),
+                    ),
+                  )
                 }
                 tick={{ fontSize: 10 }}
                 minTickGap={48}
@@ -377,15 +502,26 @@ export function GlanceIntradayOverlayChart({
                 <stop offset="100%" stopColor={DOWN_STROKE} stopOpacity={0.42} />
               </linearGradient>
             </defs>
-            {showExtendedChart ? (
-              <ReferenceArea
-                x1={shadeAreaX1}
-                x2={shadeAreaX2}
-                fill="#94a3b8"
-                fillOpacity={0.22}
-                ifOverflow="extendDomain"
-              />
-            ) : null}
+            {showExtendedChart
+              ? (shadeBounds?.length
+                  ? shadeBounds
+                  : [
+                      {
+                        fromMs: wallX(shadeAreaFallbackX1, shadeAreaFallbackX1),
+                        toMs: wallX(shadeAreaFallbackX2, shadeAreaFallbackX2),
+                      },
+                    ]
+                ).map((segment, index) => (
+                  <ReferenceArea
+                    key={`ext-shade-${index}`}
+                    x1={segment.fromMs}
+                    x2={segment.toMs}
+                    fill="#94a3b8"
+                    fillOpacity={0.22}
+                    ifOverflow="extendDomain"
+                  />
+                ))
+              : null}
             <ReferenceLine
               segment={[
                 { x: firstChartX, y: priorReferenceY },
@@ -422,22 +558,11 @@ export function GlanceIntradayOverlayChart({
               />
             ))}
             <Tooltip
-              formatter={(value, name) => {
-                const num = typeof value === "number" ? value : Number(value);
-                if (!Number.isFinite(num)) return ["—", String(name)];
-                const line = lines.find((l) => l.id === name);
-                const pct = num - GLANCE_CHART_BASELINE;
-                return [`${pct >= 0 ? "+" : ""}${PCT2.format(pct)}%`, line?.label ?? String(name)];
-              }}
-              labelFormatter={(_, payload) => {
-                const tsMs = payload?.[0]?.payload?.tsMs;
-                if (typeof tsMs === "number" && Number.isFinite(tsMs)) {
-                  return formatGlanceCombinedChartTime(tsMs);
-                }
-                return "Session";
-              }}
+              content={
+                <OverlayChartTooltip lines={lines} items={items} primaryLineId={primaryLineId} />
+              }
               cursor={{ stroke: REF_LINE, strokeWidth: 1, strokeDasharray: "3 3" }}
-              contentStyle={{ fontSize: 12 }}
+              isAnimationActive={false}
             />
             {showLegend ? (
               <Legend

@@ -32,10 +32,19 @@ export type GlanceExtendedFields = {
   extendedPhase?: GlanceExtendedPhase | null;
 };
 
-const PRE_MARKET_START = 4 * 60;
+export const US_EQUITY_PRE_MARKET_START_MIN = 4 * 60;
+export const US_EQUITY_POST_MARKET_END_MIN = 20 * 60;
+
+const PRE_MARKET_START = US_EQUITY_PRE_MARKET_START_MIN;
 const RTH_OPEN = 9 * 60 + 30;
 const RTH_CLOSE = 16 * 60;
-const POST_MARKET_END = 20 * 60;
+const POST_MARKET_END = US_EQUITY_POST_MARKET_END_MIN;
+
+/** Non-trading gap: 20:00–04:00 ET (wall clock on each calendar day). */
+export function isUsEquityOvernightDeadZone(tsMs: number): boolean {
+  const mins = nyMinutesSinceMidnight(new Date(tsMs));
+  return mins >= POST_MARKET_END || mins < PRE_MARKET_START;
+}
 
 /** Pre-market (04:00–09:30 ET) or after-hours (16:00–20:00 ET) on a US equity session day. */
 export function usEquityExtendedHoursPhase(now: Date = new Date()): GlanceExtendedPhase | null {

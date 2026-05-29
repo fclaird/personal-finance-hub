@@ -145,6 +145,14 @@ export async function fetchYahooChartResult(
   return fetchYahooChartUrl(symbol, { interval: "1d", range: "5y", events });
 }
 
+/** Recent daily bars (no dividend events) for mutual-fund NAV / latest close. */
+export async function fetchYahooDailyChart(
+  symbol: string,
+  range: "1d" | "5d" | "1mo" | "10y" = "5d",
+): Promise<{ result: Record<string, unknown>; meta: YahooChartFetchMeta } | null> {
+  return fetchYahooChartUrl(symbol, { interval: "1d", range });
+}
+
 /** Intraday session chart (no dividend events) for index/ETF sparklines. */
 export async function fetchYahooIntradayChart(
   symbol: string,

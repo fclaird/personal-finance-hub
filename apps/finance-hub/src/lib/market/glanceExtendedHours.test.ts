@@ -3,11 +3,24 @@ import test from "node:test";
 
 import {
   glanceChartContext,
+  isUsEquityOvernightDeadZone,
   nyBarPhase,
   resolveGlanceSplitContext,
   splitTimedPointsForGlance,
   usEquityExtendedHoursPhase,
 } from "./glanceExtendedHours";
+
+test("isUsEquityOvernightDeadZone covers 20:00–04:00 ET", () => {
+  const lateNight = new Date("2026-05-22T03:00:00.000Z"); // 23:00 ET prior calendar day... check
+  // 22:00 ET on May 21 = 2026-05-22T02:00:00.000Z
+  const afterEight = new Date("2026-05-22T02:00:00.000Z");
+  const preFour = new Date("2026-05-22T07:30:00.000Z"); // 03:30 ET
+  const preMarket = new Date("2026-05-22T12:00:00.000Z"); // 08:00 ET
+  assert.equal(isUsEquityOvernightDeadZone(afterEight.getTime()), true);
+  assert.equal(isUsEquityOvernightDeadZone(preFour.getTime()), true);
+  assert.equal(isUsEquityOvernightDeadZone(preMarket.getTime()), false);
+  assert.equal(isUsEquityOvernightDeadZone(lateNight.getTime()), true);
+});
 
 test("usEquityExtendedHoursPhase detects pre-market and after-hours", () => {
   const pre = new Date("2026-05-22T12:00:00.000Z"); // 08:00 ET

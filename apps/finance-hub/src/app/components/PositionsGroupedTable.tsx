@@ -15,6 +15,7 @@ import {
   type PositionsColumnId,
   type PositionsSortColumn,
 } from "@/lib/positions/positionsColumnOrder";
+import { optionMarginRoiForRow } from "@/lib/options/optionMarginRoiDisplay";
 import { posNegClass } from "@/lib/terminal/colors";
 
 export type Row = {
@@ -33,6 +34,7 @@ export type Row = {
   optionRight: "C" | "P" | null;
   optionStrike: number | null;
   quantity: number;
+  averagePrice?: number | null;
   price: number | null;
   marketValue: number | null;
   delta: number | null;
@@ -282,6 +284,9 @@ export function GroupedTable({
       case "dte":
       case "intrinsic":
       case "extrinsic":
+      case "marginSecured":
+      case "roi":
+      case "annualizedRoi":
         return groupEmDashTd(colId);
       default:
         return null;
@@ -362,6 +367,30 @@ export function GroupedTable({
             {r.marketValue == null ? "-" : usd2Masked(r.marketValue, privacyMasked)}
           </td>
         );
+      case "marginSecured": {
+        const m = optionMarginRoiForRow(r);
+        return (
+          <td key={colId} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums text-zinc-800 dark:text-zinc-200">
+            {m == null ? "—" : usd2Masked(m.marginSecured, privacyMasked)}
+          </td>
+        );
+      }
+      case "roi": {
+        const m = optionMarginRoiForRow(r);
+        return (
+          <td key={colId} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums text-zinc-800 dark:text-zinc-200">
+            {m == null ? "—" : `${formatNum(m.roiPct, 2)}%`}
+          </td>
+        );
+      }
+      case "annualizedRoi": {
+        const m = optionMarginRoiForRow(r);
+        return (
+          <td key={colId} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums text-zinc-800 dark:text-zinc-200">
+            {m == null ? "—" : `${formatNum(m.annualizedRoiPct, 2)}%`}
+          </td>
+        );
+      }
       case "purchaseDate":
         return (
           <td key={colId} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums text-zinc-700 dark:text-zinc-300">

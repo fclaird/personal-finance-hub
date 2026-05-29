@@ -115,8 +115,15 @@ export async function fetchCanonicalGlanceGrid(sessionYmd: string, now: Date = n
   };
 }
 
-export function extendedPhaseForGrid(grid: GlanceTimedGrid): "post" | "pre" | null {
+export function extendedPhaseForGrid(grid: GlanceTimedGrid, sessionYmd?: string): "post" | "pre" | null {
   if (grid.extended.length === 0) return null;
+  const ymd = sessionYmd ?? grid.sessionYmd;
+  for (const p of grid.extended) {
+    if (nyBarPhase(p.tsMs, ymd) === "post") return "post";
+  }
+  for (const p of grid.extended) {
+    if (nyBarPhase(p.tsMs, ymd) === "pre") return "pre";
+  }
   const sample = grid.extended[0]!;
   const sampleYmd = isoDateInUsEastern(sample.tsMs);
   return nyBarPhase(sample.tsMs, sampleYmd) === "pre" ? "pre" : "post";

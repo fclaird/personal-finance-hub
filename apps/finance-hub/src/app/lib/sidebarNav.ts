@@ -17,8 +17,37 @@ export const NAV: SidebarNavItem[] = [
 ];
 
 export const SIDEBAR_NAV_ORDER_STORAGE_KEY = "fh.sidebar.nav.order.v1";
+export const SIDEBAR_COLLAPSED_STORAGE_KEY = "fh.sidebar.collapsed.v1";
 
 export const DEFAULT_SIDEBAR_NAV_ORDER = NAV.map((item) => item.href);
+
+export function readSidebarNavOrderFromStorage(): string[] {
+  if (typeof window === "undefined") return [...DEFAULT_SIDEBAR_NAV_ORDER];
+  try {
+    const raw = localStorage.getItem(SIDEBAR_NAV_ORDER_STORAGE_KEY);
+    if (!raw) return [...DEFAULT_SIDEBAR_NAV_ORDER];
+    return mergeWithDefaults(JSON.parse(raw) as unknown, DEFAULT_SIDEBAR_NAV_ORDER);
+  } catch {
+    return [...DEFAULT_SIDEBAR_NAV_ORDER];
+  }
+}
+
+export function readSidebarCollapsed(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function writeSidebarCollapsed(collapsed: boolean): void {
+  try {
+    localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
 
 export function orderSidebarNavItems(hrefOrder: readonly string[]): SidebarNavItem[] {
   const byHref = new Map(NAV.map((item) => [item.href, item]));
@@ -29,13 +58,7 @@ export function orderSidebarNavItems(hrefOrder: readonly string[]): SidebarNavIt
 
 export function readSidebarNavOrder(): SidebarNavItem[] {
   if (typeof window === "undefined") return [...NAV];
-  try {
-    const raw = localStorage.getItem(SIDEBAR_NAV_ORDER_STORAGE_KEY);
-    if (!raw) return [...NAV];
-    return orderSidebarNavItems(mergeWithDefaults(JSON.parse(raw) as unknown, DEFAULT_SIDEBAR_NAV_ORDER));
-  } catch {
-    return [...NAV];
-  }
+  return orderSidebarNavItems(readSidebarNavOrderFromStorage());
 }
 
 /** Index of the sidebar section for keyboard nav; nested paths use prefix or `href + "/"`. */

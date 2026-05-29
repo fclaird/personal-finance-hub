@@ -6,11 +6,13 @@ import Database from "better-sqlite3";
 
 import { latestSnapshotIds } from "@/lib/holdings/latestSnapshots";
 import {
+  hasMaterialPortfolioExtendedMove,
   optionCloseValue,
   optionLastValue,
   optionValueAt,
   type OptionLeg,
   PORTFOLIO_INDEX_BASE,
+  buildPortfolioIndexSeries,
 } from "@/lib/terminal/portfolioGlance";
 
 function createTestDb(): Database.Database {
@@ -116,4 +118,22 @@ test("optionValueAt prefers live mark after RTH", () => {
 
 test("portfolio index base is 100", () => {
   assert.equal(PORTFOLIO_INDEX_BASE, 100);
+});
+
+test("hasMaterialPortfolioExtendedMove rejects flat extended path", () => {
+  assert.equal(hasMaterialPortfolioExtendedMove(101.86, 101.86), false);
+  assert.equal(hasMaterialPortfolioExtendedMove(101.86, 101.861), false);
+});
+
+test("hasMaterialPortfolioExtendedMove accepts material extended move", () => {
+  assert.equal(hasMaterialPortfolioExtendedMove(101.86, 101.9), true);
+  assert.equal(hasMaterialPortfolioExtendedMove(100, 99.97), true);
+});
+
+test("buildPortfolioIndexSeries anchors at 100 when no intraday points exist", () => {
+  const nowMs = Date.parse("2026-05-22T17:00:00.000Z");
+  const series = buildPortfolioIndexSeries([], 1_000_000, 1_001_100, "2026-05-22", nowMs);
+  assert.equal(series.length, 2);
+  assert.equal(series[0]!.close, 100);
+  assert.ok(Math.abs(series[1]!.close - 100.11) < 1e-9);
 });

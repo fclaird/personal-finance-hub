@@ -38,15 +38,19 @@ export async function fetchGlanceAlternateCards(
   now: Date = new Date(),
   grid?: GlanceTimedGrid,
 ): Promise<UsMarketIndexCard[]> {
-  const [russell2000, gold, bitcoin, wtiCrude, nikkei225, ftse100] = await Promise.all([
+  const [russell2000, gold, bitcoin, ethereum, vix, wtiCrude, nikkei225, ftse100] = await Promise.all([
     buildSymbolGlanceCard(RUSSELL_2000_INDEX, now, grid),
     buildFuturesGlanceCard(GOLD_INSTRUMENT, now),
     buildSymbolGlanceCard({ id: "bitcoin", label: "Bitcoin", symbol: "BTC-USD" }, now, grid).then(
       (card) => ({ ...card, tradableOpen: true }),
     ),
+    buildSymbolGlanceCard({ id: "ethereum", label: "Ethereum", symbol: "ETH-USD" }, now, grid).then(
+      (card) => ({ ...card, tradableOpen: true }),
+    ),
+    buildSymbolGlanceCard({ id: "vix", label: "VIX", symbol: "^VIX" }, now, grid),
     buildFuturesGlanceCard(WTI_CRUDE_INSTRUMENT, now),
     buildCashIndexGlanceCard(NIKKEI_225_INSTRUMENT, now),
     buildCashIndexGlanceCard(FTSE_100_INSTRUMENT, now),
   ]);
-  return [russell2000, gold, bitcoin, wtiCrude, nikkei225, ftse100];
+  return [russell2000, gold, bitcoin, ethereum, vix, wtiCrude, nikkei225, ftse100];
 }

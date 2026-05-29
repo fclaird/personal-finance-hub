@@ -106,8 +106,8 @@ test("enrichTileChartRowsForBaselineChart splits green above and red below prior
   assert.equal(rows[0]!.lossFill, null);
   const cross = rows.find((r) => r.gainFill === prior && r.lossFill === prior);
   assert.ok(cross, "expected baseline crossing point");
-  assert.equal(cross!.gainStroke, prior);
-  assert.equal(cross!.lossStroke, prior);
+  assert.equal(cross!.gainStroke, null);
+  assert.equal(cross!.lossStroke, null);
   const last = rows[rows.length - 1]!;
   assert.equal(last.gainFill, null);
   assert.equal(last.lossFill, 99);
@@ -206,7 +206,7 @@ test("indexTileChartRows anchors prior close at shared baseline", () => {
   assert.equal(rows[rows.length - 1]!.regular, 100.6);
 });
 
-test("sharedSparklineYDomain uses one tight scale across US equity tiles only", () => {
+test("sharedSparklineYDomain unions equity tile ranges with minimal padding", () => {
   const nasdaq: UsMarketGlanceItem = {
     id: "nasdaq",
     label: "Nasdaq",
@@ -241,16 +241,16 @@ test("sharedSparklineYDomain uses one tight scale across US equity tiles only", 
   };
   const domain = sharedSparklineYDomain([sp500, nasdaq, wti]);
   assert.ok(domain);
-  assert.ok(domain![0]! > 100);
-  assert.ok(domain![1] < 104);
-  assert.ok(domain![1] - domain![0]! < 4, "equity shared domain should stay tight");
+  assert.ok(domain![0]! < 101.7);
+  assert.ok(domain![1]! > 102.8);
+  assert.ok(domain![1]! - domain![0]! < 3.5, "equity shared domain should stay tight");
 });
 
 test("yDomainFromChartRange includes nearby reference lines and minimal padding", () => {
   const domain = yDomainFromChartRange(100.55, 102.45, [100, 102.5]);
-  assert.ok(domain[0]! <= 100);
+  assert.ok(domain[0]! > 100.4, "distant prior close should not flatten the scale");
   assert.ok(domain[1]! >= 102.5);
-  assert.ok(domain[1]! - domain[0]! < 3.5);
+  assert.ok(domain[1]! - domain[0]! < 2.5);
 });
 
 test("yDomainFromChartRange ignores prior close when it is far off the trimmed window", () => {
@@ -269,10 +269,11 @@ test("sparklineYDomainFromChartData fits enriched tile rows", () => {
   assert.ok(domain[1]! - domain[0]! < 0.2);
 });
 
-test("yDomainFromIndexedRange pins baseline high when all values are below prior close", () => {
+test("yDomainFromIndexedRange keeps visible lows/highs with minimal padding", () => {
   const domain = yDomainFromIndexedRange(98.2, 99.8);
   assert.ok(domain[0]! <= 98.2);
-  assert.ok(domain[1]! >= 100);
+  assert.ok(domain[1]! >= 99.8);
+  assert.ok(domain[1]! - domain[0]! < 2.2);
 });
 
 test("yDomainFromChartRange sets mixed extremes with padding", () => {

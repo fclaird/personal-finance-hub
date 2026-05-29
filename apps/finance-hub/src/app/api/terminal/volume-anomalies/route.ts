@@ -3,7 +3,22 @@ import { NextResponse } from "next/server";
 import { logError } from "@/lib/log";
 import { schwabMarketFetch } from "@/lib/schwab/client";
 import { schwabQuoteObjectFromEntry } from "@/lib/schwab/quoteEntry";
-import { ensureCandles, trailingAvgDailyVolume } from "@/lib/terminal/ohlcv";
+import { ensureCandles, getCachedCandles, trailingAvgDailyVolume, windowSinceMs } from "@/lib/terminal/ohlcv";
+
+const DAILY_WINDOW = "6M" as const;
+const MIN_DAILY_BARS = 100;
+const ENSURE_CONCURRENCY = 5;
+
+async function runPool<T>(items: readonly T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
+  const queue = [...items];
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (queue.length > 0) {
+      const item = queue.shift()!;
+      await fn(item);
+    }
+  });
+  await Promise.all(workers);
+}
 
 function normSym(s: string) {
   return (s ?? "").trim().toUpperCase();
@@ -38,15 +53,17 @@ export async function POST(req: Request) {
       }
     }
 
-    // Ensure daily candles (for avg volume). Keep lightweight: 6M daily.
-    for (const sym of symbols) {
-      // Best effort; don't fail whole endpoint.
+    // Ensure daily candles (for avg volume). Skip Schwab when DB already has enough bars.
+    const sinceMs = windowSinceMs(DAILY_WINDOW);
+    await runPool(symbols, ENSURE_CONCURRENCY, async (sym) => {
       try {
-        await ensureCandles(sym, "1d", "6M");
+        const cached = getCachedCandles(sym, "1d", sinceMs);
+        if (cached.length >= MIN_DAILY_BARS) return;
+        await ensureCandles(sym, "1d", DAILY_WINDOW);
       } catch {
         // ignore
       }
-    }
+    });
 
     const anomalies: Record<
       string,

@@ -1,4 +1,5 @@
 import type { GlanceChartContext, TimedClosePoint } from "@/lib/market/glanceExtendedHours";
+import { isUsEquityOvernightDeadZone } from "@/lib/market/glanceExtendedHours";
 import { isoDateInUsEastern } from "@/lib/market/glanceSession";
 
 /** Timed bars for quick-glance session split (prior RTH day + today's pre when applicable). */
@@ -21,7 +22,7 @@ export function filterExtendedRawForGrid(
   regular: TimedClosePoint[],
   extendedPhase: "pre" | "post" | null,
 ): TimedClosePoint[] {
-  const valid = extended.filter((p) => p.tsMs > 0);
+  const valid = extended.filter((p) => p.tsMs > 0 && !isUsEquityOvernightDeadZone(p.tsMs));
   if (valid.length === 0) return [];
   if (regular.length === 0) return valid;
   const rthCloseTs = regular[regular.length - 1]!.tsMs;

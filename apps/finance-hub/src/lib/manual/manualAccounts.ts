@@ -4,6 +4,7 @@ import type { AccountBucket } from "@/lib/accountBuckets";
 import { isValidAccountBucket } from "@/lib/accountBuckets";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
+import type { FundStatementBasis } from "@/lib/market/planFundPricing";
 import { isManualAccountId } from "@/lib/manual/isManualAccountId";
 
 export { isManualAccountId } from "@/lib/manual/isManualAccountId";
@@ -19,6 +20,7 @@ export type ManualPositionInput = {
   marketValue: number | null;
   purchaseDate: string | null;
   notes?: string | null;
+  fundBasis?: FundStatementBasis | null;
 };
 
 export type ManualAccountRecord = {
@@ -34,6 +36,8 @@ export type ManualPositionMetadata = {
   source: "manual";
   purchaseDate: string | null;
   notes?: string | null;
+  /** 529 / plan fund: statement balance anchor for return-based mark-to-market. */
+  fundBasis?: FundStatementBasis | null;
 };
 
 function normSym(s: string) {
@@ -153,11 +157,14 @@ function resolveSecurity(db: Database.Database, input: ManualPositionInput, nowI
   return securityId;
 }
 
-function metadataFor(input: ManualPositionInput): string {
+function metadataFor(input: ManualPositionInput, existing: ManualPositionMetadata | null = null): string {
+  const fundBasis =
+    input.fundBasis !== undefined ? input.fundBasis : (existing?.fundBasis ?? null);
   const meta: ManualPositionMetadata = {
     source: "manual",
     purchaseDate: parseIsoDate(input.purchaseDate),
     notes: input.notes?.trim() || null,
+    ...(fundBasis != null ? { fundBasis } : {}),
   };
   return JSON.stringify(meta);
 }
@@ -167,10 +174,15 @@ export function parseManualPositionMetadata(raw: string | null | undefined): Man
   try {
     const o = JSON.parse(raw) as Record<string, unknown>;
     if (o.source !== "manual") return null;
+    const fundBasis =
+      o.fundBasis != null && typeof o.fundBasis === "object"
+        ? (o.fundBasis as FundStatementBasis)
+        : undefined;
     return {
       source: "manual",
       purchaseDate: typeof o.purchaseDate === "string" ? o.purchaseDate : null,
       notes: typeof o.notes === "string" ? o.notes : null,
+      ...(fundBasis != null ? { fundBasis } : {}),
     };
   } catch {
     return null;
@@ -286,14 +298,22 @@ export function upsertManualPosition(accountId: string, input: ManualPositionInp
   let marketValue = input.marketValue;
   if (type === "cash") {
     marketValue = Math.abs(qty);
-  } else if (marketValue == null && price != null && Number.isFinite(price)) {
+  } else if (
+    marketValue == null &&
+    price != null &&
+    Number.isFinite(price) &&
+    type !== "fund"
+  ) {
+    // Fund holdings (esp. 529): public NAV × qty ≠ plan statement balance.
     marketValue = price * qty;
   }
 
   const tx = db.transaction(() => {
     const existing = db
-      .prepare(`SELECT id FROM positions WHERE id = ? AND snapshot_id = ?`)
-      .get(positionId, snapshotId) as { id: string } | undefined;
+      .prepare(`SELECT id, metadata_json AS metadataJson FROM positions WHERE id = ? AND snapshot_id = ?`)
+      .get(positionId, snapshotId) as { id: string; metadataJson: string | null } | undefined;
+
+    const priorMeta = parseManualPositionMetadata(existing?.metadataJson);
 
     const payload = {
       id: positionId,
@@ -302,7 +322,7 @@ export function upsertManualPosition(accountId: string, input: ManualPositionInp
       quantity: qty,
       price: price ?? null,
       market_value: marketValue ?? null,
-      metadata_json: metadataFor({ ...input, purchaseDate }),
+      metadata_json: metadataFor({ ...input, purchaseDate }, priorMeta),
     };
 
     if (existing) {

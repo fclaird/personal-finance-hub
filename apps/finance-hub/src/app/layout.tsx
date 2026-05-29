@@ -2,10 +2,9 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ApiKeyProvider } from "@/app/components/ApiKeyProvider";
-import { LiveStatusBanner } from "@/app/components/LiveStatusBanner";
+import { AppShell } from "@/app/components/AppShell";
 import { NavigationShortcuts } from "@/app/components/NavigationShortcuts";
 import { PrivacyProvider } from "@/app/components/PrivacyProvider";
-import { SidebarNav } from "@/app/components/SidebarNav";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -39,13 +38,7 @@ export default function RootLayout({
         <PrivacyProvider>
           <ApiKeyProvider>
             <NavigationShortcuts />
-          <div className="flex h-dvh overflow-hidden">
-            <SidebarNav />
-            <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-              <LiveStatusBanner />
-              {children}
-            </main>
-          </div>
+          <AppShell>{children}</AppShell>
           </ApiKeyProvider>
         </PrivacyProvider>
       </body>

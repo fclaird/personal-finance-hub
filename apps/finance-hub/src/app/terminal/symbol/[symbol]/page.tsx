@@ -22,7 +22,16 @@ import { SymbolPositionsTable } from "@/app/components/SymbolPositionsTable";
 
 import { NewsFeedPanel } from "@/app/components/terminal/NewsFeedPanel";
 import { GlanceIntradayOverlayChart } from "@/app/components/terminal/GlanceIntradayOverlayChart";
-import { sharedSparklineYDomain, type UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
+import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
+import { SymbolCandleChartPanel } from "@/app/components/terminal/SymbolCandleChartPanel";
+import {
+  SymbolPerformanceControls,
+  type ChartMode,
+} from "@/app/components/terminal/SymbolPerformanceControls";
+import {
+  defaultIntervalForWindow,
+  type ChartCandleInterval,
+} from "@/lib/terminal/candleChartConfig";
 import { SymbolNotesSection } from "./SymbolNotesSection";
 import type { GlanceTileChartWindowCtx } from "@/lib/market/glanceTileChartWindow";
 import type { GlanceChartLine } from "@/lib/terminal/marketGlanceChart";
@@ -158,6 +167,10 @@ export default function TerminalSymbolPage() {
     showingPriorSession?: boolean;
   } | null>(null);
   const [windowKey, setWindowKey] = useState<WindowKey>("1D");
+  const [chartMode, setChartMode] = useState<ChartMode>("line");
+  const [candleInterval, setCandleInterval] = useState<ChartCandleInterval>(() =>
+    defaultIntervalForWindow("1D"),
+  );
   const [nowMs, setNowMs] = useState<number>(0);
   const [positions, setPositions] = useState<Row[]>([]);
   const [about, setAbout] = useState<AboutState | null>(null);
@@ -167,7 +180,7 @@ export default function TerminalSymbolPage() {
   const [error, setError] = useState<string | null>(null);
 
   async function loadIntradayPerf() {
-    if (windowKey !== "1D" || !sym) {
+    if (windowKey !== "1D" || chartMode !== "line" || !sym) {
       setIntradayPerf(null);
       return;
     }
@@ -332,7 +345,17 @@ export default function TerminalSymbolPage() {
   useEffect(() => {
     void loadIntradayPerf();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sym, windowKey]);
+  }, [sym, windowKey, chartMode]);
+
+  const handleWindowKeyChange = (k: WindowKey) => {
+    setWindowKey(k);
+    setCandleInterval(defaultIntervalForWindow(k));
+  };
+
+  const quoteChangePct =
+    quote?.changePercent != null && Number.isFinite(quote.changePercent)
+      ? quote.changePercent * 100
+      : null;
 
   const exposure = useMemo(
     () => computeSymbolPageExposure(positions, quote),
@@ -369,14 +392,6 @@ export default function TerminalSymbolPage() {
       { id: "SPY", label: "S&P 500 (SPY)", color: "#16a34a" },
     ];
   }, [sym]);
-
-  const intradayChartYDomain = useMemo(
-    () =>
-      intradayPerf?.items.length
-        ? sharedSparklineYDomain(intradayPerf.items, intradayPerf.windowCtx)
-        : undefined,
-    [intradayPerf],
-  );
 
   const perfData = useMemo(() => {
     if (windowKey === "1D") return [];
@@ -569,34 +584,38 @@ export default function TerminalSymbolPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-sm font-semibold">Performance overlay (% rebased)</div>
-              {windowKey === "1D" && intradayPerf?.sessionLabel ? (
+              {chartMode === "line" && windowKey === "1D" && intradayPerf?.sessionLabel ? (
                 <div className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
                   {intradayPerf.showingPriorSession
                     ? `Showing ${intradayPerf.sessionLabel}`
                     : intradayPerf.sessionLabel}{" "}
                   · same chart window, shading, and scale as quick glance tiles
                 </div>
+              ) : chartMode === "candle" ? (
+                <div className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
+                  OHLC candles with QQQ and SPY % overlay (right axis)
+                </div>
               ) : null}
             </div>
-            <div className="grid grid-cols-8 gap-1">
-              {(["1D", "5D", "1M", "3M", "6M", "1Y", "3Y", "5Y"] as const).map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  onClick={() => setWindowKey(k)}
-                  className={
-                    "h-8 rounded-md px-2 text-xs font-semibold " +
-                    (windowKey === k
-                      ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
-                      : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
-                  }
-                >
-                  {k}
-                </button>
-              ))}
-            </div>
+            <SymbolPerformanceControls
+              windowKey={windowKey}
+              onWindowChange={handleWindowKeyChange}
+              chartMode={chartMode}
+              onChartModeChange={setChartMode}
+              candleInterval={candleInterval}
+              onCandleIntervalChange={setCandleInterval}
+            />
           </div>
-          {windowKey === "1D" ? (
+          {chartMode === "candle" ? (
+            <div className="mt-2 rounded-xl border border-zinc-300 bg-zinc-50 p-3 dark:border-white/15 dark:bg-zinc-900/80">
+              <SymbolCandleChartPanel
+                symbol={sym}
+                windowKey={windowKey}
+                candleInterval={candleInterval}
+                quoteChangePct={quoteChangePct}
+              />
+            </div>
+          ) : windowKey === "1D" ? (
             !intradayReady ? (
               <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Loading intraday session…</div>
             ) : (
@@ -606,7 +625,6 @@ export default function TerminalSymbolPage() {
                   lines={intradayLines}
                   windowCtx={intradayPerf!.windowCtx}
                   primaryLineId={sym.toUpperCase()}
-                  chartYDomain={intradayChartYDomain}
                   showFooter
                 />
               </div>
@@ -625,11 +643,7 @@ export default function TerminalSymbolPage() {
                 <LineChart data={perfData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="date" tick={false} />
-                  <YAxis
-                    tickFormatter={(v) =>
-                      `${Number(v).toFixed(windowKey === "1D" ? 1 : 0)}%`
-                    }
-                  />
+                  <YAxis tickFormatter={(v) => `${Number(v).toFixed(0)}%`} />
                   <Tooltip formatter={(v) => `${Number(v).toFixed(2)}%`} labelFormatter={(l) => String(l)} />
                   <Line type="monotone" dataKey="sym" name={sym} strokeWidth={2} dot={false} stroke="#0f766e" />
                   <Line type="monotone" dataKey="QQQ" name="QQQ" strokeWidth={2} dot={false} stroke="#0891b2" />

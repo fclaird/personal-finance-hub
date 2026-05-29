@@ -12,6 +12,7 @@ import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatInt, formatNum, formatOptionIntExtPerShare, formatUsd2 } from "@/lib/format";
 import { formatDisplayDateTime } from "@/lib/formatDate";
 import { formatOptionSymbolDisplay } from "@/lib/formatOptionDisplay";
+import { optionMarginRoiForRow } from "@/lib/options/optionMarginRoiDisplay";
 import {
   optionMarkPerShare,
   optionPnlDollarsFromAvgPrice,
@@ -56,6 +57,9 @@ const OPTION_COLUMN_IDS = [
   "price",
   "tradePrice",
   "marketValue",
+  "marginSecured",
+  "roi",
+  "annualizedRoi",
   "pnlPct",
   "pnlPctPct",
   "intrinsic",
@@ -78,6 +82,9 @@ const OPTION_COLUMN_LABEL: Record<OptionColumnId, string> = {
   price: "Spot",
   tradePrice: "Trade",
   marketValue: "Market value",
+  marginSecured: "Margin $ secured",
+  roi: "ROI",
+  annualizedRoi: "Ann. ROI",
   pnlPct: "P/L",
   pnlPctPct: "P/L %",
   intrinsic: "Intrinsic",
@@ -112,6 +119,14 @@ function optionPnlInputs(r: OptionContractRow) {
     quantity: r.quantity,
   };
 }
+
+/** Short call (sold call) — covered-style margin display on Alerts. */
+function isSoldCallRow(r: Pick<OptionContractRow, "securityType" | "quantity" | "optionRight">): boolean {
+  return r.securityType === "option" && r.quantity < 0 && r.optionRight === "C";
+}
+
+const SOLD_CALL_ROW_CLASS =
+  "bg-orange-100/90 dark:bg-orange-500/20 border-orange-300/70 dark:border-orange-500/35";
 
 /** Extrinsic as a percentage of intrinsic (position totals from API; ratio equals per-contract). */
 function formatExtrinsicPctOfIntrinsic(intrinsic: number | null, extrinsic: number | null): string {
@@ -283,6 +298,40 @@ function OptionContractsRedTile({
             {r.marketValue == null ? "—" : formatUsd2(r.marketValue, { mask: privacy.masked })}
           </td>
         );
+      case "marginSecured": {
+        if (isSoldCallRow(r)) {
+          return (
+            <td
+              key={col}
+              className="whitespace-nowrap py-2 pr-6 text-right text-xs font-semibold uppercase tracking-wide text-orange-800 dark:text-orange-300"
+            >
+              covered
+            </td>
+          );
+        }
+        const m = optionMarginRoiForRow(r);
+        return (
+          <td key={col} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums text-zinc-800 dark:text-zinc-200">
+            {m == null ? "—" : formatUsd2(m.marginSecured, { mask: privacy.masked })}
+          </td>
+        );
+      }
+      case "roi": {
+        const m = optionMarginRoiForRow(r);
+        return (
+          <td key={col} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums text-zinc-800 dark:text-zinc-200">
+            {m == null ? "—" : `${formatNum(m.roiPct, 2)}%`}
+          </td>
+        );
+      }
+      case "annualizedRoi": {
+        const m = optionMarginRoiForRow(r);
+        return (
+          <td key={col} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums text-zinc-800 dark:text-zinc-200">
+            {m == null ? "—" : `${formatNum(m.annualizedRoiPct, 2)}%`}
+          </td>
+        );
+      }
       case "pnlPct": {
         const pnl = optionPnlDollarsFromAvgPrice(optionPnlInputs(r));
         return (
@@ -379,7 +428,15 @@ function OptionContractsRedTile({
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.positionId} className="border-b border-zinc-200/80 dark:border-white/10">
+                <tr
+                  key={r.positionId}
+                  className={
+                    "border-b " +
+                    (isSoldCallRow(r)
+                      ? SOLD_CALL_ROW_CLASS
+                      : "border-zinc-200/80 dark:border-white/10")
+                  }
+                >
                   {optionColumnOrder.map((col) => optionCell(col, r))}
                 </tr>
               ))}

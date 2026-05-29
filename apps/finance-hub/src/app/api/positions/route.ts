@@ -8,6 +8,18 @@ import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
 import { latestSnapshotIds as latestSyncedSnapshotIds } from "@/lib/holdings/latestSnapshots";
 import { resolvePositionAveragePrice } from "@/lib/holdings/positionAveragePrice";
 import { buildLiveEquityMarkMap, resolveEquityMarkPx } from "@/lib/market/liveEquityMarks";
+import { normalizeEquitySymbol } from "@/lib/market/equityMarkPrice";
+import {
+  markToMarketFund,
+  needsPlanFundPricing,
+  parseFundStatementBasis,
+  repairFundBasisIfMarkDrift,
+} from "@/lib/market/planFundPricing";
+import {
+  fetchYahooLatestPrices,
+  loadYahooPricePointsMap,
+  persistYahooPricePoints,
+} from "@/lib/market/yahooLatestPrice";
 import { latestSnapshotId } from "@/lib/snapshots";
 import { collectNonIndividualSecuritySymbols } from "@/lib/terminal/individualSecurityFilter";
 
@@ -152,14 +164,58 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
   }
 
   const liveMarks = await buildLiveEquityMarkMap(equitySymbols);
+  const yahooPricePoints = loadYahooPricePointsMap(db, equitySymbols);
+
+  const yahooFetchSymbols = new Set<string>();
+  for (const r of rows) {
+    if (r.securityType === "option" || r.securityType === "cash") continue;
+    const sym = normalizeEquitySymbol(r.symbol ?? "");
+    if (!sym) continue;
+    const isManual = isManualAccountId(r.accountId) || parseManualPositionMetadata(r.metadataJson) != null;
+    const planFund = needsPlanFundPricing(isManual, r.securityType, r.accountBucket);
+    const needsYahoo = planFund || r.securityType === "fund" || isManual;
+    if (!needsYahoo) continue;
+    // Manual rows: stored MV/qty is stale entry data — never treat as a live mark.
+    const snapshotImplied =
+      isManual || !(r.quantity && r.marketValue != null)
+        ? null
+        : r.marketValue / r.quantity;
+    const cachedMark = resolveEquityMarkPx(
+      sym,
+      liveMarks,
+      pricePoints,
+      snapshotImplied,
+      new Map(),
+      yahooPricePoints,
+    );
+    if (cachedMark != null && !isManual) continue;
+    yahooFetchSymbols.add(sym);
+  }
+
+  const yahooLive =
+    yahooFetchSymbols.size > 0 ? await fetchYahooLatestPrices(yahooFetchSymbols) : new Map<string, number>();
+  if (yahooLive.size > 0) persistYahooPricePoints(db, yahooLive);
 
   const underPx = new Map<string, number>();
   for (const u of underRows) {
     const key = (u.symbol ?? "").trim().toUpperCase();
     if (!key) continue;
     const snapshotImplied = u.qty ? u.mv / u.qty : null;
-    const markPx = resolveEquityMarkPx(key, liveMarks, pricePoints, snapshotImplied);
+    const markPx = resolveEquityMarkPx(
+      key,
+      liveMarks,
+      pricePoints,
+      snapshotImplied,
+      yahooLive,
+      yahooPricePoints,
+    );
     if (markPx != null) underPx.set(key, markPx);
+  }
+  // Intrinsic/extrinsic for options need underlying spot even when only options are held.
+  for (const sym of equitySymbols) {
+    if (underPx.has(sym)) continue;
+    const markPx = resolveEquityMarkPx(sym, liveMarks, pricePoints, null, yahooLive, yahooPricePoints);
+    if (markPx != null) underPx.set(sym, markPx);
   }
 
   const out = rows.map((r) => {
@@ -188,11 +244,48 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
     if (r.securityType !== "option") {
       const sym = (r.symbol ?? "").toUpperCase();
       const snapshotImplied =
-        r.quantity && r.marketValue != null ? r.marketValue / r.quantity : r.price ?? null;
-      const price = resolveEquityMarkPx(sym, liveMarks, pricePoints, snapshotImplied) ?? r.price;
-      let marketValue =
-        price != null && Number.isFinite(price) ? price * (r.quantity ?? 0) : r.marketValue;
-      if (isManual && r.marketValue != null && !liveMarks.has(sym) && !pricePoints.has(sym)) {
+        isManual || !(r.quantity && r.marketValue != null)
+          ? null
+          : r.marketValue / r.quantity;
+      const markPx = resolveEquityMarkPx(
+        sym,
+        liveMarks,
+        pricePoints,
+        snapshotImplied,
+        yahooLive,
+        yahooPricePoints,
+      );
+      const qty = r.quantity ?? 0;
+      const planFund = needsPlanFundPricing(isManual, r.securityType, r.accountBucket);
+      let fundBasis = parseFundStatementBasis(manualMeta);
+      const navToday = markPx ?? yahooLive.get(sym) ?? null;
+      // Manual: `price` is purchase cost (Cost/share column).
+      const price = isManual ? r.price : (markPx ?? r.price);
+      let marketValue: number | null;
+      if (planFund && fundBasis && navToday != null) {
+        const repaired = repairFundBasisIfMarkDrift(fundBasis, navToday, qty);
+        if (repaired) {
+          fundBasis = repaired;
+          const meta = manualMeta ?? { source: "manual" as const, purchaseDate: null };
+          db.prepare(`UPDATE positions SET metadata_json = ?, market_value = ? WHERE id = ?`).run(
+            JSON.stringify({ ...meta, fundBasis: repaired }),
+            repaired.statementMarketValue,
+            r.positionId,
+          );
+        }
+        marketValue = markToMarketFund(fundBasis, navToday);
+        if (!repaired) {
+          db.prepare(`UPDATE positions SET market_value = ? WHERE id = ?`).run(marketValue, r.positionId);
+        }
+      } else if (planFund && r.marketValue != null) {
+        marketValue = r.marketValue;
+      } else if (markPx != null && Number.isFinite(markPx)) {
+        marketValue = markPx * qty;
+      } else if (isManual) {
+        marketValue = r.marketValue;
+      } else if (price != null && Number.isFinite(price)) {
+        marketValue = price * qty;
+      } else {
         marketValue = r.marketValue;
       }
       return {

@@ -21,6 +21,7 @@ import {
   type OptionFlowPayload,
 } from "@/app/components/terminal/OptionFlowPanel";
 import { PortfolioTreemapSection } from "@/app/components/terminal/PortfolioTreemapSection";
+import { Sparkline } from "@/app/components/terminal/Sparkline";
 import {
   readTreemapMetric,
   readTreemapScope,
@@ -57,29 +58,48 @@ import { heatmapCellStyle } from "@/lib/terminal/dailyPerfColor";
 import { posNegClass, priceDirClass } from "@/lib/terminal/colors";
 import { computeMovers } from "@/lib/terminal/movers";
 import { shouldHideNonIndividualSymbol } from "@/lib/terminal/individualSecurityFilter";
+import { aggregateUnderlyingDayPlFromPositions } from "@/lib/schwab/schwabPositionDayPl";
 import { usePersistedColumnOrder } from "@/lib/usePersistedColumnOrder";
 
 type WatchlistRow = { id: string; name: string; createdAt: string; itemCount: number };
 
 type NormalizedQuote = ApiNormalizedQuote;
 
-type SortCol = "symbol" | "company" | "last" | "chgPct" | "chg" | "volume" | "volX";
+type SortCol = "symbol" | "company" | "last" | "chgPct" | "chg" | "dayPl" | "volX";
 type VolumeInfo = { volume: number | null; avgVolume20: number | null; ratio: number | null; flagged: boolean };
 
-type TerminalCol = "symbol" | "company" | "last" | "chg" | "chgPct" | "volume" | "volX";
+type TerminalCol = "symbol" | "company" | "trend" | "last" | "chg" | "chgPct" | "dayPl" | "volX";
 
-const DEFAULT_TERMINAL_COL_ORDER: TerminalCol[] = ["symbol", "company", "last", "chg", "chgPct", "volume", "volX"];
-const TERMINAL_QUOTES_COLUMN_KEY = "fh.terminal.quotes.columns.v1";
-const TERMINAL_QUOTES_COLUMN_LEGACY = ["terminal_table_column_order_v2", "terminal_table_column_order_v1"] as const;
+const DEFAULT_TERMINAL_COL_ORDER: TerminalCol[] = [
+  "symbol",
+  "company",
+  "trend",
+  "last",
+  "chg",
+  "chgPct",
+  "dayPl",
+  "volX",
+];
+const TERMINAL_QUOTES_COLUMN_KEY = "fh.terminal.quotes.columns.v4";
+const TERMINAL_QUOTES_COLUMN_LEGACY = [
+  "fh.terminal.quotes.columns.v3",
+  "fh.terminal.quotes.columns.v2",
+  "fh.terminal.quotes.columns.v1",
+  "terminal_table_column_order_v2",
+  "terminal_table_column_order_v1",
+] as const;
 const TERMINAL_COL_LABEL: Record<TerminalCol, string> = {
   symbol: "Symbol",
   company: "Company",
+  trend: "Today",
   last: "Last",
   chg: "$ Chg",
   chgPct: "% Chg",
-  volume: "Volume",
+  dayPl: "Day P/L",
   volX: "Vol ×",
 };
+/** Columns that are not sortable (rendered as plain labels). */
+const NON_SORT_TERMINAL_COLS = new Set<TerminalCol>(["trend"]);
 const HEAT_VIEW = "portfolio" as const;
 
 const PCT2 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -199,10 +219,12 @@ export default function TerminalPage() {
     TERMINAL_QUOTES_COLUMN_LEGACY,
   );
   const [companyBySymbol, setCompanyBySymbol] = useState<Map<string, string>>(new Map());
+  const [sparklineBySymbol, setSparklineBySymbol] = useState<Map<string, number[]>>(new Map());
   const [volumeLeadersMode, setVolumeLeadersMode] = useState<"volume" | "volX">("volume");
   const [optionFlowMode, setOptionFlowMode] = useState<"volume" | "relative">("volume");
   const [heatItems, setHeatItems] = useState<HeatmapItem[]>([]);
   const [positionMvBySym, setPositionMvBySym] = useState<Map<string, number>>(() => new Map());
+  const [underlyingDayPlBySym, setUnderlyingDayPlBySym] = useState<Map<string, number>>(() => new Map());
   const [exposureRows, setExposureRows] = useState<ExposureRow[]>([]);
   const [exposureBuckets, setExposureBuckets] = useState<
     Array<{ bucketKey: "brokerage" | "retirement" | "529"; exposure: ExposureRow[] }>
@@ -412,6 +434,29 @@ export default function TerminalPage() {
     }
   }
 
+  async function loadSparklines(symList: string[]) {
+    if (symList.length === 0) {
+      setSparklineBySymbol(new Map());
+      return;
+    }
+    try {
+      const qs = new URLSearchParams({ symbols: symList.join(",") });
+      const resp = await fetch(`/api/terminal/sparklines?${qs.toString()}`, { cache: "no-store" });
+      const json = await terminalFetchJson<{ ok: boolean; series?: Record<string, number[]> }>(
+        resp,
+        "sparklines",
+      );
+      if (!json.ok) return;
+      const m = new Map<string, number[]>();
+      for (const [k, v] of Object.entries(json.series ?? {})) {
+        if (Array.isArray(v)) m.set(k.toUpperCase(), v);
+      }
+      setSparklineBySymbol(m);
+    } catch {
+      // sparklines are decorative — ignore failures
+    }
+  }
+
   async function loadVolumeAnomalies(symList: string[]) {
     if (symList.length === 0) {
       setVolumeInfo(new Map());
@@ -461,6 +506,7 @@ export default function TerminalPage() {
 
   function deferTerminalSecondaryLoads(nextWatchlistId: string | null, symList: string[]) {
     window.setTimeout(() => void loadOptionFlow(nextWatchlistId).catch(() => null), 1500);
+    window.setTimeout(() => void loadSparklines(symList).catch(() => null), 1800);
     window.setTimeout(() => void loadVolumeAnomalies(symList).catch(() => null), 2500);
   }
 
@@ -716,11 +762,19 @@ export default function TerminalPage() {
           const posResp = await fetch("/api/positions", { cache: "no-store" });
           const posJson = await terminalFetchJson<{
             ok: boolean;
-            positions?: Array<{ symbol: string | null; marketValue: number | null }>;
+            positions?: Array<{
+              symbol: string | null;
+              securityType: string;
+              underlyingSymbol: string | null;
+              effectiveUnderlyingSymbol?: string | null;
+              marketValue: number | null;
+              metadataJson?: string | null;
+            }>;
             nonIndividualSecuritySymbols?: string[];
           }>(posResp, "positions");
           if (!posJson.ok) {
             setPositionMvBySym(new Map());
+            setUnderlyingDayPlBySym(new Map());
             return;
           }
           setNonIndividualSymbols(new Set((posJson.nonIndividualSecuritySymbols ?? []).map((s) => s.toUpperCase())));
@@ -734,6 +788,7 @@ export default function TerminalPage() {
           }
 
           setPositionMvBySym(mvBySym);
+          setUnderlyingDayPlBySym(aggregateUnderlyingDayPlFromPositions(posJson.positions ?? []));
           void loadExposureWeighting();
         } catch {
           // ignore
@@ -794,6 +849,12 @@ export default function TerminalPage() {
     return filteredHeatItems.filter((it) => !heatmapHiddenSymbols.has(it.symbol.toUpperCase()));
   }, [filteredHeatItems, heatmapHiddenSymbols]);
 
+  /** Symbols actually rendered in the heatmap grid (same slice as HeatmapGrid). */
+  const visibleHeatmapSymbolSet = useMemo(
+    () => new Set(visualHeatItems.slice(0, 220).map((it) => it.symbol.toUpperCase())),
+    [visualHeatItems],
+  );
+
   const sortedHiddenHeatmapSymbols = useMemo(
     () => [...heatmapHiddenSymbols].sort((a, b) => a.localeCompare(b)),
     [heatmapHiddenSymbols],
@@ -826,12 +887,7 @@ export default function TerminalPage() {
   }
 
   const sortedQuotes = useMemo(() => {
-    const a = quotes.filter((q) => {
-      const sym = q.symbol.toUpperCase();
-      if (!portfolioSymbolSet.has(sym)) return false;
-      if (shouldHideSymbol(sym)) return false;
-      return true;
-    });
+    const a = quotes.filter((q) => visibleHeatmapSymbolSet.has(q.symbol.toUpperCase()));
     a.sort((x, y) => {
       let cmp = 0;
       switch (sortCol) {
@@ -853,9 +909,12 @@ export default function TerminalPage() {
         case "chg":
           cmp = (num(x.change) ?? -Infinity) - (num(y.change) ?? -Infinity);
           break;
-        case "volume":
-          cmp = (num(x.volume) ?? -Infinity) - (num(y.volume) ?? -Infinity);
+        case "dayPl": {
+          const ax = underlyingDayPlBySym.get(x.symbol.toUpperCase()) ?? -Infinity;
+          const bx = underlyingDayPlBySym.get(y.symbol.toUpperCase()) ?? -Infinity;
+          cmp = ax - bx;
           break;
+        }
         case "volX": {
           const ax = volumeInfo.get(x.symbol)?.ratio ?? -Infinity;
           const bx = volumeInfo.get(y.symbol)?.ratio ?? -Infinity;
@@ -867,7 +926,15 @@ export default function TerminalPage() {
       return sortAsc ? cmp : -cmp;
     });
     return a;
-  }, [quotes, portfolioSymbolSet, sortCol, sortAsc, volumeInfo, companyBySymbol, shouldHideSymbol]);
+  }, [
+    quotes,
+    visibleHeatmapSymbolSet,
+    sortCol,
+    sortAsc,
+    volumeInfo,
+    companyBySymbol,
+    underlyingDayPlBySym,
+  ]);
 
   const moversDisplay = useMemo(() => {
     const portfolioQuotes = quotes.filter((q) => {
@@ -970,7 +1037,7 @@ export default function TerminalPage() {
           </p>
           {!rthOpen ? (
             <p className="mt-2 text-xs font-medium text-amber-800 dark:text-amber-200">
-              Market closed — equity live refresh is paused. Use Quick glance → Futures for global E-minis, or configure Schwab contracts below.
+              Market closed — equity live refresh is paused. Use Quick glance → Alternative for global E-minis, or configure Schwab contracts below.
             </p>
           ) : null}
         </div>
@@ -1017,7 +1084,7 @@ export default function TerminalPage() {
                 <div className="text-[11px] text-zinc-600 dark:text-zinc-400">
                   From <span className="font-mono">TERMINAL_FUTURES_SYMBOLS</span> (e.g.{" "}
                   <span className="font-mono">/ESM6,/NQM6</span>). Global ES/NQ/Nikkei/Russell are in Quick glance →
-                  Futures. The 4th Markets tile is selectable (Russell, Gold, Bitcoin, WTI Crude, Nikkei, FTSE 100).
+                  Alternative. Markets slots 2–4 and all Alternative tiles are selectable (Russell, Gold, Bitcoin, Ethereum, VIX, WTI, Nikkei, FTSE).
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {futuresItems.map((row) => {
@@ -1195,8 +1262,9 @@ export default function TerminalPage() {
               <thead>
                 <tr className="border-b border-zinc-300 bg-zinc-50 text-left text-zinc-600 dark:border-white/20 dark:bg-zinc-900/40 dark:text-zinc-400">
                   {colOrder.map((c) => {
-                    const align = c === "symbol" || c === "company" ? "left" : "right";
-                    const colActive = sortCol === c;
+                    const align = c === "symbol" || c === "company" || c === "trend" ? "left" : "right";
+                    const sortable = !NON_SORT_TERMINAL_COLS.has(c);
+                    const colActive = sortable && sortCol === c;
                     const ariaSort = colActive ? (sortAsc ? "ascending" : "descending") : "none";
                     return (
                       <DraggableColumnHeader
@@ -1205,7 +1273,6 @@ export default function TerminalPage() {
                         columnOrder={colOrder}
                         moveColumn={moveColumn}
                         aria-sort={ariaSort}
-                        title="Drag to reorder columns · double-click label to rename"
                         className={
                           "py-2 pr-4 font-medium " +
                           DRAGGABLE_COLUMN_HEADER_GRAB_CLASS +
@@ -1213,15 +1280,23 @@ export default function TerminalPage() {
                           (align === "right" ? "text-right" : "text-left")
                         }
                       >
-                        <SortTh
-                          col={c}
-                          tableKey={TERMINAL_QUOTES_COLUMN_KEY}
-                          defaultLabel={TERMINAL_COL_LABEL[c]}
-                          sortCol={sortCol}
-                          sortAsc={sortAsc}
-                          onToggle={toggleSort}
-                          align={align as "left" | "right"}
-                        />
+                        {sortable ? (
+                          <SortTh
+                            col={c as SortCol}
+                            tableKey={TERMINAL_QUOTES_COLUMN_KEY}
+                            defaultLabel={TERMINAL_COL_LABEL[c]}
+                            sortCol={sortCol}
+                            sortAsc={sortAsc}
+                            onToggle={toggleSort}
+                            align={align as "left" | "right"}
+                          />
+                        ) : (
+                          <ColumnLabel
+                            tableKey={TERMINAL_QUOTES_COLUMN_KEY}
+                            columnId={c}
+                            defaultLabel={TERMINAL_COL_LABEL[c]}
+                          />
+                        )}
                       </DraggableColumnHeader>
                     );
                   })}
@@ -1233,6 +1308,8 @@ export default function TerminalPage() {
                   const chgPct = q.changePercent == null ? null : q.changePercent * 100;
                   const v = volumeInfo.get(q.symbol);
                   const spot = quoteDisplaySpot(q);
+                  const spark = sparklineBySymbol.get(q.symbol.toUpperCase());
+                  const dayPl = underlyingDayPlBySym.get(q.symbol.toUpperCase()) ?? null;
                   return (
                     <tr
                       key={q.symbol}
@@ -1256,12 +1333,20 @@ export default function TerminalPage() {
                               </td>
                             );
                           }
+                          case "trend":
+                            return (
+                              <td key={c} className="py-2 pr-4 align-middle">
+                                <SymbolLink symbol={q.symbol} className="inline-flex hover:no-underline" title={`Open ${q.symbol}`}>
+                                  <Sparkline values={spark ?? []} changePct={chgPct} />
+                                </SymbolLink>
+                              </td>
+                            );
                           case "last":
                             return (
                               <td
                                 key={c}
                                 className={
-                                  "py-2 pr-4 text-right tabular-nums " + priceDirClass(spot, q.close)
+                                  "py-2 pr-4 text-right font-medium tabular-nums " + priceDirClass(spot, q.close)
                                 }
                               >
                                 {spot == null ? "—" : spot.toFixed(2)}
@@ -1276,13 +1361,19 @@ export default function TerminalPage() {
                           case "chgPct":
                             return (
                               <td key={c} className={"py-2 pr-4 text-right tabular-nums " + posNegClass(chgPct)}>
-                                {chgPct == null ? "—" : PCT2.format(chgPct) + "%"}
+                                {chgPct == null ? "—" : `${chgPct >= 0 ? "+" : ""}${PCT2.format(chgPct)}%`}
                               </td>
                             );
-                          case "volume":
+                          case "dayPl":
                             return (
-                              <td key={c} className="py-2 pr-4 text-right tabular-nums">
-                                {q.volume == null ? "—" : Math.round(q.volume).toLocaleString()}
+                              <td
+                                key={c}
+                                className={
+                                  "py-2 pr-4 text-right tabular-nums font-medium " +
+                                  (dayPl == null ? "text-zinc-500 dark:text-zinc-500" : posNegClass(dayPl))
+                                }
+                              >
+                                {dayPl == null ? "—" : usd2Masked(dayPl, privacy.masked)}
                               </td>
                             );
                           case "volX":

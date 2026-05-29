@@ -5,6 +5,9 @@ export type PositionsColumnId =
   | "quantity"
   | "price"
   | "marketValue"
+  | "marginSecured"
+  | "roi"
+  | "annualizedRoi"
   | "purchaseDate"
   | "delta"
   | "gamma"
@@ -20,6 +23,9 @@ export const POSITIONS_COLUMN_DEFAULT_ORDER: readonly PositionsColumnId[] = [
   "quantity",
   "price",
   "marketValue",
+  "marginSecured",
+  "roi",
+  "annualizedRoi",
   "purchaseDate",
   "delta",
   "gamma",
@@ -43,6 +49,9 @@ export const POSITIONS_COLUMN_LABEL: Record<PositionsColumnId, string> = {
   quantity: "Qty",
   price: "Price",
   marketValue: "Market\u00A0value",
+  marginSecured: "Margin $ secured",
+  roi: "ROI",
+  annualizedRoi: "Ann. ROI",
   purchaseDate: "Purchased",
   delta: "Delta",
   gamma: "Gamma",
@@ -54,7 +63,10 @@ export const POSITIONS_COLUMN_LABEL: Record<PositionsColumnId, string> = {
 };
 
 /** Sortable data columns (excludes account / syntheticShares). */
-export type PositionsSortColumn = Exclude<PositionsColumnId, "account" | "syntheticShares">;
+export type PositionsSortColumn = Exclude<
+  PositionsColumnId,
+  "account" | "syntheticShares" | "marginSecured" | "roi" | "annualizedRoi"
+>;
 
 export const POSITIONS_SORT_COLUMNS: readonly PositionsSortColumn[] = POSITIONS_COLUMN_DEFAULT_ORDER.filter(
   (c): c is PositionsSortColumn => c !== "account" && c !== "syntheticShares",
