@@ -147,7 +147,7 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
 export function sumSchwabLiquidationLiveAccounts(accounts: SchwabAccountPayload[]): {
   current: number;
   prior: number | null;
-} | null> {
+} | null {
   let current = 0;
   let prior = 0;
   let currentAccountCount = 0;
