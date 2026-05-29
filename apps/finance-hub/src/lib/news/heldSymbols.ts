@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-import { notPosterityWhereSql } from "@/lib/posterity";
+import { allSyncedAccountsWhereSql } from "@/lib/holdings/latestSnapshots";
 
 /** Distinct equity/fund tickers from latest Schwab snapshots (for ingest tagging). */
 export function loadHeldEquitySymbols(db: Database.Database, limit = 500): string[] {
@@ -13,7 +13,7 @@ export function loadHeldEquitySymbols(db: Database.Database, limit = 500): strin
       JOIN accounts a ON a.id = hs.account_id
       JOIN securities s ON s.id = p.security_id
       WHERE a.id LIKE 'schwab_%'
-        AND ${notPosterityWhereSql("a")}
+        AND ${allSyncedAccountsWhereSql("a")}
         AND s.security_type NOT IN ('cash', 'option')
         AND s.symbol IS NOT NULL
         AND TRIM(s.symbol) != ''

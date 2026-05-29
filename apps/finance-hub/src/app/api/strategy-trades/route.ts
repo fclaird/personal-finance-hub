@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
+import { allSyncedAccountsWhereSql } from "@/lib/holdings/latestSnapshots";
 import { logError } from "@/lib/log";
-import { notPosterityWhereSql } from "@/lib/posterity";
 import { isStrategyTabSlug } from "@/lib/strategy/strategyCategories";
 import {
   computeStrategyStats,
@@ -11,7 +11,7 @@ import {
 } from "@/lib/strategy/strategyTradeStats";
 
 /** When the TRADE ledger is empty, surface latest option holdings so the page is not blank. */
-function openOptionPositionsAsTradeRows(db: ReturnType<typeof getDb>, posteritySql: string): StrategyTradeApiRow[] {
+function openOptionPositionsAsTradeRows(db: ReturnType<typeof getDb>, accountScopeSql: string): StrategyTradeApiRow[] {
   const snapRows = db
     .prepare(
       `
@@ -19,7 +19,7 @@ function openOptionPositionsAsTradeRows(db: ReturnType<typeof getDb>, posterityS
       FROM holding_snapshots hs
       JOIN accounts a ON a.id = hs.account_id
       WHERE a.id LIKE 'schwab_%'
-        AND ${posteritySql}
+        AND ${accountScopeSql}
         AND hs.as_of = (
           SELECT MAX(hs2.as_of) FROM holding_snapshots hs2 WHERE hs2.account_id = a.id
         )
@@ -191,7 +191,7 @@ export async function GET(req: Request) {
     const format = searchParams.get("format") ?? "json";
 
     const db = getDb();
-    const posterity = notPosterityWhereSql("a");
+    const accountScope = allSyncedAccountsWhereSql("a");
 
     type CountRow = { c: number };
     const storedTradeRowCount = (db.prepare(`SELECT COUNT(*) AS c FROM broker_transactions`).get() as CountRow).c;
@@ -221,7 +221,7 @@ export async function GET(req: Request) {
         JOIN accounts a ON a.id = b.account_id
         WHERE 1=1
           ${categoryFilterSql}
-          AND ${posterity}
+          AND ${accountScope}
         ORDER BY b.trade_date DESC, b.id DESC
       `,
       )
@@ -230,7 +230,7 @@ export async function GET(req: Request) {
     let trades = rows.map(toApiRow);
     let tradeDataSource: "ledger" | "positions_preview" = "ledger";
     if (trades.length === 0 && category === "all") {
-      const preview = openOptionPositionsAsTradeRows(db, posterity);
+      const preview = openOptionPositionsAsTradeRows(db, accountScope);
       if (preview.length > 0) {
         trades = preview;
         tradeDataSource = "positions_preview";

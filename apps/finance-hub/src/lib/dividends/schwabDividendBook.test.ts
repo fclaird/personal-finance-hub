@@ -73,6 +73,17 @@ describe("schwabDividendBook", () => {
     assert.ok(agg[0]!.accountLabels.includes("Taxable"));
   });
 
+  it("excludes Aurora-exclusive Schwab accounts from parent dividend rows", () => {
+    const db = createTestDb();
+    seedSchwabAccount(db, "schwab_94558855", "Aurora", "snap_aurora", "2025-06-01T12:00:00Z");
+    seedSchwabAccount(db, "schwab_parent", "Parent", "snap_parent", "2025-06-01T12:00:00Z");
+    seedEquityPosition(db, "snap_aurora", "AUR", 10, 100, 1000);
+    seedEquityPosition(db, "snap_parent", "VTI", 5, 100, 500);
+
+    const rows = loadLatestSchwabPositionRows(db);
+    assert.deepEqual(rows.map((r) => r.symbol), ["VTI"]);
+  });
+
   it("computeDividendBookBanner calculates MV share and yields", async () => {
     const db = createTestDb();
     const all = await enrichSymbolHoldings(db, [

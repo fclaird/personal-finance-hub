@@ -9,7 +9,7 @@ import { holdingRowIsDividendProducer } from "@/lib/dividends/dividendProducingF
 import { computeFooterTotals, type EnrichedHoldingRow } from "@/lib/dividends/enrichedHoldings";
 import { inferHoldingCategory, isSchwabFundLike } from "@/lib/dividends/holdingCategory";
 import { enrichSymbolHoldings } from "@/lib/dividends/symbolEnrichment";
-import { notPosterityWhereSql } from "@/lib/posterity";
+import { allSyncedAccountsWhereSql } from "@/lib/holdings/latestSnapshots";
 
 import { parseSchwabAssetType } from "./schwabPositionMeta";
 
@@ -80,7 +80,7 @@ export function loadLatestSchwabPositionRows(db: Database.Database): RawSchwabPo
       JOIN accounts a ON a.id = hs.account_id
       JOIN securities s ON s.id = p.security_id
       WHERE a.id LIKE 'schwab_%'
-        AND ${notPosterityWhereSql("a")}
+        AND ${allSyncedAccountsWhereSql("a")}
         AND s.security_type NOT IN ('cash', 'option')
         AND p.quantity > 0
         AND s.symbol IS NOT NULL

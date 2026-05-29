@@ -8,7 +8,7 @@ import { isoDateInUsEastern } from "@/lib/market/glanceSession";
 import { pickEquityUsd, pickPriorEquityUsd } from "@/lib/schwab/accountBalances";
 import { schwabFetch } from "@/lib/schwab/client";
 
-type SchwabAccountPayload = {
+export type SchwabAccountPayload = {
   securitiesAccount: {
     accountId?: string;
     accountNumber?: string;
@@ -144,29 +144,38 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
   };
 }
 
+export function sumSchwabLiquidationLiveAccounts(accounts: SchwabAccountPayload[]): {
+  current: number;
+  prior: number | null;
+} | null> {
+  let current = 0;
+  let prior = 0;
+  let currentAccountCount = 0;
+  let priorAccountCount = 0;
+  for (const a of accounts) {
+    const accountId = schwabAccountId(a.securitiesAccount);
+    if (!accountId) continue;
+    const equity = pickEquityUsd(a.securitiesAccount.currentBalances);
+    if (equity == null || !Number.isFinite(equity)) continue;
+    current += equity;
+    currentAccountCount += 1;
+    const prev = pickPriorEquityUsd(a.securitiesAccount.currentBalances);
+    if (prev != null && Number.isFinite(prev)) {
+      prior += prev;
+      priorAccountCount += 1;
+    }
+  }
+  if (current <= 0) return null;
+  return { current, prior: priorAccountCount === currentAccountCount ? prior : null };
+}
+
 export async function fetchSchwabLiquidationLive(): Promise<{
   current: number;
   prior: number | null;
 } | null> {
   try {
     const accounts = await schwabFetch<SchwabAccountPayload[]>("accounts");
-    let current = 0;
-    let prior = 0;
-    let hasPrior = false;
-    for (const a of accounts) {
-      const accountId = schwabAccountId(a.securitiesAccount);
-      if (!accountId) continue;
-      const equity = pickEquityUsd(a.securitiesAccount.currentBalances);
-      if (equity == null || !Number.isFinite(equity)) continue;
-      current += equity;
-      const prev = pickPriorEquityUsd(a.securitiesAccount.currentBalances);
-      if (prev != null && Number.isFinite(prev)) {
-        prior += prev;
-        hasPrior = true;
-      }
-    }
-    if (current <= 0) return null;
-    return { current, prior: hasPrior ? prior : null };
+    return sumSchwabLiquidationLiveAccounts(accounts);
   } catch {
     return null;
   }

@@ -3,9 +3,13 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
 import { isManualAccountId, parseManualPositionMetadata } from "@/lib/manual/manualAccounts";
-import { isPosterityAccountId, notPosterityWhereSql } from "@/lib/posterity";
+import { isAuroraExclusiveAccountId } from "@/lib/auroraExclusive";
+import { isPosterityAccountId } from "@/lib/posterity";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
-import { latestSnapshotIds as latestSyncedSnapshotIds } from "@/lib/holdings/latestSnapshots";
+import {
+  allSyncedAccountsWhereSql,
+  latestSnapshotIds as latestSyncedSnapshotIds,
+} from "@/lib/holdings/latestSnapshots";
 import { resolvePositionAveragePrice } from "@/lib/holdings/positionAveragePrice";
 import { buildLiveEquityMarkMap, resolveEquityMarkPx } from "@/lib/market/liveEquityMarks";
 import { latestSnapshotId } from "@/lib/snapshots";
@@ -296,6 +300,10 @@ function nonIndividualSecuritySymbolsForSnapshots(db: ReturnType<typeof getDb>, 
   return collectNonIndividualSecuritySymbols(rows);
 }
 
+function isExcludedAccountId(accountId: string): boolean {
+  return isPosterityAccountId(accountId) || isAuroraExclusiveAccountId(accountId);
+}
+
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
@@ -309,22 +317,42 @@ export async function GET(req: Request) {
     let responseSnapshotLabel: string | null = null;
 
     if (accountIdParam) {
-      if (isPosterityAccountId(accountIdParam)) {
+      if (isExcludedAccountId(accountIdParam)) {
         return NextResponse.json(
-          { ok: false, error: "Posterity accounts are not served by this route; use posterity APIs." },
+          { ok: false, error: "This account is not served by the parent positions route." },
           { status: 400 },
         );
       }
       const snap = db
         .prepare(
-          `SELECT id FROM holding_snapshots WHERE account_id = ? ORDER BY as_of DESC LIMIT 1`,
+          `
+          SELECT hs.id
+          FROM holding_snapshots hs
+          JOIN accounts a ON a.id = hs.account_id
+          WHERE hs.account_id = ?
+            AND ${allSyncedAccountsWhereSql("a")}
+          ORDER BY hs.as_of DESC
+          LIMIT 1
+        `,
         )
         .get(accountIdParam) as { id: string } | undefined;
       snaps = snap ? [snap.id] : [];
       responseSnapshotLabel = snap?.id ?? null;
     } else if (snapshotId != null) {
-      snaps = [snapshotId];
-      responseSnapshotLabel = snapshotId;
+      const snap = db
+        .prepare(
+          `
+          SELECT hs.id
+          FROM holding_snapshots hs
+          JOIN accounts a ON a.id = hs.account_id
+          WHERE hs.id = ?
+            AND ${allSyncedAccountsWhereSql("a")}
+          LIMIT 1
+        `,
+        )
+        .get(snapshotId) as { id: string } | undefined;
+      snaps = snap ? [snap.id] : [];
+      responseSnapshotLabel = snap?.id ?? null;
     } else {
       snaps = latestSyncedSnapshotIds(db, "all_synced");
       responseSnapshotLabel = latest ?? null;
@@ -353,6 +381,7 @@ export async function GET(req: Request) {
         `
         SELECT id, name, nickname, type, connection_id, account_bucket AS accountBucket
         FROM accounts
+        WHERE ${allSyncedAccountsWhereSql("accounts")}
         ORDER BY name ASC
       `,
       )

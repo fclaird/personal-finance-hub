@@ -1,10 +1,9 @@
 import Database from "better-sqlite3";
 
 import { getDb } from "@/lib/db";
-import { latestSnapshotPerAccountJoinSql } from "@/lib/holdings/latestSnapshots";
+import { allSyncedAccountsWhereSql, latestSnapshotPerAccountJoinSql } from "@/lib/holdings/latestSnapshots";
 import { newId } from "@/lib/id";
 import { latestSnapshotId } from "@/lib/snapshots";
-import { notPosterityWhereSql } from "@/lib/posterity";
 
 /**
  * Latest holding_snapshots.id per Schwab account (matches Positions / refresh-greeks).
@@ -18,7 +17,7 @@ export function getLatestSchwabSnapshotIds(db: Database.Database): string[] {
       JOIN accounts a ON a.id = hs.account_id
       ${latestSnapshotPerAccountJoinSql("hs")}
       WHERE a.id LIKE 'schwab_%'
-        AND ${notPosterityWhereSql("a")}
+        AND ${allSyncedAccountsWhereSql("a")}
       ORDER BY a.name ASC
     `,
     )
