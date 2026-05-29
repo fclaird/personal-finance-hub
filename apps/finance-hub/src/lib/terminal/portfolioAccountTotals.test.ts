@@ -8,6 +8,7 @@ import {
   externalMarketValueFromDb,
   priorNySessionYmd,
   schwabLiquidationFromDb,
+  sumSchwabLiquidationLiveAccounts,
 } from "@/lib/terminal/portfolioAccountTotals";
 import { PORTFOLIO_INDEX_BASE, portfolioIndexFromSpyIndex } from "@/lib/terminal/portfolioGlance";
 
@@ -53,6 +54,55 @@ test("schwabLiquidationFromDb sums latest account value points", () => {
 
   const { current } = schwabLiquidationFromDb(db);
   assert.equal(current, 5000000);
+});
+
+test("sumSchwabLiquidationLiveAccounts rejects partial prior balances", () => {
+  const sum = sumSchwabLiquidationLiveAccounts([
+    {
+      securitiesAccount: {
+        accountId: "a",
+        currentBalances: {
+          liquidationValue: 400,
+          previousDayEquity: 390,
+        },
+      },
+    },
+    {
+      securitiesAccount: {
+        accountId: "b",
+        currentBalances: {
+          liquidationValue: 600,
+        },
+      },
+    },
+  ]);
+
+  assert.deepEqual(sum, { current: 1000, prior: null });
+});
+
+test("sumSchwabLiquidationLiveAccounts uses prior only when every included account has one", () => {
+  const sum = sumSchwabLiquidationLiveAccounts([
+    {
+      securitiesAccount: {
+        accountId: "a",
+        currentBalances: {
+          liquidationValue: 400,
+          previousDayEquity: 390,
+        },
+      },
+    },
+    {
+      securitiesAccount: {
+        accountId: "b",
+        currentBalances: {
+          liquidationValue: 600,
+          previousDayEquity: 610,
+        },
+      },
+    },
+  ]);
+
+  assert.deepEqual(sum, { current: 1000, prior: 1000 });
 });
 
 test("externalMarketValueFromDb adds manual 529 holdings", () => {

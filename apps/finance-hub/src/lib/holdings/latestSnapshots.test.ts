@@ -67,6 +67,15 @@ describe("latestSnapshotIds", () => {
     assert.deepEqual(ids, []);
   });
 
+  it("excludes Aurora-exclusive accounts from parent synced scopes", () => {
+    const db = createTestDb();
+    seedAccount(db, "schwab_94558855", "brokerage", "snap_aurora", "2025-06-01T12:00:00Z");
+    seedAccount(db, "schwab_a", "brokerage", "snap_parent", "2025-06-02T12:00:00Z");
+
+    assert.deepEqual(latestSnapshotIds(db, "all_synced"), ["snap_parent"]);
+    assert.deepEqual(latestSnapshotIds(db, "schwab_only"), ["snap_parent"]);
+  });
+
   it("uses latest snapshot per account when multiple exist", () => {
     const db = createTestDb();
     seedAccount(db, "schwab_a", "brokerage", "snap_old", "2025-06-01T12:00:00Z");

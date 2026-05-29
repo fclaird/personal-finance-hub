@@ -16,6 +16,10 @@ export type SymbolPerformanceIntradayPoint = {
   label: string;
 } & Record<string, number | null>;
 
+export function symbolPerformanceItemId(card: Pick<UsMarketGlanceItem, "id">): string {
+  return card.id.toUpperCase();
+}
+
 export async function fetchSymbolPerformanceIntraday(
   symbols: string[],
   now: Date = new Date(),
@@ -42,7 +46,7 @@ export async function fetchSymbolPerformanceIntraday(
   );
   const items: UsMarketGlanceItem[] = cards.map((card) => ({
     ...card,
-    id: card.symbol.toUpperCase(),
+    id: symbolPerformanceItemId(card),
   }));
   const merged = mergeGlanceSeriesForChart(items, windowCtx);
   const points: SymbolPerformanceIntradayPoint[] = merged.map((row) => {
