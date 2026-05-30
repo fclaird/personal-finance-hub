@@ -58,12 +58,15 @@ export async function buildFundStatementBasis(
   statementMarketValue: number,
   statementDate: string,
 ): Promise<FundStatementBasis> {
-  const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
+  const navOnDate = await fetchYahooNavOnDate(symbol, statementDate).catch(() => null);
+  const latestNav = navOnDate ?? (await fetchYahooLatestPrice(symbol).catch(() => null));
+  if (latestNav == null || !Number.isFinite(latestNav) || latestNav <= 0) {
+    throw new Error(`Unable to resolve NAV for ${symbol}; please retry before anchoring this fund`);
+  }
   return {
     statementMarketValue,
     statementDate,
-    basisTickerNav: navOnDate,
+    basisTickerNav: latestNav,
   };
 }
 

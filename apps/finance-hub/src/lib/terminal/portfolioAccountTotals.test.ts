@@ -82,6 +82,37 @@ test("externalMarketValueFromDb uses current external when prior snapshot is mis
   assert.equal(prior, 250000);
 });
 
+test("externalMarketValueFromDb fills missing prior snapshots per external account", () => {
+  const db = createTestDb();
+  db.prepare(
+    `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('conn_manual', 'manual', 'Manual', 'active')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO accounts (id, connection_id, name, account_bucket, type) VALUES ('manual_plaid', 'conn_manual', 'Plaid', 'brokerage', 'manual')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO accounts (id, connection_id, name, account_bucket, type) VALUES ('manual_529', 'conn_manual', '529', '529', 'manual')`,
+  ).run();
+  db.prepare(`INSERT INTO securities (id, symbol, name, security_type) VALUES ('sec_VTI', 'VTI', 'VTI', 'equity')`).run();
+  db.prepare(`INSERT INTO securities (id, symbol, name, security_type) VALUES ('sec_529', '529FUND', '529 Fund', 'fund')`).run();
+  db.prepare(`INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('snap_plaid_prior', 'manual_plaid', '2026-05-27T20:00:00Z')`).run();
+  db.prepare(`INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('snap_plaid_current', 'manual_plaid', '2026-05-28T15:00:00Z')`).run();
+  db.prepare(`INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('snap529', 'manual_529', '2026-05-28T15:00:00Z')`).run();
+  db.prepare(
+    `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('plaid_prior', 'snap_plaid_prior', 'sec_VTI', 1, 100000, 100000)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('plaid_current', 'snap_plaid_current', 'sec_VTI', 1, 101000, 101000)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('p529', 'snap529', 'sec_529', 1, 250000, 250000)`,
+  ).run();
+
+  const { current, prior } = externalMarketValueFromDb(db, "2026-05-27");
+  assert.equal(current, 351000);
+  assert.equal(prior, 350000);
+});
+
 test("externalMarketValueFromDb adds manual 529 holdings", () => {
   const db = createTestDb();
   db.prepare(
