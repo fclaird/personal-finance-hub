@@ -57,9 +57,12 @@ export async function buildFundStatementBasis(
   symbol: string,
   statementMarketValue: number,
   statementDate: string,
-): Promise<FundStatementBasis> {
+): Promise<FundStatementBasis | null> {
   const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
+    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol));
+  if (navOnDate == null || !Number.isFinite(navOnDate) || navOnDate <= 0) {
+    return null;
+  }
   return {
     statementMarketValue,
     statementDate,
@@ -97,7 +100,12 @@ export function repairFundBasisIfMarkDrift(
 ): FundStatementBasis | null {
   const marked = markToMarketFund(basis, navToday);
   if (marked <= basis.statementMarketValue * 1.12) return null;
-  if (!publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) return null;
+  const ref = basis.basisTickerNav;
+  const implausibleRef =
+    Number.isFinite(ref) && ref > 0 && Number.isFinite(navToday) && navToday > 0 && navToday / ref > 2;
+  if (!implausibleRef && !publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) {
+    return null;
+  }
   const today = new Date().toISOString().slice(0, 10);
   return {
     statementMarketValue: basis.statementMarketValue,
