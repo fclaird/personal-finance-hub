@@ -35,6 +35,11 @@ export type CandleInterval = StorageCandleInterval;
 
 export type CandleWindow = "1D" | "5D" | "1M" | "3M" | "6M" | "1Y" | "3Y" | "5Y";
 
+const MS_MIN = 60 * 1000;
+const MS_HOUR = 60 * MS_MIN;
+const MS_DAY = 24 * MS_HOUR;
+const INTRADAY_CACHE_FRESH_MS = 12 * MS_HOUR;
+
 /** Minimum stored daily bars to treat a window as cache-warm (avoids refetching on every request). */
 const MIN_DAILY_BARS_FOR_WINDOW: Record<CandleWindow, number> = {
   "1D": 1,
@@ -58,6 +63,19 @@ function hasSufficientDailyCache(
   return cached.length >= MIN_DAILY_BARS_FOR_WINDOW[window];
 }
 
+export function hasSufficientIntradayCandles(
+  cached: readonly Pick<Candle, "tsMs">[],
+  window: CandleWindow,
+  nowMs: number = Date.now(),
+): boolean {
+  if (window !== "1D" && window !== "5D") return false;
+  const minBars = window === "1D" ? 40 : 150;
+  if (cached.length < minBars) return false;
+  const latest = cached[cached.length - 1]?.tsMs;
+  if (latest == null || !Number.isFinite(latest)) return false;
+  return nowMs - latest < INTRADAY_CACHE_FRESH_MS;
+}
+
 function hasSufficientIntradayCache(
   symbol: string,
   storage: StorageCandleInterval,
@@ -67,8 +85,7 @@ function hasSufficientIntradayCache(
   if (window !== "1D" && window !== "5D") return false;
   const since = windowSinceMsFromConfig(window);
   const cached = getCachedCandles(symbol, storage, since);
-  const minBars = window === "1D" ? 40 : 150;
-  return cached.length >= minBars;
+  return hasSufficientIntradayCandles(cached, window);
 }
 
 function hasSufficientCachedCandles(
@@ -78,10 +95,6 @@ function hasSufficientCachedCandles(
 ): boolean {
   return hasSufficientDailyCache(symbol, storage, window) || hasSufficientIntradayCache(symbol, storage, window);
 }
-
-const MS_MIN = 60 * 1000;
-const MS_HOUR = 60 * MS_MIN;
-const MS_DAY = 24 * MS_HOUR;
 
 export const CHART_INTERVAL_BUCKET_MS: Record<ChartCandleInterval, number> = {
   "5m": 5 * MS_MIN,

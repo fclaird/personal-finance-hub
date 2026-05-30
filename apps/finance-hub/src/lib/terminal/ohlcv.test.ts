@@ -7,6 +7,7 @@ import {
   chartCandlesExcludeDeadZone,
   CHART_INTERVAL_BUCKET_MS,
   filterChartCandlesDeadZone,
+  hasSufficientIntradayCandles,
 } from "@/lib/terminal/ohlcv";
 import type { Candle } from "@/lib/terminal/ohlcv";
 
@@ -42,6 +43,24 @@ test("aggregateCandles merges 30m bars into 1h buckets", () => {
   assert.equal(out[0]!.close, 102);
   assert.equal(out[0]!.high, 103);
   assert.equal(out[0]!.low, 99);
+});
+
+test("hasSufficientIntradayCandles rejects stale prior-session bars", () => {
+  const nowMs = Date.parse("2026-05-29T16:00:00.000Z");
+  const yesterdayMs = Date.parse("2026-05-28T20:00:00.000Z");
+  const cached = Array.from({ length: 40 }, (_, i) => ({ tsMs: yesterdayMs - i * 5 * 60 * 1000 }))
+    .sort((a, b) => a.tsMs - b.tsMs);
+
+  assert.equal(hasSufficientIntradayCandles(cached, "1D", nowMs), false);
+});
+
+test("hasSufficientIntradayCandles accepts a full fresh intraday cache", () => {
+  const nowMs = Date.parse("2026-05-29T16:00:00.000Z");
+  const latestMs = nowMs - 5 * 60 * 1000;
+  const cached = Array.from({ length: 40 }, (_, i) => ({ tsMs: latestMs - i * 5 * 60 * 1000 }))
+    .sort((a, b) => a.tsMs - b.tsMs);
+
+  assert.equal(hasSufficientIntradayCandles(cached, "1D", nowMs), true);
 });
 
 test("aggregateCandles builds 4h from eight 30m bars", () => {

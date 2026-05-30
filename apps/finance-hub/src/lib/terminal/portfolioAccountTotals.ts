@@ -108,24 +108,25 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
   current: number;
   prior: number;
 } {
-  const currentRow = db
+  const currentRows = db
     .prepare(
       `
-      SELECT COALESCE(SUM(${POSITION_MARKET_VALUE_SQL}), 0) AS mv
+      SELECT hs.account_id AS account_id, COALESCE(SUM(${POSITION_MARKET_VALUE_SQL}), 0) AS mv
       FROM holding_snapshots hs
       JOIN accounts a ON a.id = hs.account_id
       ${latestSnapshotPerAccountJoinSql("hs")}
       JOIN positions p ON p.snapshot_id = hs.id
       WHERE a.id NOT LIKE 'schwab_%'
         AND ${allSyncedAccountsWhereSql("a")}
+      GROUP BY hs.account_id
     `,
     )
-    .get() as { mv: number } | undefined;
+    .all() as Array<{ account_id: string; mv: number }>;
 
-  const priorRow = db
+  const priorRows = db
     .prepare(
       `
-      SELECT COALESCE(SUM(${POSITION_MARKET_VALUE_SQL}), 0) AS mv
+      SELECT hs.account_id AS account_id, COALESCE(SUM(${POSITION_MARKET_VALUE_SQL}), 0) AS mv
       FROM holding_snapshots hs
       JOIN accounts a ON a.id = hs.account_id
       JOIN (
@@ -137,19 +138,34 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
       JOIN positions p ON p.snapshot_id = hs.id
       WHERE a.id NOT LIKE 'schwab_%'
         AND ${allSyncedAccountsWhereSql("a")}
+      GROUP BY hs.account_id
     `,
     )
-    .get({ session_ymd: priorSessionYmd }) as { mv: number } | undefined;
+    .all({ session_ymd: priorSessionYmd }) as Array<{ account_id: string; mv: number }>;
 
-  const current = currentRow?.mv ?? 0;
-  const priorRaw = priorRow?.mv;
-  // SUM() is 0 when no prior snapshot exists — must not treat as "$0 external yesterday".
-  const prior =
-    priorRaw != null && Number.isFinite(priorRaw) && priorRaw > 0 ? priorRaw : current;
-  return {
-    current: Number.isFinite(current) ? current : 0,
-    prior: Number.isFinite(prior) ? prior : current,
-  };
+  const currentByAccount = new Map<string, number>();
+  let current = 0;
+  for (const row of currentRows) {
+    const mv = Number(row.mv);
+    if (!Number.isFinite(mv)) continue;
+    currentByAccount.set(row.account_id, mv);
+    current += mv;
+  }
+
+  const priorByAccount = new Map<string, number>();
+  for (const row of priorRows) {
+    const mv = Number(row.mv);
+    if (!Number.isFinite(mv)) continue;
+    priorByAccount.set(row.account_id, mv);
+  }
+
+  let prior = 0;
+  for (const [accountId, currentMv] of currentByAccount) {
+    const priorMv = priorByAccount.get(accountId);
+    prior += priorMv != null && Number.isFinite(priorMv) && priorMv > 0 ? priorMv : currentMv;
+  }
+
+  return { current: Number.isFinite(current) ? current : 0, prior: Number.isFinite(prior) ? prior : current };
 }
 
 export async function fetchSchwabLiquidationLive(): Promise<{

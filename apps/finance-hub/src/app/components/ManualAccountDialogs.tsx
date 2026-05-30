@@ -312,6 +312,7 @@ export function ManualPositionDialog({
           marketValue: positionForm.marketValue.trim() === "" ? null : Number(positionForm.marketValue),
           purchaseDate: positionForm.purchaseDate.trim() || null,
           notes: positionForm.notes.trim() || null,
+          anchorFundBasis: true,
         }),
       });
       const json = (await resp.json()) as { ok: boolean; error?: string };
