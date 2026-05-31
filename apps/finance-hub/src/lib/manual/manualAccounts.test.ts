@@ -11,6 +11,7 @@ import {
   ensureManualConnection,
   MANUAL_CONNECTION_ID,
   parseManualPositionMetadata,
+  upsertManualPositionInDb,
 } from "./manualAccounts";
 import { isManualAccountId } from "./isManualAccountId";
 
@@ -101,6 +102,41 @@ describe("manualAccounts", () => {
       .prepare(`SELECT COUNT(*) AS c FROM holding_snapshots WHERE account_id = ?`)
       .get(acct.id) as { c: number };
     assert.equal(snap.c, 1);
+  });
+
+  it("upsertManualPosition preserves fundBasis when not re-anchored", () => {
+    const db = createTestDb();
+    const acct = createManualAccountInDb(db, { name: "529 Plan", accountBucket: "529" });
+    const basis = {
+      statementMarketValue: 194_528,
+      statementDate: "2026-05-01",
+      basisTickerNav: 354,
+    };
+    upsertManualPositionInDb(db, acct.id, {
+      positionId: "pos_529",
+      symbol: "VFFSX",
+      securityType: "fund",
+      quantity: 1618,
+      purchasePrice: 120,
+      marketValue: 194_528,
+      purchaseDate: "2011-09-27",
+      fundBasis: basis,
+    });
+    upsertManualPositionInDb(db, acct.id, {
+      positionId: "pos_529",
+      symbol: "VFFSX",
+      securityType: "fund",
+      quantity: 1618,
+      purchasePrice: 120,
+      marketValue: 200_000,
+      purchaseDate: "2011-09-27",
+      notes: "note only",
+    });
+    const snap = db.prepare(`SELECT id FROM holding_snapshots WHERE account_id = ?`).get(acct.id) as { id: string };
+    const row = db
+      .prepare(`SELECT metadata_json AS meta FROM positions WHERE id = 'pos_529' AND snapshot_id = ?`)
+      .get(snap.id) as { meta: string };
+    assert.deepEqual(parseManualPositionMetadata(row.meta)?.fundBasis, basis);
   });
 
   it("deleteManualAccountInDb removes account snapshots and positions", () => {

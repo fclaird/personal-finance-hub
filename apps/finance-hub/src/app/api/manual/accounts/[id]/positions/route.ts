@@ -29,8 +29,17 @@ export async function POST(req: Request, ctx: RouteCtx) {
     // would scale today's 529 balance by ~3× on every load).
     const statementDate = new Date().toISOString().slice(0, 10);
 
+    const isNewPosition = !body.positionId?.trim();
+    const anchorStatement = body.anchorStatement === true;
     let fundBasis = undefined as ManualPositionInput["fundBasis"];
-    if (securityType === "fund" && marketValue != null && Number.isFinite(marketValue) && marketValue > 0 && symbol) {
+    if (
+      securityType === "fund" &&
+      marketValue != null &&
+      Number.isFinite(marketValue) &&
+      marketValue > 0 &&
+      symbol &&
+      (anchorStatement || isNewPosition)
+    ) {
       fundBasis = await buildFundStatementBasis(symbol, marketValue, statementDate);
     }
 
