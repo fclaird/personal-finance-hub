@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createFundStatementBasis,
+  isSyntheticFallbackFundBasis,
   markToMarketFund,
+  parseFundStatementBasis,
   publicNavTimesQtyMismatch,
   repairFundBasisIfMarkDrift,
   yahooCloseOnOrBefore,
@@ -11,6 +14,16 @@ import {
 test("markToMarketFund scales statement balance by public fund return", () => {
   const basis = { statementMarketValue: 194_528, statementDate: "2026-05-01", basisTickerNav: 354 };
   assert.equal(markToMarketFund(basis, 368.58), 194_528 * (368.58 / 354));
+});
+
+test("createFundStatementBasis fails closed when no NAV was resolved", () => {
+  assert.equal(createFundStatementBasis(194_528, "2026-05-01", null), null);
+});
+
+test("parseFundStatementBasis ignores the old synthetic NAV fallback", () => {
+  const basis = { statementMarketValue: 194_528, statementDate: "2026-05-01", basisTickerNav: 1 };
+  assert.equal(isSyntheticFallbackFundBasis(basis), true);
+  assert.equal(parseFundStatementBasis({ fundBasis: basis }), null);
 });
 
 test("repairFundBasisIfMarkDrift fixes purchase-date anchor that inflates mark-to-market", () => {
