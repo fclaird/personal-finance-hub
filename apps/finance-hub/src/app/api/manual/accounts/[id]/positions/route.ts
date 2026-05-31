@@ -31,7 +31,7 @@ export async function POST(req: Request, ctx: RouteCtx) {
 
     let fundBasis = undefined as ManualPositionInput["fundBasis"];
     if (securityType === "fund" && marketValue != null && Number.isFinite(marketValue) && marketValue > 0 && symbol) {
-      fundBasis = await buildFundStatementBasis(symbol, marketValue, statementDate);
+      fundBasis = (await buildFundStatementBasis(symbol, marketValue, statementDate)) ?? undefined;
     }
 
     const result = upsertManualPosition(id, {

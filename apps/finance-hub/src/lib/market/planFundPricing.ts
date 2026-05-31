@@ -24,7 +24,35 @@ export function parseFundStatementBasis(meta: {
   if (typeof b.basisTickerNav !== "number" || !Number.isFinite(b.basisTickerNav) || b.basisTickerNav <= 0) {
     return null;
   }
+  if (isSyntheticFallbackFundBasis(b)) return null;
   return b;
+}
+
+export function isSyntheticFallbackFundBasis(b: FundStatementBasis | null | undefined): b is FundStatementBasis {
+  return (
+    b != null &&
+    typeof b.statementMarketValue === "number" &&
+    Number.isFinite(b.statementMarketValue) &&
+    b.statementMarketValue > 0 &&
+    typeof b.statementDate === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(b.statementDate) &&
+    b.basisTickerNav === 1
+  );
+}
+
+export function createFundStatementBasis(
+  statementMarketValue: number,
+  statementDate: string,
+  navOnDate: number | null,
+): FundStatementBasis | null {
+  if (!Number.isFinite(statementMarketValue) || statementMarketValue <= 0) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(statementDate)) return null;
+  if (navOnDate == null || !Number.isFinite(navOnDate) || navOnDate <= 0) return null;
+  return {
+    statementMarketValue,
+    statementDate,
+    basisTickerNav: navOnDate,
+  };
 }
 
 /** Yahoo close on `isoDate` or the last trading day on/before it. */
@@ -57,14 +85,10 @@ export async function buildFundStatementBasis(
   symbol: string,
   statementMarketValue: number,
   statementDate: string,
-): Promise<FundStatementBasis> {
+): Promise<FundStatementBasis | null> {
   const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
-  return {
-    statementMarketValue,
-    statementDate,
-    basisTickerNav: navOnDate,
-  };
+    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol));
+  return createFundStatementBasis(statementMarketValue, statementDate, navOnDate);
 }
 
 /** Mark statement balance to today using public fund NAV return since the anchor date. */
