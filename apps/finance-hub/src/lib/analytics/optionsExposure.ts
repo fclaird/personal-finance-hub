@@ -115,6 +115,11 @@ export type BucketExposure = {
   exposure: ExposureRow[];
 };
 
+/** Bucket-scoped key: plan-fund live re-mark skip must not affect the same symbol in other buckets. */
+export function planFundRemarkSkipKey(bucketKey: AnalyticsBucketKey, symbol: string): string {
+  return `${bucketKey}:${(symbol ?? "").trim().toUpperCase()}`;
+}
+
 const DEFAULT_CONTRACT_MULTIPLIER = 100;
 
 /** Delta for synthetic exposure: current row, else latest same account+option security. */
@@ -339,14 +344,14 @@ export function getUnderlyingExposureByBucket(
 
   // Plan/529 fund share counts are synthetic proxies: heldShares × public NAV is meaningless,
   // so keep their statement-anchored stored MV instead of re-marking against the live NAV below.
-  const planFundSymbols = new Set<string>();
+  const planFundBucketSymbols = new Set<string>();
 
   for (const r of spot) {
     const bucket = snapshotToBucket.get(r.snapshot_id);
     if (!bucket) continue;
     const symKey = (r.symbol ?? "").trim().toUpperCase();
     if (symKey === "CASH") continue;
-    if (r.is_plan_fund) planFundSymbols.add(symKey);
+    if (r.is_plan_fund) planFundBucketSymbols.add(planFundRemarkSkipKey(bucket, symKey));
     const prev = rowFor(bucket, symKey);
     prev.spotMarketValue += r.mv;
     prev.heldShares += r.qty ?? 0;
@@ -420,12 +425,12 @@ export function getUnderlyingExposureByBucket(
   }
 
   const priceByUnderlying = equityMarkMap ?? portfolioImpliedEquityPriceMap(db, mode);
-  for (const m of byBucket.values()) {
+  for (const [bucketKey, m] of byBucket.entries()) {
     for (const row of m.values()) {
       const px = priceByUnderlying.get(row.underlyingSymbol);
       if (px == null) continue;
       // Plan/529 funds: preserve the statement-anchored stored MV; don't re-mark synthetic shares.
-      if (planFundSymbols.has(row.underlyingSymbol)) continue;
+      if (planFundBucketSymbols.has(planFundRemarkSkipKey(bucketKey, row.underlyingSymbol))) continue;
       if (row.heldShares > 0) row.spotMarketValue = row.heldShares * px;
       row.syntheticMarketValue = row.syntheticShares * px;
     }
