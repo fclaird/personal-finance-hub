@@ -1,5 +1,5 @@
 import { fetchYahooDailyChart } from "@/lib/market/yahooChartFetch";
-import { fetchYahooLatestPrice, navFromYahooChartResult } from "@/lib/market/yahooLatestPrice";
+import { fetchYahooLatestPrice } from "@/lib/market/yahooLatestPrice";
 
 /** One-time 529 / plan statement anchor; MV tracks the public fund return from that date. */
 export type FundStatementBasis = {
@@ -57,13 +57,24 @@ export async function buildFundStatementBasis(
   symbol: string,
   statementMarketValue: number,
   statementDate: string,
-): Promise<FundStatementBasis> {
+): Promise<FundStatementBasis | null> {
   const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
+    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol));
+  return createFundStatementBasis(statementMarketValue, statementDate, navOnDate);
+}
+
+export function createFundStatementBasis(
+  statementMarketValue: number,
+  statementDate: string,
+  basisTickerNav: number | null,
+): FundStatementBasis | null {
+  if (!Number.isFinite(statementMarketValue) || statementMarketValue <= 0) return null;
+  if (typeof statementDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(statementDate)) return null;
+  if (basisTickerNav == null || !Number.isFinite(basisTickerNav) || basisTickerNav <= 0) return null;
   return {
     statementMarketValue,
     statementDate,
-    basisTickerNav: navOnDate,
+    basisTickerNav,
   };
 }
 
@@ -97,7 +108,10 @@ export function repairFundBasisIfMarkDrift(
 ): FundStatementBasis | null {
   const marked = markToMarketFund(basis, navToday);
   if (marked <= basis.statementMarketValue * 1.12) return null;
-  if (!publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) return null;
+  const hasSyntheticFallbackNav = basis.basisTickerNav === 1;
+  if (!hasSyntheticFallbackNav && !publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) {
+    return null;
+  }
   const today = new Date().toISOString().slice(0, 10);
   return {
     statementMarketValue: basis.statementMarketValue,

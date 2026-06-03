@@ -2,15 +2,28 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createFundStatementBasis,
   markToMarketFund,
   publicNavTimesQtyMismatch,
   repairFundBasisIfMarkDrift,
   yahooCloseOnOrBefore,
 } from "./planFundPricing";
 
+test("createFundStatementBasis does not invent a NAV when Yahoo lookup fails", () => {
+  assert.equal(createFundStatementBasis(194_528, "2026-05-01", null), null);
+});
+
 test("markToMarketFund scales statement balance by public fund return", () => {
   const basis = { statementMarketValue: 194_528, statementDate: "2026-05-01", basisTickerNav: 354 };
   assert.equal(markToMarketFund(basis, 368.58), 194_528 * (368.58 / 354));
+});
+
+test("repairFundBasisIfMarkDrift rebases previously stored synthetic NAV fallback", () => {
+  const basis = { statementMarketValue: 194_528, statementDate: "2026-05-01", basisTickerNav: 1 };
+  const repaired = repairFundBasisIfMarkDrift(basis, 368.58, 527.8);
+  assert.ok(repaired);
+  assert.equal(repaired!.basisTickerNav, 368.58);
+  assert.equal(markToMarketFund(repaired!, 368.58), 194_528);
 });
 
 test("repairFundBasisIfMarkDrift fixes purchase-date anchor that inflates mark-to-market", () => {
