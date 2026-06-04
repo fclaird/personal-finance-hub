@@ -276,8 +276,11 @@ export function deleteManualAccount(accountId: string): void {
   deleteManualAccountInDb(getDb(), accountId);
 }
 
-export function upsertManualPosition(accountId: string, input: ManualPositionInput): { positionId: string } {
-  const db = getDb();
+export function upsertManualPositionInDb(
+  db: Database.Database,
+  accountId: string,
+  input: ManualPositionInput,
+): { positionId: string } {
   assertManualAccount(db, accountId);
 
   const qty = input.quantity;
@@ -346,6 +349,10 @@ export function upsertManualPosition(accountId: string, input: ManualPositionInp
   tx();
 
   return { positionId };
+}
+
+export function upsertManualPosition(accountId: string, input: ManualPositionInput): { positionId: string } {
+  return upsertManualPositionInDb(getDb(), accountId, input);
 }
 
 export function deleteManualPosition(positionId: string): void {

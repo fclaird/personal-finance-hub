@@ -5,6 +5,9 @@ import { buildFundStatementBasis } from "@/lib/market/planFundPricing";
 import { isManualAccountId, upsertManualPosition, type ManualPositionInput } from "@/lib/manual/manualAccounts";
 
 type RouteCtx = { params: Promise<{ id: string }> };
+type ManualPositionPostBody = Partial<ManualPositionInput> & {
+  reanchorFundBasis?: boolean;
+};
 
 export async function POST(req: Request, ctx: RouteCtx) {
   try {
@@ -13,7 +16,7 @@ export async function POST(req: Request, ctx: RouteCtx) {
       return NextResponse.json({ ok: false, error: "Invalid manual account id" }, { status: 400 });
     }
 
-    const body = (await req.json().catch(() => null)) as Partial<ManualPositionInput> | null;
+    const body = (await req.json().catch(() => null)) as ManualPositionPostBody | null;
     if (!body) {
       return NextResponse.json({ ok: false, error: "Invalid body" }, { status: 400 });
     }
@@ -28,9 +31,18 @@ export async function POST(req: Request, ctx: RouteCtx) {
     // Statement anchor date must be when the balance was observed — not purchase date (2011 NAV
     // would scale today's 529 balance by ~3× on every load).
     const statementDate = new Date().toISOString().slice(0, 10);
+    const isExistingPosition = typeof body.positionId === "string" && body.positionId.trim().length > 0;
+    const shouldBuildFundBasis = !isExistingPosition || body.reanchorFundBasis === true;
 
     let fundBasis = undefined as ManualPositionInput["fundBasis"];
-    if (securityType === "fund" && marketValue != null && Number.isFinite(marketValue) && marketValue > 0 && symbol) {
+    if (
+      shouldBuildFundBasis &&
+      securityType === "fund" &&
+      marketValue != null &&
+      Number.isFinite(marketValue) &&
+      marketValue > 0 &&
+      symbol
+    ) {
       fundBasis = await buildFundStatementBasis(symbol, marketValue, statementDate);
     }
 
