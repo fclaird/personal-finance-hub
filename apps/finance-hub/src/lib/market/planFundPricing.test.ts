@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  fundBasisNavScaleLooksValid,
   markToMarketFund,
   publicNavTimesQtyMismatch,
   repairFundBasisIfMarkDrift,
@@ -19,6 +20,20 @@ test("repairFundBasisIfMarkDrift fixes purchase-date anchor that inflates mark-t
   assert.ok(repaired);
   assert.equal(repaired!.basisTickerNav, 368.58);
   assert.equal(markToMarketFund(repaired!, 368.58), 194_528);
+});
+
+test("markToMarketFund ignores corrupt basisTickerNav fallback of 1", () => {
+  const basis = { statementMarketValue: 250_000, statementDate: "2026-05-01", basisTickerNav: 1 };
+  assert.equal(markToMarketFund(basis, 368.58), 250_000);
+  assert.equal(fundBasisNavScaleLooksValid(basis, 368.58), false);
+});
+
+test("repairFundBasisIfMarkDrift fixes corrupt basisTickerNav even with small quantity", () => {
+  const basis = { statementMarketValue: 250_000, statementDate: "2026-05-01", basisTickerNav: 1 };
+  const repaired = repairFundBasisIfMarkDrift(basis, 368.58, 1);
+  assert.ok(repaired);
+  assert.equal(repaired!.basisTickerNav, 368.58);
+  assert.equal(markToMarketFund(repaired!, 368.58), 250_000);
 });
 
 test("publicNavTimesQtyMismatch detects 529 plan vs public NAV divergence", () => {

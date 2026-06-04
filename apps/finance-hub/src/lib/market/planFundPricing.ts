@@ -58,13 +58,27 @@ export async function buildFundStatementBasis(
   statementMarketValue: number,
   statementDate: string,
 ): Promise<FundStatementBasis> {
-  const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
+  const navOnDate = (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol));
+  if (navOnDate == null || !Number.isFinite(navOnDate) || navOnDate <= 0) {
+    throw new Error(`Could not fetch public fund NAV for ${symbol}; try again later`);
+  }
   return {
     statementMarketValue,
     statementDate,
     basisTickerNav: navOnDate,
   };
+}
+
+/** Reject corrupt anchors (e.g. legacy `basisTickerNav: 1` when Yahoo failed). */
+export function fundBasisNavScaleLooksValid(
+  basis: FundStatementBasis,
+  navToday: number,
+): boolean {
+  const ref = basis.basisTickerNav;
+  if (!Number.isFinite(ref) || ref <= 0 || !Number.isFinite(navToday) || navToday <= 0) return false;
+  if (ref <= 1) return false;
+  const ratio = navToday / ref;
+  return ratio >= 1 / 50 && ratio <= 50;
 }
 
 /** Mark statement balance to today using public fund NAV return since the anchor date. */
@@ -75,6 +89,9 @@ export function markToMarketFund(
 ): number {
   const ref = navOnBasisDate ?? basis.basisTickerNav;
   if (!Number.isFinite(ref) || ref <= 0 || !Number.isFinite(navToday) || navToday <= 0) {
+    return basis.statementMarketValue;
+  }
+  if (!fundBasisNavScaleLooksValid({ ...basis, basisTickerNav: ref }, navToday)) {
     return basis.statementMarketValue;
   }
   return basis.statementMarketValue * (navToday / ref);
@@ -96,8 +113,12 @@ export function repairFundBasisIfMarkDrift(
   quantity: number,
 ): FundStatementBasis | null {
   const marked = markToMarketFund(basis, navToday);
-  if (marked <= basis.statementMarketValue * 1.12) return null;
-  if (!publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) return null;
+  const inflatedVsStatement = marked > basis.statementMarketValue * 1.12;
+  const corruptAnchor = !fundBasisNavScaleLooksValid(basis, navToday);
+  if (!inflatedVsStatement && !corruptAnchor) return null;
+  if (!corruptAnchor && !publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) {
+    return null;
+  }
   const today = new Date().toISOString().slice(0, 10);
   return {
     statementMarketValue: basis.statementMarketValue,
