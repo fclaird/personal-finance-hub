@@ -5,6 +5,7 @@ import {
   markToMarketFund,
   publicNavTimesQtyMismatch,
   repairFundBasisIfMarkDrift,
+  resolveFundStatementNav,
   yahooCloseOnOrBefore,
 } from "./planFundPricing";
 
@@ -36,4 +37,16 @@ test("yahooCloseOnOrBefore picks last bar on or before target date", () => {
   };
   assert.equal(yahooCloseOnOrBefore(result, "2026-05-06"), 355);
   assert.equal(yahooCloseOnOrBefore(result, "2026-05-03"), 350);
+});
+
+test("resolveFundStatementNav fails closed when no valid NAV is available", () => {
+  assert.equal(resolveFundStatementNav("VTHRX", null, 368.58), 368.58);
+  assert.throws(
+    () => resolveFundStatementNav("VTHRX", null, null),
+    /Unable to fetch a valid NAV/,
+  );
+  assert.throws(
+    () => resolveFundStatementNav("VTHRX", 0, 368.58),
+    /Unable to fetch a valid NAV/,
+  );
 });

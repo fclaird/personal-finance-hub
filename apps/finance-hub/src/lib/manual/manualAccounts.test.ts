@@ -11,6 +11,7 @@ import {
   ensureManualConnection,
   MANUAL_CONNECTION_ID,
   parseManualPositionMetadata,
+  upsertManualPositionInDb,
 } from "./manualAccounts";
 import { isManualAccountId } from "./isManualAccountId";
 
@@ -128,5 +129,89 @@ describe("manualAccounts", () => {
       0,
     );
     assert.equal((db.prepare(`SELECT COUNT(*) AS c FROM positions WHERE id = 'pos_del'`).get() as { c: number }).c, 0);
+  });
+
+  it("upsertManualPositionInDb preserves fund basis on ordinary edits", () => {
+    const db = createTestDb();
+    const acct = createManualAccountInDb(db, { name: "529 Plan", accountBucket: "529" });
+    const originalBasis = {
+      statementMarketValue: 194_528,
+      statementDate: "2026-05-01",
+      basisTickerNav: 354,
+    };
+
+    const { positionId } = upsertManualPositionInDb(db, acct.id, {
+      symbol: "VTHRX",
+      securityType: "fund",
+      quantity: 1_618,
+      purchasePrice: null,
+      marketValue: 194_528,
+      purchaseDate: null,
+      notes: "initial anchor",
+      fundBasis: originalBasis,
+    });
+
+    upsertManualPositionInDb(db, acct.id, {
+      positionId,
+      symbol: "VTHRX",
+      securityType: "fund",
+      quantity: 1_618,
+      purchasePrice: null,
+      marketValue: 202_000,
+      purchaseDate: null,
+      notes: "notes-only edit after market move",
+    });
+
+    const row = db
+      .prepare(`SELECT metadata_json AS metadataJson FROM positions WHERE id = ?`)
+      .get(positionId) as { metadataJson: string };
+    const meta = parseManualPositionMetadata(row.metadataJson);
+
+    assert.deepEqual(meta?.fundBasis, originalBasis);
+    assert.equal(meta?.notes, "notes-only edit after market move");
+  });
+
+  it("upsertManualPositionInDb replaces fund basis only when explicitly provided", () => {
+    const db = createTestDb();
+    const acct = createManualAccountInDb(db, { name: "529 Plan", accountBucket: "529" });
+    const originalBasis = {
+      statementMarketValue: 194_528,
+      statementDate: "2026-05-01",
+      basisTickerNav: 354,
+    };
+    const reanchoredBasis = {
+      statementMarketValue: 202_000,
+      statementDate: "2026-06-04",
+      basisTickerNav: 368.58,
+    };
+
+    const { positionId } = upsertManualPositionInDb(db, acct.id, {
+      symbol: "VTHRX",
+      securityType: "fund",
+      quantity: 1_618,
+      purchasePrice: null,
+      marketValue: 194_528,
+      purchaseDate: null,
+      notes: null,
+      fundBasis: originalBasis,
+    });
+
+    upsertManualPositionInDb(db, acct.id, {
+      positionId,
+      symbol: "VTHRX",
+      securityType: "fund",
+      quantity: 1_618,
+      purchasePrice: null,
+      marketValue: 202_000,
+      purchaseDate: null,
+      notes: null,
+      fundBasis: reanchoredBasis,
+    });
+
+    const row = db
+      .prepare(`SELECT metadata_json AS metadataJson FROM positions WHERE id = ?`)
+      .get(positionId) as { metadataJson: string };
+
+    assert.deepEqual(parseManualPositionMetadata(row.metadataJson)?.fundBasis, reanchoredBasis);
   });
 });

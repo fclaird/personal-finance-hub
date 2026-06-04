@@ -53,17 +53,30 @@ export async function fetchYahooNavOnDate(symbol: string, isoDate: string): Prom
   return yahooCloseOnOrBefore(chart.result, isoDate);
 }
 
+export function resolveFundStatementNav(
+  symbol: string,
+  navOnStatementDate: number | null,
+  latestNav: number | null,
+): number {
+  const nav = navOnStatementDate ?? latestNav;
+  if (nav == null || !Number.isFinite(nav) || nav <= 0) {
+    throw new Error(`Unable to fetch a valid NAV for ${symbol}; try anchoring the fund again later.`);
+  }
+  return nav;
+}
+
 export async function buildFundStatementBasis(
   symbol: string,
   statementMarketValue: number,
   statementDate: string,
 ): Promise<FundStatementBasis> {
-  const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
+  const navOnDate = await fetchYahooNavOnDate(symbol, statementDate);
+  const latestNav = navOnDate == null ? await fetchYahooLatestPrice(symbol) : null;
+  const basisTickerNav = resolveFundStatementNav(symbol, navOnDate, latestNav);
   return {
     statementMarketValue,
     statementDate,
-    basisTickerNav: navOnDate,
+    basisTickerNav,
   };
 }
 
