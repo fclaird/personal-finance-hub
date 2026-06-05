@@ -4,7 +4,20 @@ import { getDb } from "@/lib/db";
 import { allSyncedAccountsWhereSql, latestSnapshotPerAccountJoinSql } from "@/lib/holdings/latestSnapshots";
 import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
 import { isAuroraExclusiveAccountId } from "@/lib/auroraExclusive";
+import { isManualAccountId, parseManualPositionMetadata } from "@/lib/manual/manualAccounts";
+import { normalizeEquitySymbol } from "@/lib/market/equityMarkPrice";
 import { isoDateInUsEastern } from "@/lib/market/glanceSession";
+import {
+  markToMarketFund,
+  needsPlanFundPricing,
+  parseFundStatementBasis,
+  repairFundBasisIfMarkDrift,
+} from "@/lib/market/planFundPricing";
+import {
+  fetchYahooLatestPrices,
+  loadYahooPricePointsMap,
+  persistYahooPricePoints,
+} from "@/lib/market/yahooLatestPrice";
 import { pickEquityUsd, pickSchwabPriorDayEquityUsd } from "@/lib/schwab/accountBalances";
 import { schwabFetch } from "@/lib/schwab/client";
 import { fetchSchwabSessionNetCashFlow } from "@/lib/terminal/portfolioCashFlows";
@@ -15,6 +28,18 @@ type SchwabAccountPayload = {
     accountNumber?: string;
     currentBalances?: Record<string, unknown>;
   };
+};
+
+type ExternalPositionRow = {
+  accountId: string;
+  accountBucket: string | null;
+  securityType: string;
+  symbol: string | null;
+  quantity: number | null;
+  price: number | null;
+  marketValue: number | null;
+  metadataJson: string | null;
+  mv: number;
 };
 
 export type PortfolioAccountTotals = {
@@ -103,29 +128,99 @@ export function schwabPriorLiquidationFromDb(
   return { prior, byAccount };
 }
 
+function planFundSymbolForExternalRow(row: ExternalPositionRow): string | null {
+  const manualMeta = parseManualPositionMetadata(row.metadataJson);
+  const isManual = isManualAccountId(row.accountId) || manualMeta != null;
+  if (!needsPlanFundPricing(isManual, row.securityType, row.accountBucket)) return null;
+  if (!parseFundStatementBasis(manualMeta)) return null;
+  return normalizeEquitySymbol(row.symbol ?? "") || null;
+}
+
+function externalRowMarketValue(row: ExternalPositionRow, planFundMarks: Map<string, number>): number {
+  const stored = Number.isFinite(row.mv) ? row.mv : 0;
+  const sym = planFundSymbolForExternalRow(row);
+  if (!sym) return stored;
+
+  const manualMeta = parseManualPositionMetadata(row.metadataJson);
+  const basis = parseFundStatementBasis(manualMeta);
+  const navToday = planFundMarks.get(sym);
+  if (!basis || navToday == null || !Number.isFinite(navToday) || navToday <= 0) return stored;
+
+  const repaired = repairFundBasisIfMarkDrift(basis, navToday, row.quantity ?? 0);
+  return markToMarketFund(repaired ?? basis, navToday);
+}
+
+async function loadPlanFundMarksForRows(
+  db: Database.Database,
+  rows: ExternalPositionRow[],
+): Promise<Map<string, number>> {
+  const symbols = new Set<string>();
+  for (const row of rows) {
+    const sym = planFundSymbolForExternalRow(row);
+    if (sym) symbols.add(sym);
+  }
+  if (symbols.size === 0) return new Map();
+
+  const cached = loadYahooPricePointsMap(db, symbols);
+  const missing = [...symbols].filter((sym) => !cached.has(sym));
+  if (missing.length === 0) return cached;
+
+  const fetched = await fetchYahooLatestPrices(missing);
+  if (fetched.size > 0) persistYahooPricePoints(db, fetched);
+  return new Map([...cached, ...fetched]);
+}
+
+function sumExternalRows(rows: ExternalPositionRow[], planFundMarks: Map<string, number>): number {
+  let total = 0;
+  for (const row of rows) {
+    const mv = externalRowMarketValue(row, planFundMarks);
+    if (Number.isFinite(mv)) total += mv;
+  }
+  return total;
+}
+
 /** Manual, Plaid, and other non-Schwab accounts from latest holding snapshots. */
-export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd: string): {
+export async function externalMarketValueFromDb(db: Database.Database, priorSessionYmd: string): Promise<{
   current: number;
   prior: number;
-} {
-  const currentRow = db
+}> {
+  const currentRows = db
     .prepare(
       `
-      SELECT COALESCE(SUM(${POSITION_MARKET_VALUE_SQL}), 0) AS mv
+      SELECT
+        a.id AS accountId,
+        a.account_bucket AS accountBucket,
+        s.security_type AS securityType,
+        s.symbol AS symbol,
+        p.quantity AS quantity,
+        p.price AS price,
+        p.market_value AS marketValue,
+        p.metadata_json AS metadataJson,
+        ${POSITION_MARKET_VALUE_SQL} AS mv
       FROM holding_snapshots hs
       JOIN accounts a ON a.id = hs.account_id
       ${latestSnapshotPerAccountJoinSql("hs")}
       JOIN positions p ON p.snapshot_id = hs.id
+      JOIN securities s ON s.id = p.security_id
       WHERE a.id NOT LIKE 'schwab_%'
         AND ${allSyncedAccountsWhereSql("a")}
     `,
     )
-    .get() as { mv: number } | undefined;
+    .all() as ExternalPositionRow[];
 
-  const priorRow = db
+  const priorRows = db
     .prepare(
       `
-      SELECT COALESCE(SUM(${POSITION_MARKET_VALUE_SQL}), 0) AS mv
+      SELECT
+        a.id AS accountId,
+        a.account_bucket AS accountBucket,
+        s.security_type AS securityType,
+        s.symbol AS symbol,
+        p.quantity AS quantity,
+        p.price AS price,
+        p.market_value AS marketValue,
+        p.metadata_json AS metadataJson,
+        ${POSITION_MARKET_VALUE_SQL} AS mv
       FROM holding_snapshots hs
       JOIN accounts a ON a.id = hs.account_id
       JOIN (
@@ -135,17 +230,18 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
         GROUP BY account_id
       ) _prior_snap ON _prior_snap.account_id = hs.account_id AND _prior_snap.max_as_of = hs.as_of
       JOIN positions p ON p.snapshot_id = hs.id
+      JOIN securities s ON s.id = p.security_id
       WHERE a.id NOT LIKE 'schwab_%'
         AND ${allSyncedAccountsWhereSql("a")}
     `,
     )
-    .get({ session_ymd: priorSessionYmd }) as { mv: number } | undefined;
+    .all({ session_ymd: priorSessionYmd }) as ExternalPositionRow[];
 
-  const current = currentRow?.mv ?? 0;
-  const priorRaw = priorRow?.mv;
-  // SUM() is 0 when no prior snapshot exists — must not treat as "$0 external yesterday".
-  const prior =
-    priorRaw != null && Number.isFinite(priorRaw) && priorRaw > 0 ? priorRaw : current;
+  const planFundMarks = await loadPlanFundMarksForRows(db, currentRows);
+  const current = sumExternalRows(currentRows, planFundMarks);
+  const priorRaw = sumExternalRows(priorRows, new Map());
+  // No prior rows means no prior snapshot exists — must not treat as "$0 external yesterday".
+  const prior = priorRows.length > 0 && Number.isFinite(priorRaw) && priorRaw > 0 ? priorRaw : current;
   return {
     current: Number.isFinite(current) ? current : 0,
     prior: Number.isFinite(prior) ? prior : current,
@@ -298,7 +394,7 @@ export async function resolvePortfolioAccountTotals(
   const dbSchwab = schwabLiquidationFromDb(db);
   const dbPriorSchwab = schwabPriorLiquidationFromDb(db, priorSessionYmd);
   const dbPriorEquity = schwabPriorEquityFromLatestSync(db);
-  const external = externalMarketValueFromDb(db, priorSessionYmd);
+  const external = await externalMarketValueFromDb(db, priorSessionYmd);
   const schwabTotals = resolveSchwabAccountTotals(live, dbSchwab, dbPriorSchwab, dbPriorEquity);
 
   const schwabCurrent = schwabTotals.current;

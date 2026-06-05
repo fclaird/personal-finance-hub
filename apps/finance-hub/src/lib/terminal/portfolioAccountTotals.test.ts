@@ -61,7 +61,7 @@ test("schwabLiquidationFromDb sums latest account value points", () => {
   assert.equal(current, 5000000);
 });
 
-test("externalMarketValueFromDb uses current external when prior snapshot is missing (not zero)", () => {
+test("externalMarketValueFromDb uses current external when prior snapshot is missing (not zero)", async () => {
   const db = createTestDb();
   db.prepare(
     `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('conn_manual', 'manual', 'Manual', 'active')`,
@@ -77,12 +77,12 @@ test("externalMarketValueFromDb uses current external when prior snapshot is mis
     `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('p529', 'snap529', 'sec_529', 1, 250000, 250000)`,
   ).run();
 
-  const { current, prior } = externalMarketValueFromDb(db, "2026-05-27");
+  const { current, prior } = await externalMarketValueFromDb(db, "2026-05-27");
   assert.equal(current, 250000);
   assert.equal(prior, 250000);
 });
 
-test("externalMarketValueFromDb adds manual 529 holdings", () => {
+test("externalMarketValueFromDb adds manual 529 holdings", async () => {
   const db = createTestDb();
   db.prepare(
     `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('conn_manual', 'manual', 'Manual', 'active')`,
@@ -96,8 +96,43 @@ test("externalMarketValueFromDb adds manual 529 holdings", () => {
     `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('p529', 'snap529', 'sec_529', 1, 250000, 250000)`,
   ).run();
 
-  const { current } = externalMarketValueFromDb(db, "2026-05-21");
+  const { current } = await externalMarketValueFromDb(db, "2026-05-21");
   assert.equal(current, 250000);
+});
+
+test("externalMarketValueFromDb marks plan funds to cached Yahoo NAV", async () => {
+  const db = createTestDb();
+  db.prepare(
+    `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('conn_manual', 'manual', 'Manual', 'active')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO accounts (id, connection_id, name, account_bucket, type) VALUES ('manual_529', 'conn_manual', '529', '529', 'manual')`,
+  ).run();
+  db.prepare(`INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('snap529', 'manual_529', '2026-05-22')`).run();
+  db.prepare(`INSERT INTO securities (id, symbol, name, security_type) VALUES ('sec_529', 'VTHRX', '529 Fund', 'fund')`).run();
+  db.prepare(
+    `
+    INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value, metadata_json)
+    VALUES ('p529', 'snap529', 'sec_529', 1, 100, 200000, @metadata)
+  `,
+  ).run({
+    metadata: JSON.stringify({
+      source: "manual",
+      purchaseDate: null,
+      fundBasis: {
+        statementMarketValue: 200000,
+        statementDate: "2026-05-01",
+        basisTickerNav: 100,
+      },
+    }),
+  });
+  db.prepare(
+    `INSERT INTO price_points (provider, symbol, date, close) VALUES ('yahoo', 'VTHRX', '2026-05-22', 110)`,
+  ).run();
+
+  const { current, prior } = await externalMarketValueFromDb(db, "2026-05-21");
+  assert.equal(current, 220000);
+  assert.equal(prior, 220000);
 });
 
 test("schwabPriorEquityFromLatestSync reads prior-day equity from the latest sync row", () => {
