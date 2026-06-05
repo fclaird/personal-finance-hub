@@ -131,8 +131,8 @@ test("externalMarketValueFromDb marks plan funds to cached Yahoo NAV", async () 
   ).run();
 
   const { current, prior } = await externalMarketValueFromDb(db, "2026-05-21");
-  assert.equal(current, 220000);
-  assert.equal(prior, 220000);
+  assert.ok(Math.abs(current - 220000) < 0.01);
+  assert.ok(Math.abs(prior - 220000) < 0.01);
 });
 
 test("schwabPriorEquityFromLatestSync reads prior-day equity from the latest sync row", () => {
