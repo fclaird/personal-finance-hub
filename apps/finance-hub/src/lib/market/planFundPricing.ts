@@ -57,14 +57,22 @@ export async function buildFundStatementBasis(
   symbol: string,
   statementMarketValue: number,
   statementDate: string,
-): Promise<FundStatementBasis> {
-  const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
+): Promise<FundStatementBasis | null> {
+  const navOnDate = (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol));
+  if (navOnDate == null || !Number.isFinite(navOnDate) || navOnDate <= 0) return null;
   return {
     statementMarketValue,
     statementDate,
     basisTickerNav: navOnDate,
   };
+}
+
+/** Anchor NAV is implausible vs today's public NAV (e.g. failed lookup defaulting to 1). */
+export function fundBasisNavRatioInvalid(basisTickerNav: number, navToday: number): boolean {
+  if (!Number.isFinite(basisTickerNav) || basisTickerNav <= 0) return true;
+  if (!Number.isFinite(navToday) || navToday <= 0) return false;
+  const ratio = navToday / basisTickerNav;
+  return ratio > 50 || ratio < 0.02;
 }
 
 /** Mark statement balance to today using public fund NAV return since the anchor date. */
@@ -75,6 +83,9 @@ export function markToMarketFund(
 ): number {
   const ref = navOnBasisDate ?? basis.basisTickerNav;
   if (!Number.isFinite(ref) || ref <= 0 || !Number.isFinite(navToday) || navToday <= 0) {
+    return basis.statementMarketValue;
+  }
+  if (fundBasisNavRatioInvalid(ref, navToday)) {
     return basis.statementMarketValue;
   }
   return basis.statementMarketValue * (navToday / ref);
@@ -95,6 +106,14 @@ export function repairFundBasisIfMarkDrift(
   navToday: number,
   quantity: number,
 ): FundStatementBasis | null {
+  if (fundBasisNavRatioInvalid(basis.basisTickerNav, navToday)) {
+    const today = new Date().toISOString().slice(0, 10);
+    return {
+      statementMarketValue: basis.statementMarketValue,
+      statementDate: today,
+      basisTickerNav: navToday,
+    };
+  }
   const marked = markToMarketFund(basis, navToday);
   if (marked <= basis.statementMarketValue * 1.12) return null;
   if (!publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) return null;
