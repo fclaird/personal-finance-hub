@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   portfolioDailyReturnPct,
+  resolveSchwabAccountHashMap,
   SCHWAB_CASH_FLOW_TRANSACTION_TYPES,
 } from "@/lib/terminal/portfolioCashFlows";
 
@@ -26,4 +27,19 @@ test("portfolioDailyReturnPct subtracts deposits from day return", () => {
 
 test("SCHWAB_CASH_FLOW_TRANSACTION_TYPES excludes TRADE", () => {
   assert.equal(SCHWAB_CASH_FLOW_TRANSACTION_TYPES.includes("TRADE" as never), false);
+});
+
+test("resolveSchwabAccountHashMap matches accountId-based rows by synced account name", () => {
+  const hashes = resolveSchwabAccountHashMap(
+    [
+      {
+        id: "schwab_ABC123ACCOUNTID",
+        name: "Schwab 11112222",
+        schwab_account_hash: null,
+      },
+    ],
+    [{ accountNumber: "11112222", hashValue: "hash-for-transactions" }],
+  );
+
+  assert.equal(hashes.get("schwab_ABC123ACCOUNTID"), "hash-for-transactions");
 });
