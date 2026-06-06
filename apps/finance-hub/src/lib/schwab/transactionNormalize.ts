@@ -1,3 +1,5 @@
+import { nyCalendarIso } from "@/lib/analytics/allocationNyDate";
+
 /** Normalize Schwab Trader API transaction objects into DB-ready fields. */
 
 export type SchwabTxnInstrument = {
@@ -53,11 +55,15 @@ export function externalActivityId(tx: SchwabTxnRaw): string | null {
 }
 
 export function tradeDateIso(tx: SchwabTxnRaw): string | null {
-  const d = (tx.tradeDate ?? tx.time ?? tx.settlementDate ?? "").toString().slice(0, 10);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+  const tradeDate = (tx.tradeDate ?? "").toString().slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(tradeDate)) return tradeDate;
+
+  const settlement = (tx.settlementDate ?? "").toString().slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(settlement)) return settlement;
+
   if (tx.time) {
     const t = new Date(tx.time);
-    if (!Number.isNaN(t.getTime())) return t.toISOString().slice(0, 10);
+    if (!Number.isNaN(t.getTime())) return nyCalendarIso(t);
   }
   return null;
 }
