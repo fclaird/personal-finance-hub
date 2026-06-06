@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 
 import { bucketFromAccount } from "@/lib/accountBuckets";
 import { classifyAsset } from "@/lib/analytics/assetClass";
+import { getUnderlyingExposureByBucket } from "@/lib/analytics/optionsExposure";
 import { latestSnapshotIds } from "@/lib/holdings/latestSnapshots";
 import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
 
@@ -163,5 +164,38 @@ describe("allocation bucket splits", () => {
 
     assert.equal(classifyAsset(row.security_type, row.metadata_json), "fund");
     assert.equal(row.market_value, 12000);
+  });
+
+  it("live re-marking is skipped only for the bucket that contains a plan fund", () => {
+    const db = createTestDb();
+    db.prepare(
+      `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('c1', 'schwab', 'S', 'active')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('conn_manual', 'manual', 'M', 'active')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO accounts (id, connection_id, name, account_bucket, type) VALUES ('schwab_tax', 'c1', 'Taxable', 'brokerage', 'brokerage')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO accounts (id, connection_id, name, account_bucket, type) VALUES ('manual_529', 'conn_manual', '529 Plan', '529', 'manual')`,
+    ).run();
+    db.prepare(`INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('snap_tax', 'schwab_tax', '2026-06-01')`).run();
+    db.prepare(`INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('snap_529', 'manual_529', '2026-06-01')`).run();
+    db.prepare(`INSERT INTO securities (id, symbol, name, security_type) VALUES ('sec_VTI', 'VTI', 'VTI', 'equity')`).run();
+    db.prepare(`INSERT INTO securities (id, symbol, name, security_type) VALUES ('sec_VTI_FUND', 'VTI', 'VTI plan proxy', 'fund')`).run();
+    db.prepare(
+      `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('p_tax', 'snap_tax', 'sec_VTI', 10, 50, 500)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value, metadata_json) VALUES ('p_529', 'snap_529', 'sec_VTI_FUND', 1, 1000, 1000, '{"source":"manual"}')`,
+    ).run();
+
+    const buckets = getUnderlyingExposureByBucket("auto", new Map([["VTI", 60]]), db);
+    const brokerageVti = buckets.find((b) => b.bucketKey === "brokerage")?.exposure.find((r) => r.underlyingSymbol === "VTI");
+    const planVti = buckets.find((b) => b.bucketKey === "529")?.exposure.find((r) => r.underlyingSymbol === "VTI");
+
+    assert.equal(brokerageVti?.spotMarketValue, 600);
+    assert.equal(planVti?.spotMarketValue, 1000);
   });
 });
