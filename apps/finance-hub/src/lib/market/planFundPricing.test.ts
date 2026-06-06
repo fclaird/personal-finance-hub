@@ -26,6 +26,12 @@ test("publicNavTimesQtyMismatch detects 529 plan vs public NAV divergence", () =
   assert.equal(publicNavTimesQtyMismatch(100, 36_858, 368.58), false);
 });
 
+test("markToMarketFund with basisTickerNav of 1 would inflate MV when NAV is unavailable", () => {
+  const basis = { statementMarketValue: 194_528, statementDate: "2026-05-01", basisTickerNav: 1 };
+  const inflated = markToMarketFund(basis, 368.58);
+  assert.ok(inflated > 50_000_000);
+});
+
 test("yahooCloseOnOrBefore picks last bar on or before target date", () => {
   const result = {
     timestamp: [
