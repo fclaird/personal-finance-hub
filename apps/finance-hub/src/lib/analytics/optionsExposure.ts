@@ -1,3 +1,5 @@
+import type Database from "better-sqlite3";
+
 import { getDb } from "@/lib/db";
 import type { DataMode } from "@/lib/dataMode";
 import type { AnalyticsBucketKey } from "@/lib/accountBuckets";
@@ -256,8 +258,8 @@ export function getUnderlyingExposureRollup(
 export function getUnderlyingExposureByBucket(
   mode: DataMode = "auto",
   equityMarkMap?: Map<string, number>,
+  db: Database.Database = getDb(),
 ): BucketExposure[] {
-  const db = getDb();
   const scope = latestSnapshotScopeForMode(mode);
   const snapshotIds = latestSnapshotIds(db, scope);
   if (snapshotIds.length === 0) return [];
@@ -288,6 +290,18 @@ export function getUnderlyingExposureByBucket(
   if (snapshotToBucket.size === 0) return [];
 
   const byBucket = new Map<AnalyticsBucketKey, Map<string, ExposureRow>>();
+  /** Statement-anchored MV from plan/529 funds; excluded from heldShares × live price re-marking. */
+  const planFundSpotMv = new Map<AnalyticsBucketKey, Map<string, number>>();
+
+  function planMvFor(bucket: AnalyticsBucketKey, sym: string): number {
+    return planFundSpotMv.get(bucket)?.get(sym) ?? 0;
+  }
+
+  function addPlanFundMv(bucket: AnalyticsBucketKey, sym: string, mv: number) {
+    if (!planFundSpotMv.has(bucket)) planFundSpotMv.set(bucket, new Map());
+    const m = planFundSpotMv.get(bucket)!;
+    m.set(sym, (m.get(sym) ?? 0) + mv);
+  }
 
   function rowFor(bucket: AnalyticsBucketKey, sym: string): ExposureRow {
     if (!byBucket.has(bucket)) byBucket.set(bucket, new Map());
@@ -337,19 +351,20 @@ export function getUnderlyingExposureByBucket(
     is_plan_fund: number;
   }>;
 
-  // Plan/529 fund share counts are synthetic proxies: heldShares × public NAV is meaningless,
-  // so keep their statement-anchored stored MV instead of re-marking against the live NAV below.
-  const planFundSymbols = new Set<string>();
-
   for (const r of spot) {
     const bucket = snapshotToBucket.get(r.snapshot_id);
     if (!bucket) continue;
     const symKey = (r.symbol ?? "").trim().toUpperCase();
     if (symKey === "CASH") continue;
-    if (r.is_plan_fund) planFundSymbols.add(symKey);
     const prev = rowFor(bucket, symKey);
-    prev.spotMarketValue += r.mv;
-    prev.heldShares += r.qty ?? 0;
+    if (r.is_plan_fund) {
+      // Plan/529 share counts are synthetic proxies; keep statement-anchored MV only.
+      addPlanFundMv(bucket, symKey, r.mv);
+      prev.spotMarketValue += r.mv;
+    } else {
+      prev.heldShares += r.qty ?? 0;
+      prev.spotMarketValue += r.mv;
+    }
     commit(bucket, symKey, prev);
   }
 
@@ -420,13 +435,12 @@ export function getUnderlyingExposureByBucket(
   }
 
   const priceByUnderlying = equityMarkMap ?? portfolioImpliedEquityPriceMap(db, mode);
-  for (const m of byBucket.values()) {
+  for (const [bucketKey, m] of byBucket.entries()) {
     for (const row of m.values()) {
       const px = priceByUnderlying.get(row.underlyingSymbol);
       if (px == null) continue;
-      // Plan/529 funds: preserve the statement-anchored stored MV; don't re-mark synthetic shares.
-      if (planFundSymbols.has(row.underlyingSymbol)) continue;
-      if (row.heldShares > 0) row.spotMarketValue = row.heldShares * px;
+      const planMv = planMvFor(bucketKey, row.underlyingSymbol);
+      if (row.heldShares > 0) row.spotMarketValue = planMv + row.heldShares * px;
       row.syntheticMarketValue = row.syntheticShares * px;
     }
   }
