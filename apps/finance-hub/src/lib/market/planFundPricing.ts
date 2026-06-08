@@ -1,5 +1,5 @@
 import { fetchYahooDailyChart } from "@/lib/market/yahooChartFetch";
-import { fetchYahooLatestPrice, navFromYahooChartResult } from "@/lib/market/yahooLatestPrice";
+import { fetchYahooLatestPrice } from "@/lib/market/yahooLatestPrice";
 
 /** One-time 529 / plan statement anchor; MV tracks the public fund return from that date. */
 export type FundStatementBasis = {
@@ -57,9 +57,9 @@ export async function buildFundStatementBasis(
   symbol: string,
   statementMarketValue: number,
   statementDate: string,
-): Promise<FundStatementBasis> {
-  const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
+): Promise<FundStatementBasis | null> {
+  const navOnDate = (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol));
+  if (navOnDate == null) return null;
   return {
     statementMarketValue,
     statementDate,
@@ -96,8 +96,10 @@ export function repairFundBasisIfMarkDrift(
   quantity: number,
 ): FundStatementBasis | null {
   const marked = markToMarketFund(basis, navToday);
-  if (marked <= basis.statementMarketValue * 1.12) return null;
-  if (!publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) return null;
+  if (marked <= basis.statementMarketValue * 2) return null;
+  const fallbackNavAnchor = basis.basisTickerNav === 1;
+  const syntheticQuantityMismatch = publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday);
+  if (!fallbackNavAnchor && !syntheticQuantityMismatch) return null;
   const today = new Date().toISOString().slice(0, 10);
   return {
     statementMarketValue: basis.statementMarketValue,
