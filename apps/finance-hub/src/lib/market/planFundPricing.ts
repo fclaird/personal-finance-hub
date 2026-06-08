@@ -89,14 +89,15 @@ export function needsPlanFundPricing(
 }
 
 /** Public NAV × qty is misleading for plan holdings when it diverges strongly from statement MV. */
-/** Re-basis when anchor NAV is from an old date and mark-to-market drifts far above statement balance. */
+/** Re-basis when a stale purchase-date anchor inflates mark-to-market far above the statement balance. */
 export function repairFundBasisIfMarkDrift(
   basis: FundStatementBasis,
   navToday: number,
   quantity: number,
 ): FundStatementBasis | null {
   const marked = markToMarketFund(basis, navToday);
-  if (marked <= basis.statementMarketValue * 1.12) return null;
+  // Purchase-date anchors (e.g. 2011) inflate MV ~3×; legitimate fund gains stay well below 2×.
+  if (marked <= basis.statementMarketValue * 2) return null;
   if (!publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) return null;
   const today = new Date().toISOString().slice(0, 10);
   return {
