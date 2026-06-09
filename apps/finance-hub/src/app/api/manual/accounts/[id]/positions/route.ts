@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
 
 import { logError } from "@/lib/log";
-import { buildFundStatementBasis } from "@/lib/market/planFundPricing";
-import { isManualAccountId, upsertManualPosition, type ManualPositionInput } from "@/lib/manual/manualAccounts";
+import { buildFundStatementBasis, shouldRebuildFundBasis } from "@/lib/market/planFundPricing";
+import {
+  getManualPositionFundBasis,
+  isManualAccountId,
+  upsertManualPosition,
+  type ManualPositionInput,
+} from "@/lib/manual/manualAccounts";
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
@@ -28,10 +33,27 @@ export async function POST(req: Request, ctx: RouteCtx) {
     // Statement anchor date must be when the balance was observed — not purchase date (2011 NAV
     // would scale today's 529 balance by ~3× on every load).
     const statementDate = new Date().toISOString().slice(0, 10);
+    const reanchorFundBasis = body.reanchorFundBasis === true;
+    const existingFundBasis =
+      body.positionId?.trim() ? getManualPositionFundBasis(id, body.positionId.trim()) : null;
 
     let fundBasis = undefined as ManualPositionInput["fundBasis"];
-    if (securityType === "fund" && marketValue != null && Number.isFinite(marketValue) && marketValue > 0 && symbol) {
-      fundBasis = await buildFundStatementBasis(symbol, marketValue, statementDate);
+    if (
+      securityType === "fund" &&
+      marketValue != null &&
+      Number.isFinite(marketValue) &&
+      marketValue > 0 &&
+      symbol &&
+      shouldRebuildFundBasis(existingFundBasis, marketValue, reanchorFundBasis)
+    ) {
+      const built = await buildFundStatementBasis(symbol, marketValue, statementDate);
+      if (!built) {
+        return NextResponse.json(
+          { ok: false, error: "Could not fetch fund NAV to anchor statement balance. Try again later." },
+          { status: 502 },
+        );
+      }
+      fundBasis = built;
     }
 
     const result = upsertManualPosition(id, {
