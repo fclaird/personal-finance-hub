@@ -5,6 +5,7 @@ import {
   markToMarketFund,
   publicNavTimesQtyMismatch,
   repairFundBasisIfMarkDrift,
+  shouldRebuildFundBasis,
   yahooCloseOnOrBefore,
 } from "./planFundPricing";
 
@@ -24,6 +25,14 @@ test("repairFundBasisIfMarkDrift fixes purchase-date anchor that inflates mark-t
 test("publicNavTimesQtyMismatch detects 529 plan vs public NAV divergence", () => {
   assert.equal(publicNavTimesQtyMismatch(1618, 194_528, 368.58), true);
   assert.equal(publicNavTimesQtyMismatch(100, 36_858, 368.58), false);
+});
+
+test("shouldRebuildFundBasis preserves anchor when statement balance unchanged", () => {
+  const existing = { statementMarketValue: 194_528, statementDate: "2026-05-01", basisTickerNav: 354 };
+  assert.equal(shouldRebuildFundBasis(existing, 194_528, false), false);
+  assert.equal(shouldRebuildFundBasis(existing, 200_000, false), true);
+  assert.equal(shouldRebuildFundBasis(null, 194_528, false), true);
+  assert.equal(shouldRebuildFundBasis(existing, 194_528, true), true);
 });
 
 test("yahooCloseOnOrBefore picks last bar on or before target date", () => {

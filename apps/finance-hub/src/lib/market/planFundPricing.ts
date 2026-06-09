@@ -53,13 +53,24 @@ export async function fetchYahooNavOnDate(symbol: string, isoDate: string): Prom
   return yahooCloseOnOrBefore(chart.result, isoDate);
 }
 
+/** Whether to rebuild a plan-fund statement anchor on save. */
+export function shouldRebuildFundBasis(
+  existing: FundStatementBasis | null,
+  statementMarketValue: number,
+  reanchor: boolean,
+): boolean {
+  if (reanchor) return true;
+  if (!existing) return true;
+  return existing.statementMarketValue !== statementMarketValue;
+}
+
 export async function buildFundStatementBasis(
   symbol: string,
   statementMarketValue: number,
   statementDate: string,
-): Promise<FundStatementBasis> {
-  const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
+): Promise<FundStatementBasis | null> {
+  const navOnDate = (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol));
+  if (navOnDate == null || !Number.isFinite(navOnDate) || navOnDate <= 0) return null;
   return {
     statementMarketValue,
     statementDate,

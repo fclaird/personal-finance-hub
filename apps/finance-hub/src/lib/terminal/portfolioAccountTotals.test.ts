@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 import {
   externalMarketValueFromDb,
   priorNySessionYmd,
+  resolveExternalPositionMarketValue,
   schwabIntradayTotalsFromDb,
   schwabLiquidationFromDb,
   schwabPriorEquityFromLatestSync,
@@ -80,6 +81,25 @@ test("externalMarketValueFromDb uses current external when prior snapshot is mis
   const { current, prior } = externalMarketValueFromDb(db, "2026-05-27");
   assert.equal(current, 250000);
   assert.equal(prior, 250000);
+});
+
+test("resolveExternalPositionMarketValue marks 529 fund to market from statement anchor", () => {
+  const basis = { statementMarketValue: 194_528, statementDate: "2026-05-01", basisTickerNav: 354 };
+  const navToday = 368.58;
+  const marked = resolveExternalPositionMarketValue(
+    {
+      accountId: "manual_529",
+      accountBucket: "529",
+      symbol: "VTSAX",
+      securityType: "fund",
+      quantity: 1618,
+      price: 120,
+      marketValue: 194_528,
+      metadataJson: JSON.stringify({ source: "manual", purchaseDate: null, fundBasis: basis }),
+    },
+    new Map([["VTSAX", navToday]]),
+  );
+  assert.equal(marked, 194_528 * (navToday / 354));
 });
 
 test("externalMarketValueFromDb adds manual 529 holdings", () => {
