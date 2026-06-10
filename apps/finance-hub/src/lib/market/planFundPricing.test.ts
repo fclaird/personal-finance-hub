@@ -21,6 +21,13 @@ test("repairFundBasisIfMarkDrift fixes purchase-date anchor that inflates mark-t
   assert.equal(markToMarketFund(repaired!, 368.58), 194_528);
 });
 
+test("repairFundBasisIfMarkDrift does not reset legit statement-anchored growth above 12%", () => {
+  const basis = { statementMarketValue: 194_528, statementDate: "2026-05-01", basisTickerNav: 354 };
+  const navToday = 354 * 1.15;
+  assert.equal(repairFundBasisIfMarkDrift(basis, navToday, 1618), null);
+  assert.ok(markToMarketFund(basis, navToday) > basis.statementMarketValue * 1.12);
+});
+
 test("publicNavTimesQtyMismatch detects 529 plan vs public NAV divergence", () => {
   assert.equal(publicNavTimesQtyMismatch(1618, 194_528, 368.58), true);
   assert.equal(publicNavTimesQtyMismatch(100, 36_858, 368.58), false);
