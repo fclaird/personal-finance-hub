@@ -98,6 +98,12 @@ export function repairFundBasisIfMarkDrift(
   const marked = markToMarketFund(basis, navToday);
   if (marked <= basis.statementMarketValue * 1.12) return null;
   if (!publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) return null;
+  // Wrong anchor (e.g. purchase-date NAV) makes mark-to-market track public NAV × qty;
+  // legit statement-anchored growth keeps marked well below that implied public value.
+  const impliedPublic = quantity * navToday;
+  if (!Number.isFinite(impliedPublic) || impliedPublic <= 0) return null;
+  const relDiff = Math.abs(impliedPublic - marked) / Math.max(Math.abs(marked), 1);
+  if (relDiff > 0.15) return null;
   const today = new Date().toISOString().slice(0, 10);
   return {
     statementMarketValue: basis.statementMarketValue,
