@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildFundStatementBasis,
   markToMarketFund,
   publicNavTimesQtyMismatch,
   repairFundBasisIfMarkDrift,
@@ -24,6 +25,28 @@ test("repairFundBasisIfMarkDrift fixes purchase-date anchor that inflates mark-t
 test("publicNavTimesQtyMismatch detects 529 plan vs public NAV divergence", () => {
   assert.equal(publicNavTimesQtyMismatch(1618, 194_528, 368.58), true);
   assert.equal(publicNavTimesQtyMismatch(100, 36_858, 368.58), false);
+});
+
+test("buildFundStatementBasis does not fabricate a NAV when Yahoo prices are unavailable", async () => {
+  const basis = await buildFundStatementBasis("VIGIX", 194_528, "2026-05-01", {
+    fetchNavOnDate: async () => null,
+    fetchLatestPrice: async () => null,
+  });
+
+  assert.equal(basis, null);
+});
+
+test("buildFundStatementBasis falls back to latest NAV only when it is available", async () => {
+  const basis = await buildFundStatementBasis("VIGIX", 194_528, "2026-05-01", {
+    fetchNavOnDate: async () => null,
+    fetchLatestPrice: async () => 368.58,
+  });
+
+  assert.deepEqual(basis, {
+    statementMarketValue: 194_528,
+    statementDate: "2026-05-01",
+    basisTickerNav: 368.58,
+  });
 });
 
 test("yahooCloseOnOrBefore picks last bar on or before target date", () => {
