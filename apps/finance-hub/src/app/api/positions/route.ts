@@ -256,7 +256,7 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
       );
       const qty = r.quantity ?? 0;
       const planFund = needsPlanFundPricing(isManual, r.securityType, r.accountBucket);
-      let fundBasis = parseFundStatementBasis(manualMeta);
+      const fundBasis = parseFundStatementBasis(manualMeta);
       const navToday = markPx ?? yahooLive.get(sym) ?? null;
       // Manual: `price` is purchase cost (Cost/share column).
       const price = isManual ? r.price : (markPx ?? r.price);
