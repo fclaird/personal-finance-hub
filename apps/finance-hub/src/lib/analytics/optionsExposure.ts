@@ -1,3 +1,5 @@
+import type Database from "better-sqlite3";
+
 import { getDb } from "@/lib/db";
 import type { DataMode } from "@/lib/dataMode";
 import type { AnalyticsBucketKey } from "@/lib/accountBuckets";
@@ -256,8 +258,8 @@ export function getUnderlyingExposureRollup(
 export function getUnderlyingExposureByBucket(
   mode: DataMode = "auto",
   equityMarkMap?: Map<string, number>,
+  db: Database.Database = getDb(),
 ): BucketExposure[] {
-  const db = getDb();
   const scope = latestSnapshotScopeForMode(mode);
   const snapshotIds = latestSnapshotIds(db, scope);
   if (snapshotIds.length === 0) return [];
@@ -287,9 +289,16 @@ export function getUnderlyingExposureByBucket(
   }
   if (snapshotToBucket.size === 0) return [];
 
-  const byBucket = new Map<AnalyticsBucketKey, Map<string, ExposureRow>>();
+  type ExposureAccum = ExposureRow & {
+    /** Statement-anchored MV from plan/529 rows; not re-marked with public NAV. */
+    planFundSpotMv: number;
+    /** Share count from non-plan rows only (safe to multiply by live px). */
+    nonPlanHeldShares: number;
+  };
 
-  function rowFor(bucket: AnalyticsBucketKey, sym: string): ExposureRow {
+  const byBucket = new Map<AnalyticsBucketKey, Map<string, ExposureAccum>>();
+
+  function rowFor(bucket: AnalyticsBucketKey, sym: string): ExposureAccum {
     if (!byBucket.has(bucket)) byBucket.set(bucket, new Map());
     const map = byBucket.get(bucket)!;
     const prev = map.get(sym) ?? {
@@ -299,11 +308,13 @@ export function getUnderlyingExposureByBucket(
       syntheticMarketValue: 0,
       syntheticShares: 0,
       optionsMarkMarketValue: 0,
+      planFundSpotMv: 0,
+      nonPlanHeldShares: 0,
     };
     return prev;
   }
 
-  function commit(bucket: AnalyticsBucketKey, sym: string, row: ExposureRow) {
+  function commit(bucket: AnalyticsBucketKey, sym: string, row: ExposureAccum) {
     byBucket.get(bucket)!.set(sym, row);
   }
 
@@ -337,19 +348,19 @@ export function getUnderlyingExposureByBucket(
     is_plan_fund: number;
   }>;
 
-  // Plan/529 fund share counts are synthetic proxies: heldShares × public NAV is meaningless,
-  // so keep their statement-anchored stored MV instead of re-marking against the live NAV below.
-  const planFundSymbols = new Set<string>();
-
   for (const r of spot) {
     const bucket = snapshotToBucket.get(r.snapshot_id);
     if (!bucket) continue;
     const symKey = (r.symbol ?? "").trim().toUpperCase();
     if (symKey === "CASH") continue;
-    if (r.is_plan_fund) planFundSymbols.add(symKey);
     const prev = rowFor(bucket, symKey);
     prev.spotMarketValue += r.mv;
     prev.heldShares += r.qty ?? 0;
+    if (r.is_plan_fund) {
+      prev.planFundSpotMv += r.mv;
+    } else {
+      prev.nonPlanHeldShares += r.qty ?? 0;
+    }
     commit(bucket, symKey, prev);
   }
 
@@ -424,9 +435,12 @@ export function getUnderlyingExposureByBucket(
     for (const row of m.values()) {
       const px = priceByUnderlying.get(row.underlyingSymbol);
       if (px == null) continue;
-      // Plan/529 funds: preserve the statement-anchored stored MV; don't re-mark synthetic shares.
-      if (planFundSymbols.has(row.underlyingSymbol)) continue;
-      if (row.heldShares > 0) row.spotMarketValue = row.heldShares * px;
+      // Plan/529 rows keep statement MV; only non-plan shares are marked to live px.
+      if (row.planFundSpotMv > 0 || row.nonPlanHeldShares > 0) {
+        row.spotMarketValue = row.planFundSpotMv + row.nonPlanHeldShares * px;
+      } else if (row.heldShares > 0) {
+        row.spotMarketValue = row.heldShares * px;
+      }
       row.syntheticMarketValue = row.syntheticShares * px;
     }
   }
