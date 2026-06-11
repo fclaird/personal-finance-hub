@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildFundStatementBasis,
   markToMarketFund,
-  publicNavTimesQtyMismatch,
-  repairFundBasisIfMarkDrift,
   yahooCloseOnOrBefore,
 } from "./planFundPricing";
 
@@ -13,17 +12,31 @@ test("markToMarketFund scales statement balance by public fund return", () => {
   assert.equal(markToMarketFund(basis, 368.58), 194_528 * (368.58 / 354));
 });
 
-test("repairFundBasisIfMarkDrift fixes purchase-date anchor that inflates mark-to-market", () => {
-  const basis = { statementMarketValue: 194_528, statementDate: "2011-09-27", basisTickerNav: 120 };
-  const repaired = repairFundBasisIfMarkDrift(basis, 368.58, 1618);
-  assert.ok(repaired);
-  assert.equal(repaired!.basisTickerNav, 368.58);
-  assert.equal(markToMarketFund(repaired!, 368.58), 194_528);
+test("markToMarketFund preserves legitimate statement-anchored gains", () => {
+  const basis = { statementMarketValue: 100_000, statementDate: "2025-06-01", basisTickerNav: 100 };
+  assert.equal(markToMarketFund(basis, 130), 130_000);
 });
 
-test("publicNavTimesQtyMismatch detects 529 plan vs public NAV divergence", () => {
-  assert.equal(publicNavTimesQtyMismatch(1618, 194_528, 368.58), true);
-  assert.equal(publicNavTimesQtyMismatch(100, 36_858, 368.58), false);
+test("buildFundStatementBasis fails closed when Yahoo cannot provide a real NAV", async () => {
+  const basis = await buildFundStatementBasis("MUTFUND", 25_000, "2026-06-01", {
+    fetchNavOnDate: async () => null,
+    fetchLatestPrice: async () => null,
+  });
+
+  assert.equal(basis, null);
+});
+
+test("buildFundStatementBasis uses latest price fallback only when it is real", async () => {
+  const basis = await buildFundStatementBasis("MUTFUND", 25_000, "2026-06-01", {
+    fetchNavOnDate: async () => null,
+    fetchLatestPrice: async () => 42,
+  });
+
+  assert.deepEqual(basis, {
+    statementMarketValue: 25_000,
+    statementDate: "2026-06-01",
+    basisTickerNav: 42,
+  });
 });
 
 test("yahooCloseOnOrBefore picks last bar on or before target date", () => {
