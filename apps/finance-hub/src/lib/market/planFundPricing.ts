@@ -57,9 +57,10 @@ export async function buildFundStatementBasis(
   symbol: string,
   statementMarketValue: number,
   statementDate: string,
-): Promise<FundStatementBasis> {
+): Promise<FundStatementBasis | null> {
   const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
+    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol));
+  if (navOnDate == null || !Number.isFinite(navOnDate) || navOnDate <= 0) return null;
   return {
     statementMarketValue,
     statementDate,
@@ -90,6 +91,12 @@ export function needsPlanFundPricing(
 
 /** Public NAV × qty is misleading for plan holdings when it diverges strongly from statement MV. */
 /** Re-basis when anchor NAV is from an old date and mark-to-market drifts far above statement balance. */
+/** Anchor NAV far below live NAV (e.g. Yahoo-unavailable sentinel `1`) — qty-based checks won't fire. */
+export function hasImplausibleFundBasisAnchor(basis: FundStatementBasis, navToday: number): boolean {
+  if (!Number.isFinite(navToday) || navToday <= 0) return false;
+  return basis.basisTickerNav < navToday * 0.2;
+}
+
 export function repairFundBasisIfMarkDrift(
   basis: FundStatementBasis,
   navToday: number,
@@ -97,7 +104,8 @@ export function repairFundBasisIfMarkDrift(
 ): FundStatementBasis | null {
   const marked = markToMarketFund(basis, navToday);
   if (marked <= basis.statementMarketValue * 1.12) return null;
-  if (!publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) return null;
+  const qtyMismatch = publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday);
+  if (!qtyMismatch && !hasImplausibleFundBasisAnchor(basis, navToday)) return null;
   const today = new Date().toISOString().slice(0, 10);
   return {
     statementMarketValue: basis.statementMarketValue,
