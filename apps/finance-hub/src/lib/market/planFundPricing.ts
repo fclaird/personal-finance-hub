@@ -53,18 +53,27 @@ export async function fetchYahooNavOnDate(symbol: string, isoDate: string): Prom
   return yahooCloseOnOrBefore(chart.result, isoDate);
 }
 
-export async function buildFundStatementBasis(
-  symbol: string,
+export function fundStatementBasisFromNav(
   statementMarketValue: number,
   statementDate: string,
-): Promise<FundStatementBasis> {
-  const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
+  navOnDate: number | null,
+): FundStatementBasis | null {
+  if (navOnDate == null || !Number.isFinite(navOnDate) || navOnDate <= 0) return null;
   return {
     statementMarketValue,
     statementDate,
     basisTickerNav: navOnDate,
   };
+}
+
+export async function buildFundStatementBasis(
+  symbol: string,
+  statementMarketValue: number,
+  statementDate: string,
+): Promise<FundStatementBasis | null> {
+  const navOnDate =
+    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol));
+  return fundStatementBasisFromNav(statementMarketValue, statementDate, navOnDate);
 }
 
 /** Mark statement balance to today using public fund NAV return since the anchor date. */
@@ -86,36 +95,4 @@ export function needsPlanFundPricing(
   accountBucket: string | null,
 ): boolean {
   return isManual && (securityType === "fund" || accountBucket === "529");
-}
-
-/** Public NAV × qty is misleading for plan holdings when it diverges strongly from statement MV. */
-/** Re-basis when anchor NAV is from an old date and mark-to-market drifts far above statement balance. */
-export function repairFundBasisIfMarkDrift(
-  basis: FundStatementBasis,
-  navToday: number,
-  quantity: number,
-): FundStatementBasis | null {
-  const marked = markToMarketFund(basis, navToday);
-  if (marked <= basis.statementMarketValue * 1.12) return null;
-  if (!publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) return null;
-  const today = new Date().toISOString().slice(0, 10);
-  return {
-    statementMarketValue: basis.statementMarketValue,
-    statementDate: today,
-    basisTickerNav: navToday,
-  };
-}
-
-export function publicNavTimesQtyMismatch(
-  quantity: number,
-  statementMarketValue: number,
-  publicNav: number,
-  ratioThreshold = 1.35,
-): boolean {
-  if (!Number.isFinite(quantity) || quantity <= 0) return false;
-  if (!Number.isFinite(statementMarketValue) || statementMarketValue <= 0) return false;
-  if (!Number.isFinite(publicNav) || publicNav <= 0) return false;
-  const implied = quantity * publicNav;
-  const ratio = implied / statementMarketValue;
-  return ratio >= ratioThreshold || ratio <= 1 / ratioThreshold;
 }
