@@ -14,7 +14,7 @@ test("markToMarketFund scales statement balance by public fund return", () => {
 
 test("markToMarketFund preserves legitimate plan-fund gains above the original statement balance", () => {
   const basis = { statementMarketValue: 100_000, statementDate: "2026-05-01", basisTickerNav: 100 };
-  assert.equal(markToMarketFund(basis, 113), 113_000);
+  assert.ok(Math.abs(markToMarketFund(basis, 113) - 113_000) < 0.0001);
 });
 
 test("fundStatementBasisFromNav fails closed when Yahoo NAV is unavailable", () => {
