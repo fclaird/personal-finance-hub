@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  hasImplausibleFundBasisAnchor,
   markToMarketFund,
   publicNavTimesQtyMismatch,
   repairFundBasisIfMarkDrift,
@@ -19,6 +20,20 @@ test("repairFundBasisIfMarkDrift fixes purchase-date anchor that inflates mark-t
   assert.ok(repaired);
   assert.equal(repaired!.basisTickerNav, 368.58);
   assert.equal(markToMarketFund(repaired!, 368.58), 194_528);
+});
+
+test("repairFundBasisIfMarkDrift fixes Yahoo-unavailable anchor sentinel even when qty is 1", () => {
+  const basis = { statementMarketValue: 250_000, statementDate: "2026-05-28", basisTickerNav: 1 };
+  assert.ok(hasImplausibleFundBasisAnchor(basis, 368.58));
+  const repaired = repairFundBasisIfMarkDrift(basis, 368.58, 1);
+  assert.ok(repaired);
+  assert.equal(repaired!.basisTickerNav, 368.58);
+  assert.equal(markToMarketFund(repaired!, 368.58), 250_000);
+});
+
+test("hasImplausibleFundBasisAnchor ignores legitimate anchors near live NAV", () => {
+  const basis = { statementMarketValue: 194_528, statementDate: "2026-05-01", basisTickerNav: 354 };
+  assert.equal(hasImplausibleFundBasisAnchor(basis, 368.58), false);
 });
 
 test("publicNavTimesQtyMismatch detects 529 plan vs public NAV divergence", () => {
