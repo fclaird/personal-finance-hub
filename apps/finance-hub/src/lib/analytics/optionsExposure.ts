@@ -117,6 +117,18 @@ export type BucketExposure = {
 
 const DEFAULT_CONTRACT_MULTIPLIER = 100;
 
+export function applyExposureLiveMark(
+  row: ExposureRow,
+  px: number,
+  liveMarkableShares: number = row.heldShares,
+  anchoredSpotMarketValue = 0,
+): void {
+  if (row.heldShares > 0 && liveMarkableShares > 0) {
+    row.spotMarketValue = anchoredSpotMarketValue + liveMarkableShares * px;
+  }
+  row.syntheticMarketValue = row.syntheticShares * px;
+}
+
 /** Delta for synthetic exposure: current row, else latest same account+option security. */
 export const EFFECTIVE_OPTION_DELTA_SQL = `
   COALESCE(
@@ -307,6 +319,13 @@ export function getUnderlyingExposureByBucket(
     byBucket.get(bucket)!.set(sym, row);
   }
 
+  function bucketSymbolKey(bucket: AnalyticsBucketKey, sym: string): string {
+    return `${bucket}\0${sym}`;
+  }
+
+  const planFundStoredMarketValueByBucketSymbol = new Map<string, number>();
+  const liveMarkableSharesByBucketSymbol = new Map<string, number>();
+
   const spot = db
     .prepare(
       `
@@ -315,10 +334,14 @@ export function getUnderlyingExposureByBucket(
           COALESCE(sec.symbol, 'UNKNOWN') AS symbol,
           SUM(${POSITION_MARKET_VALUE_SQL}) AS mv,
           SUM(COALESCE(p.quantity, 0)) AS qty,
-          MAX(CASE
+          SUM(CASE
             WHEN a.id LIKE 'manual_%' AND (sec.security_type = 'fund' OR a.account_bucket = '529')
-            THEN 1 ELSE 0
-          END) AS is_plan_fund
+            THEN ${POSITION_MARKET_VALUE_SQL} ELSE 0
+          END) AS plan_fund_mv,
+          SUM(CASE
+            WHEN a.id LIKE 'manual_%' AND (sec.security_type = 'fund' OR a.account_bucket = '529')
+            THEN 0 ELSE COALESCE(p.quantity, 0)
+          END) AS live_markable_qty
         FROM positions p
         JOIN securities sec ON sec.id = p.security_id
         JOIN holding_snapshots hs ON hs.id = p.snapshot_id
@@ -334,19 +357,24 @@ export function getUnderlyingExposureByBucket(
     symbol: string;
     mv: number;
     qty: number;
-    is_plan_fund: number;
+    plan_fund_mv: number;
+    live_markable_qty: number;
   }>;
-
-  // Plan/529 fund share counts are synthetic proxies: heldShares × public NAV is meaningless,
-  // so keep their statement-anchored stored MV instead of re-marking against the live NAV below.
-  const planFundSymbols = new Set<string>();
 
   for (const r of spot) {
     const bucket = snapshotToBucket.get(r.snapshot_id);
     if (!bucket) continue;
     const symKey = (r.symbol ?? "").trim().toUpperCase();
     if (symKey === "CASH") continue;
-    if (r.is_plan_fund) planFundSymbols.add(symKey);
+    const scopedKey = bucketSymbolKey(bucket, symKey);
+    planFundStoredMarketValueByBucketSymbol.set(
+      scopedKey,
+      (planFundStoredMarketValueByBucketSymbol.get(scopedKey) ?? 0) + (r.plan_fund_mv ?? 0),
+    );
+    liveMarkableSharesByBucketSymbol.set(
+      scopedKey,
+      (liveMarkableSharesByBucketSymbol.get(scopedKey) ?? 0) + (r.live_markable_qty ?? 0),
+    );
     const prev = rowFor(bucket, symKey);
     prev.spotMarketValue += r.mv;
     prev.heldShares += r.qty ?? 0;
@@ -420,14 +448,17 @@ export function getUnderlyingExposureByBucket(
   }
 
   const priceByUnderlying = equityMarkMap ?? portfolioImpliedEquityPriceMap(db, mode);
-  for (const m of byBucket.values()) {
+  for (const [bucketKey, m] of byBucket.entries()) {
     for (const row of m.values()) {
       const px = priceByUnderlying.get(row.underlyingSymbol);
       if (px == null) continue;
-      // Plan/529 funds: preserve the statement-anchored stored MV; don't re-mark synthetic shares.
-      if (planFundSymbols.has(row.underlyingSymbol)) continue;
-      if (row.heldShares > 0) row.spotMarketValue = row.heldShares * px;
-      row.syntheticMarketValue = row.syntheticShares * px;
+      const scopedKey = bucketSymbolKey(bucketKey, row.underlyingSymbol);
+      applyExposureLiveMark(
+        row,
+        px,
+        liveMarkableSharesByBucketSymbol.get(scopedKey) ?? row.heldShares,
+        planFundStoredMarketValueByBucketSymbol.get(scopedKey) ?? 0,
+      );
     }
   }
 
