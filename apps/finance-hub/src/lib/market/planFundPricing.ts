@@ -1,5 +1,5 @@
 import { fetchYahooDailyChart } from "@/lib/market/yahooChartFetch";
-import { fetchYahooLatestPrice, navFromYahooChartResult } from "@/lib/market/yahooLatestPrice";
+import { fetchYahooLatestPrice } from "@/lib/market/yahooLatestPrice";
 
 /** One-time 529 / plan statement anchor; MV tracks the public fund return from that date. */
 export type FundStatementBasis = {
@@ -57,9 +57,18 @@ export async function buildFundStatementBasis(
   symbol: string,
   statementMarketValue: number,
   statementDate: string,
-): Promise<FundStatementBasis> {
+): Promise<FundStatementBasis | null> {
   const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
+    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol));
+  return fundStatementBasisFromNav(statementMarketValue, statementDate, navOnDate);
+}
+
+export function fundStatementBasisFromNav(
+  statementMarketValue: number,
+  statementDate: string,
+  navOnDate: number | null,
+): FundStatementBasis | null {
+  if (navOnDate == null || !Number.isFinite(navOnDate) || navOnDate <= 0) return null;
   return {
     statementMarketValue,
     statementDate,
@@ -86,24 +95,6 @@ export function needsPlanFundPricing(
   accountBucket: string | null,
 ): boolean {
   return isManual && (securityType === "fund" || accountBucket === "529");
-}
-
-/** Public NAV × qty is misleading for plan holdings when it diverges strongly from statement MV. */
-/** Re-basis when anchor NAV is from an old date and mark-to-market drifts far above statement balance. */
-export function repairFundBasisIfMarkDrift(
-  basis: FundStatementBasis,
-  navToday: number,
-  quantity: number,
-): FundStatementBasis | null {
-  const marked = markToMarketFund(basis, navToday);
-  if (marked <= basis.statementMarketValue * 1.12) return null;
-  if (!publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) return null;
-  const today = new Date().toISOString().slice(0, 10);
-  return {
-    statementMarketValue: basis.statementMarketValue,
-    statementDate: today,
-    basisTickerNav: navToday,
-  };
 }
 
 export function publicNavTimesQtyMismatch(

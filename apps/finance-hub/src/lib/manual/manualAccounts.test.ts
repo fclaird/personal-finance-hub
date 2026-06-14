@@ -11,6 +11,7 @@ import {
   ensureManualConnection,
   MANUAL_CONNECTION_ID,
   parseManualPositionMetadata,
+  upsertManualPositionInDb,
 } from "./manualAccounts";
 import { isManualAccountId } from "./isManualAccountId";
 
@@ -101,6 +102,44 @@ describe("manualAccounts", () => {
       .prepare(`SELECT COUNT(*) AS c FROM holding_snapshots WHERE account_id = ?`)
       .get(acct.id) as { c: number };
     assert.equal(snap.c, 1);
+  });
+
+  it("upsertManualPosition preserves existing fund basis when not re-anchoring", () => {
+    const db = createTestDb();
+    const acct = createManualAccountInDb(db, { name: "529 Plan", accountBucket: "529" });
+    const fundBasis = {
+      statementMarketValue: 194_528,
+      statementDate: "2026-05-01",
+      basisTickerNav: 354,
+    };
+    const { positionId } = upsertManualPositionInDb(db, acct.id, {
+      symbol: "VTI",
+      securityType: "fund",
+      quantity: 1618,
+      purchasePrice: null,
+      marketValue: 194_528,
+      purchaseDate: null,
+      notes: null,
+      fundBasis,
+    });
+
+    upsertManualPositionInDb(db, acct.id, {
+      positionId,
+      symbol: "VTI",
+      securityType: "fund",
+      quantity: 1618,
+      purchasePrice: null,
+      marketValue: 195_000,
+      purchaseDate: null,
+      notes: "memo-only edit",
+    });
+
+    const row = db
+      .prepare(`SELECT metadata_json AS metadataJson FROM positions WHERE id = ?`)
+      .get(positionId) as { metadataJson: string };
+    const meta = parseManualPositionMetadata(row.metadataJson);
+    assert.deepEqual(meta?.fundBasis, fundBasis);
+    assert.equal(meta?.notes, "memo-only edit");
   });
 
   it("deleteManualAccountInDb removes account snapshots and positions", () => {

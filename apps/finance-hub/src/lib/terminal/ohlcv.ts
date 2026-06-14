@@ -215,25 +215,6 @@ export async function ensureCandles(
     if (hasSufficientCachedCandles(sym, storage, window)) {
       return;
     }
-
-    const latest = db
-      .prepare(
-        `
-      SELECT ts_ms AS ts
-      FROM ohlcv_points
-      WHERE provider='schwab' AND symbol=? AND interval=?
-      ORDER BY ts_ms DESC
-      LIMIT 1
-    `,
-      )
-      .get(sym, storage) as { ts: number } | undefined;
-
-    if (latest?.ts) {
-      const ageMs = Date.now() - latest.ts;
-      if (ageMs < 12 * 60 * 60 * 1000) {
-        return;
-      }
-    }
   }
 
   const params = new URLSearchParams();
