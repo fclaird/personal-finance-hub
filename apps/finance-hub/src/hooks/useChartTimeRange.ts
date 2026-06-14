@@ -56,6 +56,7 @@ export function useChartTimeRange({
   resetKey = "",
 }: UseChartTimeRangeOptions): UseChartTimeRangeResult {
   const [visibleRange, setVisibleRangeState] = useState<VisibleTimeRange | null>(null);
+  const [dataCheckNowMs, setDataCheckNowMs] = useState<number | null>(null);
   const loadedRef = useRef({ from: loadedFromMs, to: loadedToMs });
 
   useEffect(() => {
@@ -68,6 +69,7 @@ export function useChartTimeRange({
       return;
     }
     const nowMs = Date.now();
+    setDataCheckNowMs(nowMs);
     setVisibleRangeState(defaultVisibleForWindow(window, loadedFromMs, loadedToMs, nowMs));
   }, [window, loadedFromMs, loadedToMs, resetKey]);
 
@@ -133,15 +135,16 @@ export function useChartTimeRange({
     const span = visibleRange.toMs - visibleRange.fromMs;
     const edge = Math.max(span * EDGE_FRAC, 60_000);
     const windowStartMs = windowSinceMs(window);
+    const nowMs = dataCheckNowMs ?? loadedToMs;
     // At initial load visible.fromMs === loadedFromMs (diff 0), which falsely looked like
     // "near the left edge — fetch more". Only extend when panned near edge AND more history exists.
     return {
       needsEarlierData:
         visibleRange.fromMs - loadedFromMs < edge && loadedFromMs > windowStartMs + edge,
       needsLaterData:
-        loadedToMs - visibleRange.toMs < edge && loadedToMs < Date.now() - edge,
+        loadedToMs - visibleRange.toMs < edge && loadedToMs < nowMs - edge,
     };
-  }, [visibleRange, loadedFromMs, loadedToMs, window]);
+  }, [visibleRange, loadedFromMs, loadedToMs, window, dataCheckNowMs]);
 
   return {
     visibleRange,
