@@ -1,5 +1,5 @@
 import { fetchYahooDailyChart } from "@/lib/market/yahooChartFetch";
-import { fetchYahooLatestPrice, navFromYahooChartResult } from "@/lib/market/yahooLatestPrice";
+import { fetchYahooLatestPrice } from "@/lib/market/yahooLatestPrice";
 
 /** One-time 529 / plan statement anchor; MV tracks the public fund return from that date. */
 export type FundStatementBasis = {
@@ -25,6 +25,25 @@ export function parseFundStatementBasis(meta: {
     return null;
   }
   return b;
+}
+
+export function fundStatementBasisFromNav(
+  statementMarketValue: number,
+  statementDate: string,
+  basisTickerNav: number | null,
+): FundStatementBasis | null {
+  if (
+    !Number.isFinite(statementMarketValue) ||
+    statementMarketValue <= 0 ||
+    typeof statementDate !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(statementDate) ||
+    basisTickerNav == null ||
+    !Number.isFinite(basisTickerNav) ||
+    basisTickerNav <= 0
+  ) {
+    return null;
+  }
+  return { statementMarketValue, statementDate, basisTickerNav };
 }
 
 /** Yahoo close on `isoDate` or the last trading day on/before it. */
@@ -57,14 +76,10 @@ export async function buildFundStatementBasis(
   symbol: string,
   statementMarketValue: number,
   statementDate: string,
-): Promise<FundStatementBasis> {
+): Promise<FundStatementBasis | null> {
   const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
-  return {
-    statementMarketValue,
-    statementDate,
-    basisTickerNav: navOnDate,
-  };
+    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol));
+  return fundStatementBasisFromNav(statementMarketValue, statementDate, navOnDate);
 }
 
 /** Mark statement balance to today using public fund NAV return since the anchor date. */
@@ -97,7 +112,8 @@ export function repairFundBasisIfMarkDrift(
 ): FundStatementBasis | null {
   const marked = markToMarketFund(basis, navToday);
   if (marked <= basis.statementMarketValue * 1.12) return null;
-  if (!publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) return null;
+  const likelyFallbackNav = basis.basisTickerNav <= 1 && navToday > 1;
+  if (!likelyFallbackNav && !publicNavTimesQtyMismatch(quantity, basis.statementMarketValue, navToday)) return null;
   const today = new Date().toISOString().slice(0, 10);
   return {
     statementMarketValue: basis.statementMarketValue,

@@ -120,7 +120,7 @@ async function rebuildAndStore(now: Date, sessionYmd: string): Promise<GlancePay
   const p = (async () => {
     const payload = await buildGlancePayload(now);
     try {
-      writeCacheRow(getDb(), sessionYmd, payload);
+      writeCacheRow(getDb(), payload.session.sessionYmd, payload);
     } catch (e) {
       logError("glance_cache_write", e);
     }

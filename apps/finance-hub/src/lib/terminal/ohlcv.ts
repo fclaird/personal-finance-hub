@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
 import { isUsEquityOvernightDeadZone } from "@/lib/market/glanceExtendedHours";
+import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import { schwabMarketFetch } from "@/lib/schwab/client";
 import type { ChartCandleInterval } from "@/lib/terminal/candleChartConfig";
 import { windowSinceMs as windowSinceMsFromConfig } from "@/lib/terminal/candleWindowTime";
@@ -35,6 +36,12 @@ export type CandleInterval = StorageCandleInterval;
 
 export type CandleWindow = "1D" | "5D" | "1M" | "3M" | "6M" | "1Y" | "3Y" | "5Y";
 
+const MS_MIN = 60 * 1000;
+const MS_HOUR = 60 * MS_MIN;
+const MS_DAY = 24 * MS_HOUR;
+
+export const INTRADAY_CACHE_FRESH_MS = 15 * MS_MIN;
+
 /** Minimum stored daily bars to treat a window as cache-warm (avoids refetching on every request). */
 const MIN_DAILY_BARS_FOR_WINDOW: Record<CandleWindow, number> = {
   "1D": 1,
@@ -46,6 +53,12 @@ const MIN_DAILY_BARS_FOR_WINDOW: Record<CandleWindow, number> = {
   "3Y": 500,
   "5Y": 800,
 };
+
+export function isIntradayCacheFresh(latestTsMs: number | null | undefined, nowMs: number = Date.now()): boolean {
+  if (!isUsEquityRegularSessionOpen(new Date(nowMs))) return true;
+  if (latestTsMs == null || !Number.isFinite(latestTsMs)) return false;
+  return nowMs - latestTsMs <= INTRADAY_CACHE_FRESH_MS;
+}
 
 function hasSufficientDailyCache(
   symbol: string,
@@ -68,7 +81,8 @@ function hasSufficientIntradayCache(
   const since = windowSinceMsFromConfig(window);
   const cached = getCachedCandles(symbol, storage, since);
   const minBars = window === "1D" ? 40 : 150;
-  return cached.length >= minBars;
+  const latestTsMs = cached.at(-1)?.tsMs;
+  return cached.length >= minBars && isIntradayCacheFresh(latestTsMs);
 }
 
 function hasSufficientCachedCandles(
@@ -78,10 +92,6 @@ function hasSufficientCachedCandles(
 ): boolean {
   return hasSufficientDailyCache(symbol, storage, window) || hasSufficientIntradayCache(symbol, storage, window);
 }
-
-const MS_MIN = 60 * 1000;
-const MS_HOUR = 60 * MS_MIN;
-const MS_DAY = 24 * MS_HOUR;
 
 export const CHART_INTERVAL_BUCKET_MS: Record<ChartCandleInterval, number> = {
   "5m": 5 * MS_MIN,
@@ -214,25 +224,6 @@ export async function ensureCandles(
   if (!opts?.force && opts?.startMs == null && opts?.endMs == null) {
     if (hasSufficientCachedCandles(sym, storage, window)) {
       return;
-    }
-
-    const latest = db
-      .prepare(
-        `
-      SELECT ts_ms AS ts
-      FROM ohlcv_points
-      WHERE provider='schwab' AND symbol=? AND interval=?
-      ORDER BY ts_ms DESC
-      LIMIT 1
-    `,
-      )
-      .get(sym, storage) as { ts: number } | undefined;
-
-    if (latest?.ts) {
-      const ageMs = Date.now() - latest.ts;
-      if (ageMs < 12 * 60 * 60 * 1000) {
-        return;
-      }
     }
   }
 
