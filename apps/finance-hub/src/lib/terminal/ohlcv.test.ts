@@ -7,6 +7,8 @@ import {
   chartCandlesExcludeDeadZone,
   CHART_INTERVAL_BUCKET_MS,
   filterChartCandlesDeadZone,
+  INTRADAY_CACHE_FRESH_MS,
+  isIntradayCacheFresh,
 } from "@/lib/terminal/ohlcv";
 import type { Candle } from "@/lib/terminal/ohlcv";
 
@@ -25,6 +27,18 @@ test("filterChartCandlesDeadZone removes 22:00 ET bar", () => {
   ]);
   assert.equal(out.length, 1);
   assert.equal(out[0]!.tsMs, rth);
+});
+
+test("isIntradayCacheFresh requires recent bars during regular trading hours", () => {
+  const nowMs = new Date("2026-06-15T13:00:00-04:00").getTime();
+  assert.equal(isIntradayCacheFresh(nowMs - INTRADAY_CACHE_FRESH_MS + 1, nowMs), true);
+  assert.equal(isIntradayCacheFresh(nowMs - INTRADAY_CACHE_FRESH_MS - 1, nowMs), false);
+});
+
+test("isIntradayCacheFresh allows closed-market caches to avoid futile refetches", () => {
+  const afterCloseMs = new Date("2026-06-15T18:00:00-04:00").getTime();
+  const closeBarMs = new Date("2026-06-15T16:00:00-04:00").getTime();
+  assert.equal(isIntradayCacheFresh(closeBarMs, afterCloseMs), true);
 });
 
 test("aggregateCandles merges 30m bars into 1h buckets", () => {
