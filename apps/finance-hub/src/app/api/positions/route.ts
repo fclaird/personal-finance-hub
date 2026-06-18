@@ -264,16 +264,10 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
       let marketValue: number | null;
       if (planFund && fundBasis && navToday != null) {
         const repaired = repairFundBasisIfMarkDrift(fundBasis, navToday, qty);
-        if (repaired) {
-          fundBasis = repaired;
-          const meta = manualMeta ?? { source: "manual" as const, purchaseDate: null };
-          db.prepare(`UPDATE positions SET metadata_json = ?, market_value = ? WHERE id = ?`).run(
-            JSON.stringify({ ...meta, fundBasis: repaired }),
-            repaired.statementMarketValue,
-            r.positionId,
-          );
-        }
+        if (repaired) fundBasis = repaired;
         marketValue = markToMarketFund(fundBasis, navToday);
+        // Persist refreshed MV only; never rewrite fundBasis metadata on GET (transient Yahoo
+        // spikes would permanently corrupt the statement anchor).
         if (!repaired) {
           db.prepare(`UPDATE positions SET market_value = ? WHERE id = ?`).run(marketValue, r.positionId);
         }
