@@ -5,6 +5,7 @@ import { buildFundStatementBasis } from "@/lib/market/planFundPricing";
 import { isManualAccountId, upsertManualPosition, type ManualPositionInput } from "@/lib/manual/manualAccounts";
 
 type RouteCtx = { params: Promise<{ id: string }> };
+type ManualPositionRequestBody = Partial<ManualPositionInput> & { anchorStatementBalance?: boolean };
 
 export async function POST(req: Request, ctx: RouteCtx) {
   try {
@@ -13,7 +14,7 @@ export async function POST(req: Request, ctx: RouteCtx) {
       return NextResponse.json({ ok: false, error: "Invalid manual account id" }, { status: 400 });
     }
 
-    const body = (await req.json().catch(() => null)) as Partial<ManualPositionInput> | null;
+    const body = (await req.json().catch(() => null)) as ManualPositionRequestBody | null;
     if (!body) {
       return NextResponse.json({ ok: false, error: "Invalid body" }, { status: 400 });
     }
@@ -30,8 +31,23 @@ export async function POST(req: Request, ctx: RouteCtx) {
     const statementDate = new Date().toISOString().slice(0, 10);
 
     let fundBasis = undefined as ManualPositionInput["fundBasis"];
-    if (securityType === "fund" && marketValue != null && Number.isFinite(marketValue) && marketValue > 0 && symbol) {
+    if (body.anchorStatementBalance === true) {
+      if (securityType !== "fund") {
+        return NextResponse.json({ ok: false, error: "Statement anchor is only valid for funds" }, { status: 400 });
+      }
+      if (marketValue == null || !Number.isFinite(marketValue) || marketValue <= 0 || !symbol) {
+        return NextResponse.json(
+          { ok: false, error: "A positive statement market value and symbol are required to anchor a fund" },
+          { status: 400 },
+        );
+      }
       fundBasis = await buildFundStatementBasis(symbol, marketValue, statementDate);
+      if (!fundBasis) {
+        return NextResponse.json(
+          { ok: false, error: "Unable to fetch a valid Yahoo NAV for this fund; statement anchor was not saved" },
+          { status: 400 },
+        );
+      }
     }
 
     const result = upsertManualPosition(id, {
