@@ -337,16 +337,22 @@ export function getUnderlyingExposureByBucket(
     is_plan_fund: number;
   }>;
 
-  // Plan/529 fund share counts are synthetic proxies: heldShares × public NAV is meaningless,
-  // so keep their statement-anchored stored MV instead of re-marking against the live NAV below.
-  const planFundSymbols = new Set<string>();
+  // Plan/529 fund share counts are synthetic proxies: heldShares * public NAV is meaningless.
+  // Track only those rows' stored MV as preserved; same-ticker non-plan shares/options still live-mark.
+  const preservedPlanSpotMv = new Map<string, number>();
+  const liveMarkableShares = new Map<string, number>();
 
   for (const r of spot) {
     const bucket = snapshotToBucket.get(r.snapshot_id);
     if (!bucket) continue;
     const symKey = (r.symbol ?? "").trim().toUpperCase();
     if (symKey === "CASH") continue;
-    if (r.is_plan_fund) planFundSymbols.add(symKey);
+    const liveKey = `${bucket}|${symKey}`;
+    if (r.is_plan_fund) {
+      preservedPlanSpotMv.set(liveKey, (preservedPlanSpotMv.get(liveKey) ?? 0) + (r.mv ?? 0));
+    } else {
+      liveMarkableShares.set(liveKey, (liveMarkableShares.get(liveKey) ?? 0) + (r.qty ?? 0));
+    }
     const prev = rowFor(bucket, symKey);
     prev.spotMarketValue += r.mv;
     prev.heldShares += r.qty ?? 0;
@@ -420,13 +426,13 @@ export function getUnderlyingExposureByBucket(
   }
 
   const priceByUnderlying = equityMarkMap ?? portfolioImpliedEquityPriceMap(db, mode);
-  for (const m of byBucket.values()) {
+  for (const [bucket, m] of byBucket.entries()) {
     for (const row of m.values()) {
       const px = priceByUnderlying.get(row.underlyingSymbol);
       if (px == null) continue;
-      // Plan/529 funds: preserve the statement-anchored stored MV; don't re-mark synthetic shares.
-      if (planFundSymbols.has(row.underlyingSymbol)) continue;
-      if (row.heldShares > 0) row.spotMarketValue = row.heldShares * px;
+      const liveKey = `${bucket}|${row.underlyingSymbol}`;
+      const liveShares = liveMarkableShares.get(liveKey) ?? 0;
+      if (liveShares > 0) row.spotMarketValue = (preservedPlanSpotMv.get(liveKey) ?? 0) + liveShares * px;
       row.syntheticMarketValue = row.syntheticShares * px;
     }
   }
