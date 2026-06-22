@@ -1,5 +1,5 @@
 import { fetchYahooDailyChart } from "@/lib/market/yahooChartFetch";
-import { fetchYahooLatestPrice, navFromYahooChartResult } from "@/lib/market/yahooLatestPrice";
+import { fetchYahooLatestPrice } from "@/lib/market/yahooLatestPrice";
 
 /** One-time 529 / plan statement anchor; MV tracks the public fund return from that date. */
 export type FundStatementBasis = {
@@ -53,18 +53,27 @@ export async function fetchYahooNavOnDate(symbol: string, isoDate: string): Prom
   return yahooCloseOnOrBefore(chart.result, isoDate);
 }
 
-export async function buildFundStatementBasis(
-  symbol: string,
+export function buildFundStatementBasisFromNav(
   statementMarketValue: number,
   statementDate: string,
-): Promise<FundStatementBasis> {
-  const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
+  navOnDate: number | null,
+): FundStatementBasis | null {
+  if (!Number.isFinite(statementMarketValue) || statementMarketValue <= 0) return null;
+  if (navOnDate == null || !Number.isFinite(navOnDate) || navOnDate <= 0) return null;
   return {
     statementMarketValue,
     statementDate,
     basisTickerNav: navOnDate,
   };
+}
+
+export async function buildFundStatementBasis(
+  symbol: string,
+  statementMarketValue: number,
+  statementDate: string,
+): Promise<FundStatementBasis | null> {
+  const navOnDate = (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol));
+  return buildFundStatementBasisFromNav(statementMarketValue, statementDate, navOnDate);
 }
 
 /** Mark statement balance to today using public fund NAV return since the anchor date. */
