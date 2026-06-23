@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  fundStatementBasisFromNav,
   markToMarketFund,
   publicNavTimesQtyMismatch,
   repairFundBasisIfMarkDrift,
+  shouldRebuildFundBasis,
   yahooCloseOnOrBefore,
 } from "./planFundPricing";
 
@@ -13,9 +15,35 @@ test("markToMarketFund scales statement balance by public fund return", () => {
   assert.equal(markToMarketFund(basis, 368.58), 194_528 * (368.58 / 354));
 });
 
+test("fundStatementBasisFromNav fails closed without a real basis NAV", () => {
+  assert.equal(fundStatementBasisFromNav(194_528, "2026-05-01", null), null);
+  assert.equal(fundStatementBasisFromNav(194_528, "2026-05-01", 0), null);
+  assert.deepEqual(fundStatementBasisFromNav(194_528, "2026-05-01", 354), {
+    statementMarketValue: 194_528,
+    statementDate: "2026-05-01",
+    basisTickerNav: 354,
+  });
+});
+
+test("shouldRebuildFundBasis preserves anchor when statement balance unchanged", () => {
+  const existing = { statementMarketValue: 194_528, statementDate: "2026-05-01", basisTickerNav: 354 };
+  assert.equal(shouldRebuildFundBasis(existing, 194_528, false), false);
+  assert.equal(shouldRebuildFundBasis(existing, 200_000, false), true);
+  assert.equal(shouldRebuildFundBasis(null, 194_528, false), true);
+  assert.equal(shouldRebuildFundBasis(existing, 194_528, true), true);
+});
+
 test("repairFundBasisIfMarkDrift fixes purchase-date anchor that inflates mark-to-market", () => {
   const basis = { statementMarketValue: 194_528, statementDate: "2011-09-27", basisTickerNav: 120 };
   const repaired = repairFundBasisIfMarkDrift(basis, 368.58, 1618);
+  assert.ok(repaired);
+  assert.equal(repaired!.basisTickerNav, 368.58);
+  assert.equal(markToMarketFund(repaired!, 368.58), 194_528);
+});
+
+test("repairFundBasisIfMarkDrift neutralizes legacy NAV=1 fallback anchors", () => {
+  const basis = { statementMarketValue: 194_528, statementDate: "2026-05-01", basisTickerNav: 1 };
+  const repaired = repairFundBasisIfMarkDrift(basis, 368.58, 528);
   assert.ok(repaired);
   assert.equal(repaired!.basisTickerNav, 368.58);
   assert.equal(markToMarketFund(repaired!, 368.58), 194_528);
