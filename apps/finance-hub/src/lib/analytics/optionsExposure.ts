@@ -115,6 +115,22 @@ export type BucketExposure = {
   exposure: ExposureRow[];
 };
 
+type MutableExposureRow = ExposureRow & {
+  preservedSpotMarketValue: number;
+  liveMarkableHeldShares: number;
+};
+
+function toExposureRow(row: MutableExposureRow): ExposureRow {
+  return {
+    underlyingSymbol: row.underlyingSymbol,
+    spotMarketValue: row.spotMarketValue,
+    heldShares: row.heldShares,
+    syntheticMarketValue: row.syntheticMarketValue,
+    syntheticShares: row.syntheticShares,
+    optionsMarkMarketValue: row.optionsMarkMarketValue,
+  };
+}
+
 const DEFAULT_CONTRACT_MULTIPLIER = 100;
 
 /** Delta for synthetic exposure: current row, else latest same account+option security. */
@@ -256,8 +272,8 @@ export function getUnderlyingExposureRollup(
 export function getUnderlyingExposureByBucket(
   mode: DataMode = "auto",
   equityMarkMap?: Map<string, number>,
+  db = getDb(),
 ): BucketExposure[] {
-  const db = getDb();
   const scope = latestSnapshotScopeForMode(mode);
   const snapshotIds = latestSnapshotIds(db, scope);
   if (snapshotIds.length === 0) return [];
@@ -287,9 +303,9 @@ export function getUnderlyingExposureByBucket(
   }
   if (snapshotToBucket.size === 0) return [];
 
-  const byBucket = new Map<AnalyticsBucketKey, Map<string, ExposureRow>>();
+  const byBucket = new Map<AnalyticsBucketKey, Map<string, MutableExposureRow>>();
 
-  function rowFor(bucket: AnalyticsBucketKey, sym: string): ExposureRow {
+  function rowFor(bucket: AnalyticsBucketKey, sym: string): MutableExposureRow {
     if (!byBucket.has(bucket)) byBucket.set(bucket, new Map());
     const map = byBucket.get(bucket)!;
     const prev = map.get(sym) ?? {
@@ -299,11 +315,13 @@ export function getUnderlyingExposureByBucket(
       syntheticMarketValue: 0,
       syntheticShares: 0,
       optionsMarkMarketValue: 0,
+      preservedSpotMarketValue: 0,
+      liveMarkableHeldShares: 0,
     };
     return prev;
   }
 
-  function commit(bucket: AnalyticsBucketKey, sym: string, row: ExposureRow) {
+  function commit(bucket: AnalyticsBucketKey, sym: string, row: MutableExposureRow) {
     byBucket.get(bucket)!.set(sym, row);
   }
 
@@ -337,19 +355,20 @@ export function getUnderlyingExposureByBucket(
     is_plan_fund: number;
   }>;
 
-  // Plan/529 fund share counts are synthetic proxies: heldShares × public NAV is meaningless,
-  // so keep their statement-anchored stored MV instead of re-marking against the live NAV below.
-  const planFundSymbols = new Set<string>();
-
   for (const r of spot) {
     const bucket = snapshotToBucket.get(r.snapshot_id);
     if (!bucket) continue;
     const symKey = (r.symbol ?? "").trim().toUpperCase();
     if (symKey === "CASH") continue;
-    if (r.is_plan_fund) planFundSymbols.add(symKey);
     const prev = rowFor(bucket, symKey);
     prev.spotMarketValue += r.mv;
     prev.heldShares += r.qty ?? 0;
+    if (r.is_plan_fund) {
+      // Plan/529 fund share counts are synthetic proxies: heldShares x public NAV is meaningless.
+      prev.preservedSpotMarketValue += r.mv ?? 0;
+    } else {
+      prev.liveMarkableHeldShares += r.qty ?? 0;
+    }
     commit(bucket, symKey, prev);
   }
 
@@ -424,18 +443,22 @@ export function getUnderlyingExposureByBucket(
     for (const row of m.values()) {
       const px = priceByUnderlying.get(row.underlyingSymbol);
       if (px == null) continue;
-      // Plan/529 funds: preserve the statement-anchored stored MV; don't re-mark synthetic shares.
-      if (planFundSymbols.has(row.underlyingSymbol)) continue;
-      if (row.heldShares > 0) row.spotMarketValue = row.heldShares * px;
+      if (row.liveMarkableHeldShares > 0) {
+        row.spotMarketValue = row.preservedSpotMarketValue + row.liveMarkableHeldShares * px;
+      }
       row.syntheticMarketValue = row.syntheticShares * px;
     }
   }
 
   const out: BucketExposure[] = [];
   for (const [bucketKey, m] of byBucket.entries()) {
-    const exposure = Array.from(m.values()).sort(
-      (a, b) => Math.abs(b.spotMarketValue + b.syntheticMarketValue) - Math.abs(a.spotMarketValue + a.syntheticMarketValue),
-    );
+    const exposure = Array.from(m.values())
+      .map(toExposureRow)
+      .sort(
+        (a, b) =>
+          Math.abs(b.spotMarketValue + b.syntheticMarketValue) -
+          Math.abs(a.spotMarketValue + a.syntheticMarketValue),
+      );
     out.push({ bucketKey, exposure });
   }
 

@@ -312,6 +312,7 @@ export function ManualPositionDialog({
           marketValue: positionForm.marketValue.trim() === "" ? null : Number(positionForm.marketValue),
           purchaseDate: positionForm.purchaseDate.trim() || null,
           notes: positionForm.notes.trim() || null,
+          anchorStatementBalance: true,
         }),
       });
       const json = (await resp.json()) as { ok: boolean; error?: string };
@@ -437,8 +438,8 @@ export function ManualPositionDialog({
               </div>
               {positionForm.securityType === "fund" ? (
                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Enter the balance from your 529 statement once, then Save. We update it with the fund&apos;s market
-                  return (not public NAV × shares).
+                  Use Anchor when recording a new 529 statement balance. Save preserves the current anchor while
+                  updating other holding details.
                 </p>
               ) : null}
             </div>
