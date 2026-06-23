@@ -5,6 +5,9 @@ import { buildFundStatementBasis } from "@/lib/market/planFundPricing";
 import { isManualAccountId, upsertManualPosition, type ManualPositionInput } from "@/lib/manual/manualAccounts";
 
 type RouteCtx = { params: Promise<{ id: string }> };
+type ManualPositionRequest = Partial<ManualPositionInput> & {
+  anchorStatementBalance?: boolean;
+};
 
 export async function POST(req: Request, ctx: RouteCtx) {
   try {
@@ -13,7 +16,7 @@ export async function POST(req: Request, ctx: RouteCtx) {
       return NextResponse.json({ ok: false, error: "Invalid manual account id" }, { status: 400 });
     }
 
-    const body = (await req.json().catch(() => null)) as Partial<ManualPositionInput> | null;
+    const body = (await req.json().catch(() => null)) as ManualPositionRequest | null;
     if (!body) {
       return NextResponse.json({ ok: false, error: "Invalid body" }, { status: 400 });
     }
@@ -30,8 +33,14 @@ export async function POST(req: Request, ctx: RouteCtx) {
     const statementDate = new Date().toISOString().slice(0, 10);
 
     let fundBasis = undefined as ManualPositionInput["fundBasis"];
-    if (securityType === "fund" && marketValue != null && Number.isFinite(marketValue) && marketValue > 0 && symbol) {
+    if (securityType === "fund" && body.anchorStatementBalance === true) {
+      if (marketValue == null || !Number.isFinite(marketValue) || marketValue <= 0 || !symbol) {
+        throw new Error("Statement market value and symbol are required to anchor a fund");
+      }
       fundBasis = await buildFundStatementBasis(symbol, marketValue, statementDate);
+      if (!fundBasis) {
+        throw new Error(`Could not fetch a valid NAV for ${symbol}; statement balance was not anchored`);
+      }
     }
 
     const result = upsertManualPosition(id, {

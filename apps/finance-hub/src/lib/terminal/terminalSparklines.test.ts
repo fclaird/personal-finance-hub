@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   closesForSessionDay,
   nyYmdForTs,
+  sparklineSessionMatchesExpected,
   sparklineSessionYmd,
 } from "@/lib/terminal/terminalSparklines";
 
@@ -20,6 +21,15 @@ test("sparklineSessionYmd falls back to latest day when today is empty", () => {
   const now = new Date("2026-05-29T18:00:00-04:00");
   const candles = [{ tsMs: new Date("2026-05-28T15:00:00-04:00").getTime(), close: 100 }];
   assert.equal(sparklineSessionYmd(candles, now), "2026-05-28");
+});
+
+test("sparklineSessionMatchesExpected rejects prior session during regular hours", () => {
+  const now = new Date("2026-05-29T13:00:00-04:00");
+  const candles = [
+    { tsMs: new Date("2026-05-28T15:00:00-04:00").getTime(), close: 100 },
+    { tsMs: new Date("2026-05-28T15:05:00-04:00").getTime(), close: 101 },
+  ];
+  assert.equal(sparklineSessionMatchesExpected(candles, now), false);
 });
 
 test("closesForSessionDay keeps only the chosen session day", () => {

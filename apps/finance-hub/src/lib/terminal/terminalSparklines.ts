@@ -1,4 +1,5 @@
 import { isUsEquityOvernightDeadZone } from "@/lib/market/glanceExtendedHours";
+import { glanceSessionYmd } from "@/lib/market/glanceSession";
 import { nyYmd } from "@/lib/market/usEquitySession";
 import {
   ensureChartCandles,
@@ -26,6 +27,10 @@ export function sparklineSessionYmd(candles: readonly { tsMs: number }[], now = 
     if (y > maxYmd) maxYmd = y;
   }
   return maxYmd || today;
+}
+
+export function sparklineSessionMatchesExpected(candles: readonly { tsMs: number }[], now = new Date()): boolean {
+  return sparklineSessionYmd(candles, now) === glanceSessionYmd(now);
 }
 
 /** Intraday closes for one symbol (5m bars, dead-zone trimmed, current session day). */
@@ -76,8 +81,10 @@ export async function buildIntradaySparklineSeries(
   for (const raw of symbols) {
     const sym = (raw ?? "").trim().toUpperCase();
     if (!sym) continue;
-    const closes = intradaySparklineCloses(sym, now);
-    if (closes.length >= SPARKLINE_MIN_POINTS) {
+    const since = windowSinceMs("1D", now.getTime());
+    const candles = getChartCandles(sym, "5m", since, undefined, "1D");
+    const closes = closesForSessionDay(candles, now);
+    if (closes.length >= SPARKLINE_MIN_POINTS && sparklineSessionMatchesExpected(candles, now)) {
       series[sym] = closes;
     } else {
       needEnsure.push(sym);
@@ -88,8 +95,12 @@ export async function buildIntradaySparklineSeries(
   await runPool(toEnsure, SPARKLINE_ENSURE_CONCURRENCY, async (sym) => {
     try {
       await ensureChartCandles(sym, "5m", "1D");
-      const closes = intradaySparklineCloses(sym, now);
-      if (closes.length >= SPARKLINE_MIN_POINTS) series[sym] = closes;
+      const since = windowSinceMs("1D", now.getTime());
+      const candles = getChartCandles(sym, "5m", since, undefined, "1D");
+      const closes = closesForSessionDay(candles, now);
+      if (closes.length >= SPARKLINE_MIN_POINTS && sparklineSessionMatchesExpected(candles, now)) {
+        series[sym] = closes;
+      }
     } catch {
       /* decorative — skip */
     }
