@@ -4,7 +4,7 @@ import type { AccountBucket } from "@/lib/accountBuckets";
 import { isValidAccountBucket } from "@/lib/accountBuckets";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
-import type { FundStatementBasis } from "@/lib/market/planFundPricing";
+import { parseFundStatementBasis, type FundStatementBasis } from "@/lib/market/planFundPricing";
 import { isManualAccountId } from "@/lib/manual/isManualAccountId";
 
 export { isManualAccountId } from "@/lib/manual/isManualAccountId";
@@ -274,6 +274,28 @@ export function deleteManualAccountInDb(db: Database.Database, accountId: string
 
 export function deleteManualAccount(accountId: string): void {
   deleteManualAccountInDb(getDb(), accountId);
+}
+
+/** Read stored plan-fund anchor for an existing manual holding (latest snapshot). */
+export function getManualPositionFundBasis(
+  accountId: string,
+  positionId: string,
+): FundStatementBasis | null {
+  const db = getDb();
+  if (!isManualAccountId(accountId)) return null;
+  const row = db
+    .prepare(
+      `
+      SELECT p.metadata_json AS metadataJson
+      FROM positions p
+      JOIN holding_snapshots hs ON hs.id = p.snapshot_id
+      WHERE hs.account_id = ? AND p.id = ?
+      ORDER BY hs.as_of DESC
+      LIMIT 1
+    `,
+    )
+    .get(accountId, positionId) as { metadataJson: string | null } | undefined;
+  return parseFundStatementBasis(parseManualPositionMetadata(row?.metadataJson ?? null));
 }
 
 export function upsertManualPosition(accountId: string, input: ManualPositionInput): { positionId: string } {

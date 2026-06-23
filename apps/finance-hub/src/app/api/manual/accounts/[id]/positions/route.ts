@@ -1,10 +1,25 @@
 import { NextResponse } from "next/server";
 
 import { logError } from "@/lib/log";
-import { buildFundStatementBasis } from "@/lib/market/planFundPricing";
-import { isManualAccountId, upsertManualPosition, type ManualPositionInput } from "@/lib/manual/manualAccounts";
+import { buildFundStatementBasis, shouldRebuildFundBasis } from "@/lib/market/planFundPricing";
+import {
+  getManualPositionFundBasis,
+  isManualAccountId,
+  upsertManualPosition,
+  type ManualPositionInput,
+} from "@/lib/manual/manualAccounts";
 
 type RouteCtx = { params: Promise<{ id: string }> };
+type ManualPositionRequest = Partial<ManualPositionInput> & {
+  anchorStatementBalance?: boolean;
+  statementDate?: string | null;
+};
+
+function parseStatementDate(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
+}
 
 export async function POST(req: Request, ctx: RouteCtx) {
   try {
@@ -13,7 +28,7 @@ export async function POST(req: Request, ctx: RouteCtx) {
       return NextResponse.json({ ok: false, error: "Invalid manual account id" }, { status: 400 });
     }
 
-    const body = (await req.json().catch(() => null)) as Partial<ManualPositionInput> | null;
+    const body = (await req.json().catch(() => null)) as ManualPositionRequest | null;
     if (!body) {
       return NextResponse.json({ ok: false, error: "Invalid body" }, { status: 400 });
     }
@@ -25,13 +40,26 @@ export async function POST(req: Request, ctx: RouteCtx) {
 
     const symbol = (body.symbol ?? "").trim().toUpperCase();
     const marketValue = body.marketValue != null ? Number(body.marketValue) : null;
-    // Statement anchor date must be when the balance was observed — not purchase date (2011 NAV
-    // would scale today's 529 balance by ~3× on every load).
-    const statementDate = new Date().toISOString().slice(0, 10);
+    const statementDate = parseStatementDate(body.statementDate) ?? new Date().toISOString().slice(0, 10);
+    const existingFundBasis =
+      body.positionId?.trim() ? getManualPositionFundBasis(id, body.positionId.trim()) : null;
 
     let fundBasis = undefined as ManualPositionInput["fundBasis"];
-    if (securityType === "fund" && marketValue != null && Number.isFinite(marketValue) && marketValue > 0 && symbol) {
+    if (
+      securityType === "fund" &&
+      marketValue != null &&
+      Number.isFinite(marketValue) &&
+      marketValue > 0 &&
+      symbol.length > 0 &&
+      shouldRebuildFundBasis(existingFundBasis, marketValue, body.anchorStatementBalance === true)
+    ) {
       fundBasis = await buildFundStatementBasis(symbol, marketValue, statementDate);
+      if (body.anchorStatementBalance === true && !fundBasis) {
+        return NextResponse.json(
+          { ok: false, error: "Unable to anchor statement balance: fund NAV is unavailable." },
+          { status: 502 },
+        );
+      }
     }
 
     const result = upsertManualPosition(id, {
