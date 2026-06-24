@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
 import { isManualAccountId, parseManualPositionMetadata } from "@/lib/manual/manualAccounts";
-import { isPosterityAccountId, notPosterityWhereSql } from "@/lib/posterity";
+import { isPosterityAccountId } from "@/lib/posterity";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
 import { latestSnapshotIds as latestSyncedSnapshotIds } from "@/lib/holdings/latestSnapshots";
 import { resolvePositionAveragePrice } from "@/lib/holdings/positionAveragePrice";
