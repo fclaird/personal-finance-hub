@@ -10,6 +10,7 @@ import {
   schwabIntradayTotalsFromDb,
   schwabLiquidationFromDb,
   schwabPriorEquityFromLatestSync,
+  schwabPriorLiquidationFromDb,
 } from "@/lib/terminal/portfolioAccountTotals";
 import {
   buildPortfolioIndexSeries,
@@ -114,6 +115,26 @@ test("schwabPriorEquityFromLatestSync reads prior-day equity from the latest syn
 
   const { prior } = schwabPriorEquityFromLatestSync(db);
   assert.equal(prior, 1000000);
+});
+
+test("schwabPriorLiquidationFromDb uses ET session date for after-hours sync rows", () => {
+  const db = createTestDb();
+  db.prepare(
+    `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('c1', 'schwab', 'S', 'active')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO accounts (id, connection_id, name, account_bucket, type) VALUES ('schwab_a', 'c1', 'Taxable', 'brokerage', 'brokerage')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO account_value_points (account_id, as_of, equity_value, cash_value, source) VALUES ('schwab_a', '2026-05-27T14:00:00.000Z', 1000000, 0, 'schwab_balances')`,
+  ).run();
+  // 8:04 PM ET on 2026-05-27 is 2026-05-28 UTC — must still count as prior for session 2026-05-27.
+  db.prepare(
+    `INSERT INTO account_value_points (account_id, as_of, equity_value, cash_value, source) VALUES ('schwab_a', '2026-05-28T00:04:55.748Z', 1000500, 0, 'schwab_balances')`,
+  ).run();
+
+  const { prior } = schwabPriorLiquidationFromDb(db, "2026-05-27");
+  assert.equal(prior, 1000500);
 });
 
 test("schwabIntradayTotalsFromDb excludes UTC-midnight rows that are prior evening in ET", () => {
