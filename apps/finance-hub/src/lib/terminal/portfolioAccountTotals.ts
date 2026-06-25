@@ -78,27 +78,30 @@ export function schwabPriorLiquidationFromDb(
   const rows = db
     .prepare(
       `
-      SELECT av.account_id AS account_id, av.equity_value AS equity_value
+      SELECT av.account_id AS account_id, av.as_of AS as_of, av.equity_value AS equity_value
       FROM account_value_points av
       JOIN accounts a ON a.id = av.account_id
-      JOIN (
-        SELECT account_id, MAX(as_of) AS max_as_of
-        FROM account_value_points
-        WHERE date(as_of) <= @session_ymd
-        GROUP BY account_id
-      ) prior ON prior.account_id = av.account_id AND prior.max_as_of = av.as_of
       WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql("a")}
     `,
     )
-    .all({ session_ymd: sessionYmd }) as Array<{ account_id: string; equity_value: number }>;
+    .all() as Array<{ account_id: string; as_of: string; equity_value: number }>;
 
-  const byAccount = new Map<string, number>();
-  let prior = 0;
+  const latestByAccount = new Map<string, { as_of: string; equity_value: number }>();
   for (const row of rows) {
     const v = row.equity_value;
     if (!Number.isFinite(v)) continue;
-    byAccount.set(row.account_id, v);
-    prior += v;
+    if (isoDateInUsEastern(Date.parse(row.as_of)) > sessionYmd) continue;
+    const prev = latestByAccount.get(row.account_id);
+    if (!prev || row.as_of > prev.as_of) {
+      latestByAccount.set(row.account_id, { as_of: row.as_of, equity_value: v });
+    }
+  }
+
+  const byAccount = new Map<string, number>();
+  let prior = 0;
+  for (const [accountId, { equity_value }] of latestByAccount) {
+    byAccount.set(accountId, equity_value);
+    prior += equity_value;
   }
   return { prior, byAccount };
 }
