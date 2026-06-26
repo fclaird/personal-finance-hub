@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  fundStatementBasisFromNav,
   markToMarketFund,
-  publicNavTimesQtyMismatch,
-  repairFundBasisIfMarkDrift,
   yahooCloseOnOrBefore,
 } from "./planFundPricing";
 
@@ -13,17 +12,15 @@ test("markToMarketFund scales statement balance by public fund return", () => {
   assert.equal(markToMarketFund(basis, 368.58), 194_528 * (368.58 / 354));
 });
 
-test("repairFundBasisIfMarkDrift fixes purchase-date anchor that inflates mark-to-market", () => {
-  const basis = { statementMarketValue: 194_528, statementDate: "2011-09-27", basisTickerNav: 120 };
-  const repaired = repairFundBasisIfMarkDrift(basis, 368.58, 1618);
-  assert.ok(repaired);
-  assert.equal(repaired!.basisTickerNav, 368.58);
-  assert.equal(markToMarketFund(repaired!, 368.58), 194_528);
-});
-
-test("publicNavTimesQtyMismatch detects 529 plan vs public NAV divergence", () => {
-  assert.equal(publicNavTimesQtyMismatch(1618, 194_528, 368.58), true);
-  assert.equal(publicNavTimesQtyMismatch(100, 36_858, 368.58), false);
+test("fundStatementBasisFromNav fails closed without a valid NAV", () => {
+  assert.equal(fundStatementBasisFromNav(50_000, "2026-06-01", null), null);
+  assert.equal(fundStatementBasisFromNav(50_000, "2026-06-01", 0), null);
+  assert.equal(fundStatementBasisFromNav(50_000, "2026-06-01", Number.NaN), null);
+  assert.deepEqual(fundStatementBasisFromNav(50_000, "2026-06-01", 368.58), {
+    statementMarketValue: 50_000,
+    statementDate: "2026-06-01",
+    basisTickerNav: 368.58,
+  });
 });
 
 test("yahooCloseOnOrBefore picks last bar on or before target date", () => {

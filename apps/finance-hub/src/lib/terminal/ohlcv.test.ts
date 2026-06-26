@@ -1,14 +1,27 @@
+import fs from "node:fs";
+import path from "node:path";
+
 import assert from "node:assert/strict";
 import test from "node:test";
+import Database from "better-sqlite3";
 
 import {
   aggregateCandles,
   benchmarkPctOverlay,
   chartCandlesExcludeDeadZone,
   CHART_INTERVAL_BUCKET_MS,
+  ensureCandles,
   filterChartCandlesDeadZone,
 } from "@/lib/terminal/ohlcv";
 import type { Candle } from "@/lib/terminal/ohlcv";
+
+function createTestDb(): Database.Database {
+  const db = new Database(":memory:");
+  db.pragma("foreign_keys = ON");
+  const schemaPath = path.join(process.cwd(), "src", "db", "schema.sql");
+  db.exec(fs.readFileSync(schemaPath, "utf-8"));
+  return db;
+}
 
 test("chartCandlesExcludeDeadZone applies to 1D/5D minute intervals only", () => {
   assert.equal(chartCandlesExcludeDeadZone("1D", "5m"), true);
@@ -80,4 +93,43 @@ test("benchmarkPctOverlay rebases to first benchmark close", () => {
   assert.equal(out.length, 2);
   assert.ok(Math.abs(out[0]!.pct) < 0.01);
   assert.ok(out[1]!.pct > 4);
+});
+
+test("ensureCandles backfills when cache is partial even if latest bar is recent", async () => {
+  const db = createTestDb();
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+  const insert = db.prepare(
+    `
+    INSERT INTO ohlcv_points (provider, symbol, interval, ts_ms, open, high, low, close, volume)
+    VALUES ('schwab', 'AAPL', '1d', @ts, 100, 101, 99, 100, 1000)
+  `,
+  );
+  for (let i = 0; i < 30; i++) {
+    insert.run({ ts: now - i * day - 60 * 60 * 1000 });
+  }
+
+  let called = false;
+  const candles = Array.from({ length: 120 }, (_, i) => ({
+    datetime: now - (119 - i) * day,
+    open: 100 + i,
+    high: 101 + i,
+    low: 99 + i,
+    close: 100 + i,
+    volume: 1000 + i,
+  }));
+
+  await ensureCandles("AAPL", "1d", "6M", {
+    db,
+    marketFetch: async <T>() => {
+      called = true;
+      return { candles } as T;
+    },
+  });
+
+  const row = db
+    .prepare(`SELECT COUNT(*) AS count FROM ohlcv_points WHERE provider='schwab' AND symbol='AAPL' AND interval='1d'`)
+    .get() as { count: number };
+  assert.equal(called, true);
+  assert.ok(row.count >= 120);
 });

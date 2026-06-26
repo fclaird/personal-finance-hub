@@ -4,6 +4,7 @@ import { isUsEquityOvernightDeadZone } from "@/lib/market/glanceExtendedHours";
 import { schwabMarketFetch } from "@/lib/schwab/client";
 import type { ChartCandleInterval } from "@/lib/terminal/candleChartConfig";
 import { windowSinceMs as windowSinceMsFromConfig } from "@/lib/terminal/candleWindowTime";
+import type Database from "better-sqlite3";
 
 export type Candle = {
   tsMs: number;
@@ -51,10 +52,11 @@ function hasSufficientDailyCache(
   symbol: string,
   storage: StorageCandleInterval,
   window: CandleWindow,
+  db: Database.Database = getDb(),
 ): boolean {
   if (storage !== "1d" && storage !== "1wk") return false;
   const since = windowSinceMsFromConfig(window);
-  const cached = getCachedCandles(symbol, storage, since);
+  const cached = getCachedCandles(symbol, storage, since, undefined, db);
   return cached.length >= MIN_DAILY_BARS_FOR_WINDOW[window];
 }
 
@@ -62,11 +64,12 @@ function hasSufficientIntradayCache(
   symbol: string,
   storage: StorageCandleInterval,
   window: CandleWindow,
+  db: Database.Database = getDb(),
 ): boolean {
   if (storage !== "5m" && storage !== "15m" && storage !== "30m") return false;
   if (window !== "1D" && window !== "5D") return false;
   const since = windowSinceMsFromConfig(window);
-  const cached = getCachedCandles(symbol, storage, since);
+  const cached = getCachedCandles(symbol, storage, since, undefined, db);
   const minBars = window === "1D" ? 40 : 150;
   return cached.length >= minBars;
 }
@@ -75,8 +78,9 @@ function hasSufficientCachedCandles(
   symbol: string,
   storage: StorageCandleInterval,
   window: CandleWindow,
+  db: Database.Database = getDb(),
 ): boolean {
-  return hasSufficientDailyCache(symbol, storage, window) || hasSufficientIntradayCache(symbol, storage, window);
+  return hasSufficientDailyCache(symbol, storage, window, db) || hasSufficientIntradayCache(symbol, storage, window, db);
 }
 
 const MS_MIN = 60 * 1000;
@@ -203,36 +207,17 @@ export async function ensureCandles(
   symbol: string,
   interval: StorageCandleInterval,
   window: CandleWindow,
-  opts?: { startMs?: number; endMs?: number; force?: boolean },
+  opts?: { startMs?: number; endMs?: number; force?: boolean; db?: Database.Database; marketFetch?: typeof schwabMarketFetch },
 ): Promise<void> {
   const storage = interval;
 
-  const db = getDb();
+  const db = opts?.db ?? getDb();
   const sym = (symbol ?? "").trim().toUpperCase();
   if (!sym) return;
 
   if (!opts?.force && opts?.startMs == null && opts?.endMs == null) {
-    if (hasSufficientCachedCandles(sym, storage, window)) {
+    if (hasSufficientCachedCandles(sym, storage, window, db)) {
       return;
-    }
-
-    const latest = db
-      .prepare(
-        `
-      SELECT ts_ms AS ts
-      FROM ohlcv_points
-      WHERE provider='schwab' AND symbol=? AND interval=?
-      ORDER BY ts_ms DESC
-      LIMIT 1
-    `,
-      )
-      .get(sym, storage) as { ts: number } | undefined;
-
-    if (latest?.ts) {
-      const ageMs = Date.now() - latest.ts;
-      if (ageMs < 12 * 60 * 60 * 1000) {
-        return;
-      }
     }
   }
 
@@ -249,10 +234,10 @@ export async function ensureCandles(
 
   let data: SchwabPriceHistoryResp;
   try {
-    data = await schwabMarketFetch<SchwabPriceHistoryResp>(`/pricehistory?${params.toString()}`);
+    data = await (opts?.marketFetch ?? schwabMarketFetch)<SchwabPriceHistoryResp>(`/pricehistory?${params.toString()}`);
   } catch (e) {
     logError(`terminal_pricehistory_failed_${sym}_${storage}_${window}`, e);
-    const cached = getCachedCandles(sym, storage);
+    const cached = getCachedCandles(sym, storage, undefined, undefined, db);
     if (cached.length > 0) return;
     throw e;
   }
@@ -289,8 +274,8 @@ export function getCachedCandles(
   interval: StorageCandleInterval,
   sinceMs?: number,
   untilMs?: number,
+  db: Database.Database = getDb(),
 ): Candle[] {
-  const db = getDb();
   const sym = (symbol ?? "").trim().toUpperCase();
   const rows = db
     .prepare(
