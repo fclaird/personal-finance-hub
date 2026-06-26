@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
 import { isManualAccountId, parseManualPositionMetadata } from "@/lib/manual/manualAccounts";
-import { isPosterityAccountId, notPosterityWhereSql } from "@/lib/posterity";
+import { isPosterityAccountId } from "@/lib/posterity";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
 import { latestSnapshotIds as latestSyncedSnapshotIds } from "@/lib/holdings/latestSnapshots";
 import { resolvePositionAveragePrice } from "@/lib/holdings/positionAveragePrice";
@@ -256,7 +256,7 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
       );
       const qty = r.quantity ?? 0;
       const planFund = needsPlanFundPricing(isManual, r.securityType, r.accountBucket);
-      let fundBasis = parseFundStatementBasis(manualMeta);
+      const fundBasis = parseFundStatementBasis(manualMeta);
       const navToday = markPx ?? yahooLive.get(sym) ?? null;
       // Manual: `price` is purchase cost (Cost/share column).
       const price = isManual ? r.price : (markPx ?? r.price);
