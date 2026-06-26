@@ -13,7 +13,9 @@ export async function POST(req: Request, ctx: RouteCtx) {
       return NextResponse.json({ ok: false, error: "Invalid manual account id" }, { status: 400 });
     }
 
-    const body = (await req.json().catch(() => null)) as Partial<ManualPositionInput> | null;
+    const body = (await req.json().catch(() => null)) as
+      | (Partial<ManualPositionInput> & { anchorStatementBalance?: boolean })
+      | null;
     if (!body) {
       return NextResponse.json({ ok: false, error: "Invalid body" }, { status: 400 });
     }
@@ -30,8 +32,15 @@ export async function POST(req: Request, ctx: RouteCtx) {
     const statementDate = new Date().toISOString().slice(0, 10);
 
     let fundBasis = undefined as ManualPositionInput["fundBasis"];
-    if (securityType === "fund" && marketValue != null && Number.isFinite(marketValue) && marketValue > 0 && symbol) {
-      fundBasis = await buildFundStatementBasis(symbol, marketValue, statementDate);
+    const shouldAnchorStatementBalance = securityType === "fund" && (body.anchorStatementBalance === true || !body.positionId);
+    if (
+      shouldAnchorStatementBalance &&
+      marketValue != null &&
+      Number.isFinite(marketValue) &&
+      marketValue > 0 &&
+      symbol
+    ) {
+      fundBasis = (await buildFundStatementBasis(symbol, marketValue, statementDate)) ?? undefined;
     }
 
     const result = upsertManualPosition(id, {
