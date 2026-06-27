@@ -26,6 +26,12 @@ test("publicNavTimesQtyMismatch detects 529 plan vs public NAV divergence", () =
   assert.equal(publicNavTimesQtyMismatch(100, 36_858, 368.58), false);
 });
 
+test("buildFundStatementBasis returns null when Yahoo NAV is unavailable", async () => {
+  const { buildFundStatementBasis } = await import("./planFundPricing");
+  const result = await buildFundStatementBasis("INVALID_TICKER_XYZ", 100000, "2026-05-01");
+  assert.equal(result, null);
+});
+
 test("yahooCloseOnOrBefore picks last bar on or before target date", () => {
   const result = {
     timestamp: [
