@@ -13,7 +13,9 @@ export async function POST(req: Request, ctx: RouteCtx) {
       return NextResponse.json({ ok: false, error: "Invalid manual account id" }, { status: 400 });
     }
 
-    const body = (await req.json().catch(() => null)) as Partial<ManualPositionInput> | null;
+    const body = (await req.json().catch(() => null)) as
+      | (Partial<ManualPositionInput> & { anchorStatementBalance?: unknown })
+      | null;
     if (!body) {
       return NextResponse.json({ ok: false, error: "Invalid body" }, { status: 400 });
     }
@@ -29,9 +31,22 @@ export async function POST(req: Request, ctx: RouteCtx) {
     // would scale today's 529 balance by ~3× on every load).
     const statementDate = new Date().toISOString().slice(0, 10);
 
+    const anchorStatementBalance = body.anchorStatementBalance === true;
     let fundBasis = undefined as ManualPositionInput["fundBasis"];
-    if (securityType === "fund" && marketValue != null && Number.isFinite(marketValue) && marketValue > 0 && symbol) {
+    if (anchorStatementBalance) {
+      if (securityType !== "fund") {
+        return NextResponse.json({ ok: false, error: "Statement anchors are only supported for funds" }, { status: 400 });
+      }
+      if (marketValue == null || !Number.isFinite(marketValue) || marketValue <= 0 || !symbol) {
+        return NextResponse.json({ ok: false, error: "A positive statement balance and symbol are required" }, { status: 400 });
+      }
       fundBasis = await buildFundStatementBasis(symbol, marketValue, statementDate);
+      if (!fundBasis) {
+        return NextResponse.json(
+          { ok: false, error: "Unable to anchor statement balance because a valid fund NAV is unavailable" },
+          { status: 400 },
+        );
+      }
     }
 
     const result = upsertManualPosition(id, {
