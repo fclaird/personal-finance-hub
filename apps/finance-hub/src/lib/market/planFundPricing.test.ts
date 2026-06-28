@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildFundStatementBasis,
   markToMarketFund,
   publicNavTimesQtyMismatch,
   repairFundBasisIfMarkDrift,
@@ -11,6 +12,19 @@ import {
 test("markToMarketFund scales statement balance by public fund return", () => {
   const basis = { statementMarketValue: 194_528, statementDate: "2026-05-01", basisTickerNav: 354 };
   assert.equal(markToMarketFund(basis, 368.58), 194_528 * (368.58 / 354));
+});
+
+test("buildFundStatementBasis fails closed when no valid NAV is available", async () => {
+  assert.equal(await buildFundStatementBasis("VFFSX", 194_528, "2026-05-01", async () => null), null);
+  assert.equal(await buildFundStatementBasis("VFFSX", 194_528, "2026-05-01", async () => 0), null);
+});
+
+test("buildFundStatementBasis stores the resolved anchor NAV", async () => {
+  assert.deepEqual(await buildFundStatementBasis("VFFSX", 194_528, "2026-05-01", async () => 354), {
+    statementMarketValue: 194_528,
+    statementDate: "2026-05-01",
+    basisTickerNav: 354,
+  });
 });
 
 test("repairFundBasisIfMarkDrift fixes purchase-date anchor that inflates mark-to-market", () => {
