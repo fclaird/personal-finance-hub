@@ -78,27 +78,30 @@ export function schwabPriorLiquidationFromDb(
   const rows = db
     .prepare(
       `
-      SELECT av.account_id AS account_id, av.equity_value AS equity_value
+      SELECT av.account_id AS account_id, av.as_of AS as_of, av.equity_value AS equity_value
       FROM account_value_points av
       JOIN accounts a ON a.id = av.account_id
-      JOIN (
-        SELECT account_id, MAX(as_of) AS max_as_of
-        FROM account_value_points
-        WHERE date(as_of) <= @session_ymd
-        GROUP BY account_id
-      ) prior ON prior.account_id = av.account_id AND prior.max_as_of = av.as_of
       WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql("a")}
     `,
     )
-    .all({ session_ymd: sessionYmd }) as Array<{ account_id: string; equity_value: number }>;
+    .all() as Array<{ account_id: string; as_of: string; equity_value: number }>;
 
-  const byAccount = new Map<string, number>();
-  let prior = 0;
+  const latestByAccount = new Map<string, { as_of: string; equity_value: number }>();
   for (const row of rows) {
     const v = row.equity_value;
     if (!Number.isFinite(v)) continue;
-    byAccount.set(row.account_id, v);
-    prior += v;
+    if (isoDateInUsEastern(Date.parse(row.as_of)) > sessionYmd) continue;
+    const prev = latestByAccount.get(row.account_id);
+    if (!prev || row.as_of > prev.as_of) {
+      latestByAccount.set(row.account_id, { as_of: row.as_of, equity_value: v });
+    }
+  }
+
+  const byAccount = new Map<string, number>();
+  let prior = 0;
+  for (const [accountId, { equity_value }] of latestByAccount) {
+    byAccount.set(accountId, equity_value);
+    prior += equity_value;
   }
   return { prior, byAccount };
 }
@@ -122,27 +125,35 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
     )
     .get() as { mv: number } | undefined;
 
-  const priorRow = db
+  const priorRows = db
     .prepare(
       `
-      SELECT COALESCE(SUM(${POSITION_MARKET_VALUE_SQL}), 0) AS mv
+      SELECT hs.account_id AS account_id, hs.as_of AS as_of, COALESCE(SUM(${POSITION_MARKET_VALUE_SQL}), 0) AS mv
       FROM holding_snapshots hs
       JOIN accounts a ON a.id = hs.account_id
-      JOIN (
-        SELECT account_id, MAX(as_of) AS max_as_of
-        FROM holding_snapshots
-        WHERE date(as_of) <= @session_ymd
-        GROUP BY account_id
-      ) _prior_snap ON _prior_snap.account_id = hs.account_id AND _prior_snap.max_as_of = hs.as_of
       JOIN positions p ON p.snapshot_id = hs.id
       WHERE a.id NOT LIKE 'schwab_%'
         AND ${allSyncedAccountsWhereSql("a")}
+      GROUP BY hs.account_id, hs.as_of
     `,
     )
-    .get({ session_ymd: priorSessionYmd }) as { mv: number } | undefined;
+    .all() as Array<{ account_id: string; as_of: string; mv: number }>;
+
+  const latestPriorByAccount = new Map<string, { as_of: string; mv: number }>();
+  for (const row of priorRows) {
+    if (isoDateInUsEastern(Date.parse(row.as_of)) > priorSessionYmd) continue;
+    const prev = latestPriorByAccount.get(row.account_id);
+    if (!prev || row.as_of > prev.as_of) {
+      latestPriorByAccount.set(row.account_id, { as_of: row.as_of, mv: row.mv });
+    }
+  }
+
+  let priorRaw = 0;
+  for (const { mv } of latestPriorByAccount.values()) {
+    if (Number.isFinite(mv)) priorRaw += mv;
+  }
 
   const current = currentRow?.mv ?? 0;
-  const priorRaw = priorRow?.mv;
   // SUM() is 0 when no prior snapshot exists — must not treat as "$0 external yesterday".
   const prior =
     priorRaw != null && Number.isFinite(priorRaw) && priorRaw > 0 ? priorRaw : current;
