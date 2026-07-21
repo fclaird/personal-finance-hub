@@ -368,7 +368,7 @@ async function buildIndexCard(
           sym,
           extPhase === "pre" ? ctx.chartYmd : sessionYmd,
           schwabWindow,
-          extPhase,
+          extPhase ?? "post",
         );
       }
       if (regularTimed.length >= 2) dataSource = yahooGrid?.result ? "mixed" : "schwab";
