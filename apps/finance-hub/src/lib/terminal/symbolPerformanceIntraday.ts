@@ -4,7 +4,7 @@ import { formatGlanceSessionLabel, glanceSessionYmd, glanceSessionUsesPriorDay }
 import { fetchCanonicalGlanceGrid } from "@/lib/market/glanceSessionGrid";
 import { normalizeSchwabQuoteSymbol } from "@/lib/market/schwabSymbol";
 import { usEquitySessionStatus } from "@/lib/market/usEquitySession";
-import { buildSymbolGlanceCard } from "@/lib/market/usMarketIndices";
+import { buildSymbolGlanceCard, type UsMarketIndexCard } from "@/lib/market/usMarketIndices";
 import type { GlanceTileChartWindowCtx } from "@/lib/market/glanceTileChartWindow";
 import {
   formatGlanceCombinedChartTime,
@@ -15,7 +15,8 @@ import {
 export type SymbolPerformanceIntradayPoint = {
   tsMs: number | null;
   label: string;
-} & Record<string, number | null>;
+  [symbol: string]: number | string | null | undefined;
+};
 
 export async function fetchSymbolPerformanceIntraday(
   symbols: string[],
@@ -45,7 +46,7 @@ export async function fetchSymbolPerformanceIntraday(
   const cards = await Promise.all(
     normalized.map((symbol) => buildSymbolGlanceCard({ id: symbol, label: symbol, symbol }, now, grid)),
   );
-  const items: UsMarketGlanceItem[] = cards.map((card) => ({
+  const items: UsMarketGlanceItem[] = cards.map((card: UsMarketIndexCard) => ({
     ...card,
     id: card.symbol.toUpperCase(),
   }));

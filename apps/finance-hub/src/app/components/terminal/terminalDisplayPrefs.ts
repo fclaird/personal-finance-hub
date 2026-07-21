@@ -27,7 +27,8 @@ const HEATMAP_HIDDEN_SYMBOLS_KEY = "terminal_heatmap_hidden_symbols_v1";
 export type GlanceSourceMode = "markets" | "futures";
 export type GlanceViewMode = "tiles" | "combined";
 export type { GlanceAlternateInstrumentId, GlanceTileInstrumentId };
-export type QuotesSortCol = "symbol" | "company" | "last" | "chgPct" | "chg" | "volume" | "volX";
+export type QuotesSortCol = "symbol" | "company" | "last" | "chgPct" | "chg" | "dayPl" | "volX";
+type TerminalTableColumnId = Exclude<QuotesSortCol, "dayPl"> | "volume";
 export type VolumeLeadersMode = "volume" | "volX";
 export type OptionFlowMode = "volume" | "relative";
 
@@ -37,7 +38,7 @@ const QUOTES_SORT_COLS = new Set<QuotesSortCol>([
   "last",
   "chgPct",
   "chg",
-  "volume",
+  "dayPl",
   "volX",
 ]);
 
@@ -241,8 +242,8 @@ export function writeOptionFlowMode(mode: OptionFlowMode): void {
   }
 }
 
-export function readTerminalTableColumnOrder(defaultOrder: readonly QuotesSortCol[]): QuotesSortCol[] {
-  const allowed = new Set<QuotesSortCol>([
+export function readTerminalTableColumnOrder(defaultOrder: readonly TerminalTableColumnId[]): TerminalTableColumnId[] {
+  const allowed = new Set<TerminalTableColumnId>([
     "symbol",
     "company",
     "last",
@@ -253,11 +254,15 @@ export function readTerminalTableColumnOrder(defaultOrder: readonly QuotesSortCo
   ]);
   const legacyAllowed = new Set<string>(["symbol", "last", "chg", "chgPct", "volume", "volX"]);
 
-  function normalizeOrder(parsed: unknown): QuotesSortCol[] | null {
+  function normalizeOrder(parsed: unknown): TerminalTableColumnId[] | null {
     if (!Array.isArray(parsed)) return null;
-    let clean = parsed.filter((x) => typeof x === "string" && allowed.has(x as QuotesSortCol)) as QuotesSortCol[];
+    let clean = parsed.filter(
+      (x) => typeof x === "string" && allowed.has(x as TerminalTableColumnId),
+    ) as TerminalTableColumnId[];
     if (clean.length === 0) {
-      clean = parsed.filter((x) => typeof x === "string" && legacyAllowed.has(x as string)) as QuotesSortCol[];
+      clean = parsed.filter(
+        (x) => typeof x === "string" && legacyAllowed.has(x as string),
+      ) as TerminalTableColumnId[];
     }
     if (clean.length === 0) return null;
     if (!clean.includes("company")) {
@@ -288,7 +293,7 @@ export function readTerminalTableColumnOrder(defaultOrder: readonly QuotesSortCo
   return [...defaultOrder];
 }
 
-export function writeTerminalTableColumnOrder(order: readonly QuotesSortCol[]): void {
+export function writeTerminalTableColumnOrder(order: readonly TerminalTableColumnId[]): void {
   try {
     localStorage.setItem(TABLE_COLUMN_ORDER_KEY, JSON.stringify(order));
   } catch {

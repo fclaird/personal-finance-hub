@@ -27,7 +27,7 @@ function tsAt(ymd: string, minutes: number): number {
 const equityItem = {
   futuresKind: undefined,
   instrumentKind: undefined,
-  extendedPhase: null as const,
+  extendedPhase: null,
   extendedSeries: undefined,
 };
 
