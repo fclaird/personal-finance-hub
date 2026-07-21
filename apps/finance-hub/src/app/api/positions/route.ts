@@ -13,7 +13,6 @@ import {
   markToMarketFund,
   needsPlanFundPricing,
   parseFundStatementBasis,
-  repairFundBasisIfMarkDrift,
 } from "@/lib/market/planFundPricing";
 import {
   fetchYahooLatestPrices,
@@ -140,11 +139,14 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
       `
       SELECT s.symbol AS symbol, SUM(p.quantity) AS qty, SUM(COALESCE(p.market_value, 0)) AS mv
       FROM positions p
+      JOIN holding_snapshots hs ON hs.id = p.snapshot_id
+      JOIN accounts a ON a.id = hs.account_id
       JOIN securities s ON s.id = p.security_id
       WHERE p.snapshot_id IN (SELECT value FROM json_each(@snapshots_json))
         AND s.security_type != 'option'
         AND s.security_type != 'cash'
         AND s.symbol IS NOT NULL
+        AND NOT (a.id LIKE 'manual_%' AND (s.security_type = 'fund' OR a.account_bucket = '529'))
       GROUP BY s.symbol
     `,
     )
@@ -263,20 +265,7 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
       const price = isManual ? r.price : (markPx ?? r.price);
       let marketValue: number | null;
       if (planFund && fundBasis && navToday != null) {
-        const repaired = repairFundBasisIfMarkDrift(fundBasis, navToday, qty);
-        if (repaired) {
-          fundBasis = repaired;
-          const meta = manualMeta ?? { source: "manual" as const, purchaseDate: null };
-          db.prepare(`UPDATE positions SET metadata_json = ?, market_value = ? WHERE id = ?`).run(
-            JSON.stringify({ ...meta, fundBasis: repaired }),
-            repaired.statementMarketValue,
-            r.positionId,
-          );
-        }
         marketValue = markToMarketFund(fundBasis, navToday);
-        if (!repaired) {
-          db.prepare(`UPDATE positions SET market_value = ? WHERE id = ?`).run(marketValue, r.positionId);
-        }
       } else if (planFund && r.marketValue != null) {
         marketValue = r.marketValue;
       } else if (markPx != null && Number.isFinite(markPx)) {
