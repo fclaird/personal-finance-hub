@@ -1,8 +1,17 @@
 import { NextResponse } from "next/server";
 
+import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
-import { buildFundStatementBasis } from "@/lib/market/planFundPricing";
-import { isManualAccountId, upsertManualPosition, type ManualPositionInput } from "@/lib/manual/manualAccounts";
+import {
+  buildFundStatementBasis,
+  parseFundStatementBasis,
+} from "@/lib/market/planFundPricing";
+import {
+  isManualAccountId,
+  parseManualPositionMetadata,
+  upsertManualPosition,
+  type ManualPositionInput,
+} from "@/lib/manual/manualAccounts";
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
@@ -31,7 +40,21 @@ export async function POST(req: Request, ctx: RouteCtx) {
 
     let fundBasis = undefined as ManualPositionInput["fundBasis"];
     if (securityType === "fund" && marketValue != null && Number.isFinite(marketValue) && marketValue > 0 && symbol) {
-      fundBasis = await buildFundStatementBasis(symbol, marketValue, statementDate);
+      let rebuildBasis = true;
+      const positionId = body.positionId?.trim();
+      if (positionId) {
+        const db = getDb();
+        const existing = db
+          .prepare(`SELECT metadata_json AS metadataJson FROM positions WHERE id = ?`)
+          .get(positionId) as { metadataJson: string | null } | undefined;
+        const existingBasis = parseFundStatementBasis(parseManualPositionMetadata(existing?.metadataJson));
+        if (existingBasis && existingBasis.statementMarketValue === marketValue) {
+          rebuildBasis = false;
+        }
+      }
+      if (rebuildBasis) {
+        fundBasis = await buildFundStatementBasis(symbol, marketValue, statementDate);
+      }
     }
 
     const result = upsertManualPosition(id, {
