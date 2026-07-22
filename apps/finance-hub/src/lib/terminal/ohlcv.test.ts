@@ -7,6 +7,7 @@ import {
   chartCandlesExcludeDeadZone,
   CHART_INTERVAL_BUCKET_MS,
   filterChartCandlesDeadZone,
+  hasSufficientCandleCacheForWindow,
 } from "@/lib/terminal/ohlcv";
 import type { Candle } from "@/lib/terminal/ohlcv";
 
@@ -80,4 +81,43 @@ test("benchmarkPctOverlay rebases to first benchmark close", () => {
   assert.equal(out.length, 2);
   assert.ok(Math.abs(out[0]!.pct) < 0.01);
   assert.ok(out[1]!.pct > 4);
+});
+
+test("intraday cache sufficiency during RTH requires current-session bars", () => {
+  const now = new Date("2026-06-01T10:30:00-04:00");
+  const priorSession = Array.from({ length: 40 }, (_, i): Candle => ({
+    tsMs: new Date(`2026-05-29T${String(10 + Math.floor(i / 12)).padStart(2, "0")}:${String((i % 12) * 5).padStart(2, "0")}:00-04:00`).getTime(),
+    open: 1,
+    high: 1,
+    low: 1,
+    close: 1,
+    volume: 1,
+  }));
+  const currentSession = Array.from({ length: 40 }, (_, i): Candle => ({
+    tsMs: new Date(`2026-06-01T${String(10 + Math.floor(i / 12)).padStart(2, "0")}:${String((i % 12) * 5).padStart(2, "0")}:00-04:00`).getTime(),
+    open: 1,
+    high: 1,
+    low: 1,
+    close: 1,
+    volume: 1,
+  }));
+
+  assert.equal(hasSufficientCandleCacheForWindow(priorSession, "5m", "1D", now), false);
+  assert.equal(hasSufficientCandleCacheForWindow(currentSession, "5m", "1D", now), true);
+});
+
+test("daily cache sufficiency rejects stale endpoints", () => {
+  const now = new Date("2026-06-01T12:00:00-04:00");
+  const recent = Array.from({ length: 200 }, (_, i): Candle => ({
+    tsMs: new Date("2026-05-29T16:00:00-04:00").getTime() - i * 24 * 60 * 60 * 1000,
+    open: 1,
+    high: 1,
+    low: 1,
+    close: 1,
+    volume: 1,
+  }));
+  const stale = recent.map((c) => ({ ...c, tsMs: c.tsMs - 30 * 24 * 60 * 60 * 1000 }));
+
+  assert.equal(hasSufficientCandleCacheForWindow(recent, "1d", "1Y", now), true);
+  assert.equal(hasSufficientCandleCacheForWindow(stale, "1d", "1Y", now), false);
 });
