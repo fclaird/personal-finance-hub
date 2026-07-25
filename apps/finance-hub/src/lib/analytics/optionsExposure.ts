@@ -29,10 +29,13 @@ export function portfolioImpliedEquityPriceMap(db: ReturnType<typeof getDb>, mod
       `
       SELECT UPPER(COALESCE(s.symbol, '')) AS symbol, SUM(p.quantity) AS qty, SUM(${POSITION_MARKET_VALUE_SQL}) AS mv
       FROM positions p
+      JOIN holding_snapshots hs ON hs.id = p.snapshot_id
+      JOIN accounts a ON a.id = hs.account_id
       JOIN securities s ON s.id = p.security_id
       WHERE p.snapshot_id IN (SELECT value FROM json_each(@snaps))
         AND s.security_type != 'option'
         AND s.security_type != 'cash'
+        AND NOT (a.id LIKE 'manual_%' AND (s.security_type = 'fund' OR a.account_bucket = '529'))
       GROUP BY UPPER(COALESCE(s.symbol, ''))
     `,
     )
@@ -146,10 +149,13 @@ export function impliedPriceMapForSnapshot(db: ReturnType<typeof getDb>, snapsho
           SUM(${POSITION_MARKET_VALUE_SQL}) AS mv,
           SUM(COALESCE(p.quantity, 0)) AS qty
         FROM positions p
+        JOIN holding_snapshots hs ON hs.id = p.snapshot_id
+        JOIN accounts a ON a.id = hs.account_id
         JOIN securities sec ON sec.id = p.security_id
         WHERE p.snapshot_id = ?
           AND sec.security_type != 'option'
           AND sec.security_type != 'cash'
+          AND NOT (a.id LIKE 'manual_%' AND (sec.security_type = 'fund' OR a.account_bucket = '529'))
         GROUP BY COALESCE(sec.symbol, 'UNKNOWN')
       `,
     )
@@ -164,10 +170,13 @@ export function impliedPriceMapForSnapshot(db: ReturnType<typeof getDb>, snapsho
         `
           SELECT SUM(quantity) AS qty, SUM(${POSITION_MARKET_VALUE_SQL}) AS mv
           FROM positions p
+          JOIN holding_snapshots hs ON hs.id = p.snapshot_id
+          JOIN accounts a ON a.id = hs.account_id
           JOIN securities sec ON sec.id = p.security_id
           WHERE p.snapshot_id = ?
             AND sec.symbol = ?
             AND sec.security_type != 'option'
+            AND NOT (a.id LIKE 'manual_%' AND (sec.security_type = 'fund' OR a.account_bucket = '529'))
         `,
       )
       .get(snapshotId, r.symbol) as { qty: number | null; mv: number | null } | undefined;
@@ -256,8 +265,8 @@ export function getUnderlyingExposureRollup(
 export function getUnderlyingExposureByBucket(
   mode: DataMode = "auto",
   equityMarkMap?: Map<string, number>,
+  db: ReturnType<typeof getDb> = getDb(),
 ): BucketExposure[] {
-  const db = getDb();
   const scope = latestSnapshotScopeForMode(mode);
   const snapshotIds = latestSnapshotIds(db, scope);
   if (snapshotIds.length === 0) return [];
@@ -339,14 +348,14 @@ export function getUnderlyingExposureByBucket(
 
   // Plan/529 fund share counts are synthetic proxies: heldShares × public NAV is meaningless,
   // so keep their statement-anchored stored MV instead of re-marking against the live NAV below.
-  const planFundSymbols = new Set<string>();
+  const preservedPlanFundSpotKeys = new Set<string>();
 
   for (const r of spot) {
     const bucket = snapshotToBucket.get(r.snapshot_id);
     if (!bucket) continue;
     const symKey = (r.symbol ?? "").trim().toUpperCase();
     if (symKey === "CASH") continue;
-    if (r.is_plan_fund) planFundSymbols.add(symKey);
+    if (r.is_plan_fund) preservedPlanFundSpotKeys.add(`${bucket}\0${symKey}`);
     const prev = rowFor(bucket, symKey);
     prev.spotMarketValue += r.mv;
     prev.heldShares += r.qty ?? 0;
@@ -420,13 +429,14 @@ export function getUnderlyingExposureByBucket(
   }
 
   const priceByUnderlying = equityMarkMap ?? portfolioImpliedEquityPriceMap(db, mode);
-  for (const m of byBucket.values()) {
+  for (const [bucketKey, m] of byBucket.entries()) {
     for (const row of m.values()) {
       const px = priceByUnderlying.get(row.underlyingSymbol);
       if (px == null) continue;
-      // Plan/529 funds: preserve the statement-anchored stored MV; don't re-mark synthetic shares.
-      if (planFundSymbols.has(row.underlyingSymbol)) continue;
-      if (row.heldShares > 0) row.spotMarketValue = row.heldShares * px;
+      // Plan/529 fund share counts are not real shares. Preserve only that bucket's spot MV.
+      if (!preservedPlanFundSpotKeys.has(`${bucketKey}\0${row.underlyingSymbol}`) && row.heldShares > 0) {
+        row.spotMarketValue = row.heldShares * px;
+      }
       row.syntheticMarketValue = row.syntheticShares * px;
     }
   }
