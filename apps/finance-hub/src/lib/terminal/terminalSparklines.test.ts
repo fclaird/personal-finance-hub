@@ -22,6 +22,15 @@ test("sparklineSessionYmd falls back to latest day when today is empty", () => {
   assert.equal(sparklineSessionYmd(candles, now), "2026-05-28");
 });
 
+test("sparklineSessionYmd does not fall back to prior session during RTH", () => {
+  const now = new Date("2026-06-01T10:00:00-04:00");
+  const candles = [
+    { tsMs: new Date("2026-05-29T15:00:00-04:00").getTime(), open: 1, high: 1, low: 1, close: 100, volume: 1 },
+  ];
+  assert.equal(sparklineSessionYmd(candles, now), "2026-06-01");
+  assert.deepEqual(closesForSessionDay(candles, now), []);
+});
+
 test("closesForSessionDay keeps only the chosen session day", () => {
   const now = new Date("2026-05-29T18:00:00-04:00");
   const candles = [
