@@ -334,12 +334,10 @@ export async function resolvePortfolioAccountTotals(
   if (priorNetValue <= 0 || netValue <= 0) return null;
 
   let netCashFlow = 0;
-  if (live != null) {
-    try {
-      netCashFlow = await fetchSchwabSessionNetCashFlow(sessionYmd, db);
-    } catch {
-      netCashFlow = 0;
-    }
+  try {
+    netCashFlow = await fetchSchwabSessionNetCashFlow(sessionYmd, db);
+  } catch {
+    netCashFlow = 0;
   }
   const adjustedNetValue = netValue - netCashFlow;
 
