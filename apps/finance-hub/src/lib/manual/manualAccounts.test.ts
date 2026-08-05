@@ -11,6 +11,7 @@ import {
   ensureManualConnection,
   MANUAL_CONNECTION_ID,
   parseManualPositionMetadata,
+  upsertManualPositionInDb,
 } from "./manualAccounts";
 import { isManualAccountId } from "./isManualAccountId";
 
@@ -128,5 +129,41 @@ describe("manualAccounts", () => {
       0,
     );
     assert.equal((db.prepare(`SELECT COUNT(*) AS c FROM positions WHERE id = 'pos_del'`).get() as { c: number }).c, 0);
+  });
+
+  it("ordinary fund edits preserve an existing statement anchor", () => {
+    const db = createTestDb();
+    const acct = createManualAccountInDb(db, { name: "529 Plan", accountBucket: "529" });
+    const anchor = { statementMarketValue: 50_000, statementDate: "2026-05-01", basisTickerNav: 100 };
+
+    upsertManualPositionInDb(db, acct.id, {
+      positionId: "pos_fund",
+      symbol: "VTSAX",
+      securityType: "fund",
+      quantity: 100,
+      purchasePrice: 10,
+      marketValue: 50_000,
+      purchaseDate: "2026-01-01",
+      notes: "initial",
+      fundBasis: anchor,
+    });
+
+    upsertManualPositionInDb(db, acct.id, {
+      positionId: "pos_fund",
+      symbol: "VTSAX",
+      securityType: "fund",
+      quantity: 100,
+      purchasePrice: 10,
+      marketValue: 51_000,
+      purchaseDate: "2026-01-01",
+      notes: "edited",
+    });
+
+    const row = db
+      .prepare(`SELECT metadata_json AS metadataJson FROM positions WHERE id = 'pos_fund'`)
+      .get() as { metadataJson: string };
+    const meta = parseManualPositionMetadata(row.metadataJson);
+    assert.deepEqual(meta?.fundBasis, anchor);
+    assert.equal(meta?.notes, "edited");
   });
 });
