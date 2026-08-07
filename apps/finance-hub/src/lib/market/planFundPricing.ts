@@ -59,7 +59,10 @@ export async function buildFundStatementBasis(
   statementDate: string,
 ): Promise<FundStatementBasis> {
   const navOnDate =
-    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol)) ?? 1;
+    (await fetchYahooNavOnDate(symbol, statementDate)) ?? (await fetchYahooLatestPrice(symbol));
+  if (navOnDate == null || !Number.isFinite(navOnDate) || navOnDate <= 0) {
+    throw new Error(`Could not fetch NAV for ${symbol}`);
+  }
   return {
     statementMarketValue,
     statementDate,
