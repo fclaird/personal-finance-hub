@@ -1,5 +1,5 @@
 import { isUsEquityOvernightDeadZone } from "@/lib/market/glanceExtendedHours";
-import { nyYmd } from "@/lib/market/usEquitySession";
+import { isUsEquityRegularSessionOpen, nyYmd } from "@/lib/market/usEquitySession";
 import {
   ensureChartCandles,
   getChartCandles,
@@ -20,6 +20,7 @@ export function nyYmdForTs(tsMs: number): string {
 export function sparklineSessionYmd(candles: readonly { tsMs: number }[], now = new Date()): string {
   const today = nyYmd(now);
   if (candles.some((c) => nyYmdForTs(c.tsMs) === today)) return today;
+  if (isUsEquityRegularSessionOpen(now)) return today;
   let maxYmd = "";
   for (const c of candles) {
     const y = nyYmdForTs(c.tsMs);
