@@ -78,26 +78,30 @@ export function schwabPriorLiquidationFromDb(
   const rows = db
     .prepare(
       `
-      SELECT av.account_id AS account_id, av.equity_value AS equity_value
+      SELECT av.account_id AS account_id, av.as_of AS as_of, av.equity_value AS equity_value
       FROM account_value_points av
       JOIN accounts a ON a.id = av.account_id
-      JOIN (
-        SELECT account_id, MAX(as_of) AS max_as_of
-        FROM account_value_points
-        WHERE date(as_of) <= @session_ymd
-        GROUP BY account_id
-      ) prior ON prior.account_id = av.account_id AND prior.max_as_of = av.as_of
       WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql("a")}
+      ORDER BY av.as_of ASC
     `,
     )
-    .all({ session_ymd: sessionYmd }) as Array<{ account_id: string; equity_value: number }>;
+    .all() as Array<{ account_id: string; as_of: string; equity_value: number }>;
+
+  const latestPerAccount = new Map<string, { as_of: string; equity_value: number }>();
+  for (const row of rows) {
+    if (isoDateInUsEastern(Date.parse(row.as_of)) > sessionYmd) continue;
+    const prev = latestPerAccount.get(row.account_id);
+    if (!prev || row.as_of > prev.as_of) {
+      latestPerAccount.set(row.account_id, { as_of: row.as_of, equity_value: row.equity_value });
+    }
+  }
 
   const byAccount = new Map<string, number>();
   let prior = 0;
-  for (const row of rows) {
+  for (const [accountId, row] of latestPerAccount) {
     const v = row.equity_value;
     if (!Number.isFinite(v)) continue;
-    byAccount.set(row.account_id, v);
+    byAccount.set(accountId, v);
     prior += v;
   }
   return { prior, byAccount };
@@ -122,24 +126,43 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
     )
     .get() as { mv: number } | undefined;
 
-  const priorRow = db
+  const priorSnapshots = db
     .prepare(
       `
-      SELECT COALESCE(SUM(${POSITION_MARKET_VALUE_SQL}), 0) AS mv
+      SELECT hs.account_id AS account_id, hs.id AS snapshot_id, hs.as_of AS as_of
       FROM holding_snapshots hs
       JOIN accounts a ON a.id = hs.account_id
-      JOIN (
-        SELECT account_id, MAX(as_of) AS max_as_of
-        FROM holding_snapshots
-        WHERE date(as_of) <= @session_ymd
-        GROUP BY account_id
-      ) _prior_snap ON _prior_snap.account_id = hs.account_id AND _prior_snap.max_as_of = hs.as_of
-      JOIN positions p ON p.snapshot_id = hs.id
       WHERE a.id NOT LIKE 'schwab_%'
         AND ${allSyncedAccountsWhereSql("a")}
     `,
     )
-    .get({ session_ymd: priorSessionYmd }) as { mv: number } | undefined;
+    .all() as Array<{ account_id: string; snapshot_id: string; as_of: string }>;
+
+  const latestPriorSnapPerAccount = new Map<string, string>();
+  for (const snap of priorSnapshots) {
+    if (isoDateInUsEastern(Date.parse(snap.as_of)) > priorSessionYmd) continue;
+    const prevId = latestPriorSnapPerAccount.get(snap.account_id);
+    const prevAsOf = prevId
+      ? priorSnapshots.find((row) => row.snapshot_id === prevId)?.as_of
+      : null;
+    if (!prevId || !prevAsOf || snap.as_of > prevAsOf) {
+      latestPriorSnapPerAccount.set(snap.account_id, snap.snapshot_id);
+    }
+  }
+
+  const priorSnapIds = [...latestPriorSnapPerAccount.values()];
+  const priorRow =
+    priorSnapIds.length === 0
+      ? undefined
+      : (db
+          .prepare(
+            `
+      SELECT COALESCE(SUM(${POSITION_MARKET_VALUE_SQL}), 0) AS mv
+      FROM positions p
+      WHERE p.snapshot_id IN (SELECT value FROM json_each(@snaps))
+    `,
+          )
+          .get({ snaps: JSON.stringify(priorSnapIds) }) as { mv: number } | undefined);
 
   const current = currentRow?.mv ?? 0;
   const priorRaw = priorRow?.mv;
@@ -311,12 +334,10 @@ export async function resolvePortfolioAccountTotals(
   if (priorNetValue <= 0 || netValue <= 0) return null;
 
   let netCashFlow = 0;
-  if (live != null) {
-    try {
-      netCashFlow = await fetchSchwabSessionNetCashFlow(sessionYmd, db);
-    } catch {
-      netCashFlow = 0;
-    }
+  try {
+    netCashFlow = await fetchSchwabSessionNetCashFlow(sessionYmd, db);
+  } catch {
+    netCashFlow = 0;
   }
   const adjustedNetValue = netValue - netCashFlow;
 
