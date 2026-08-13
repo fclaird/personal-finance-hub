@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
 import { isUsEquityOvernightDeadZone } from "@/lib/market/glanceExtendedHours";
+import { isUsEquityRegularSessionOpen, nyYmd } from "@/lib/market/usEquitySession";
 import { schwabMarketFetch } from "@/lib/schwab/client";
 import type { ChartCandleInterval } from "@/lib/terminal/candleChartConfig";
 import { windowSinceMs as windowSinceMsFromConfig } from "@/lib/terminal/candleWindowTime";
@@ -35,6 +36,10 @@ export type CandleInterval = StorageCandleInterval;
 
 export type CandleWindow = "1D" | "5D" | "1M" | "3M" | "6M" | "1Y" | "3Y" | "5Y";
 
+const MS_MIN = 60 * 1000;
+const MS_HOUR = 60 * MS_MIN;
+const MS_DAY = 24 * MS_HOUR;
+
 /** Minimum stored daily bars to treat a window as cache-warm (avoids refetching on every request). */
 const MIN_DAILY_BARS_FOR_WINDOW: Record<CandleWindow, number> = {
   "1D": 1,
@@ -47,6 +52,45 @@ const MIN_DAILY_BARS_FOR_WINDOW: Record<CandleWindow, number> = {
   "5Y": 800,
 };
 
+const MAX_DAILY_ENDPOINT_AGE_MS = 4 * MS_DAY;
+const MAX_WEEKLY_ENDPOINT_AGE_MS = 14 * MS_DAY;
+
+function nyYmdForTs(tsMs: number): string {
+  return nyYmd(new Date(tsMs));
+}
+
+function latestTs(candles: readonly { tsMs: number }[]): number | null {
+  let latest: number | null = null;
+  for (const c of candles) {
+    if (!Number.isFinite(c.tsMs)) continue;
+    latest = latest == null ? c.tsMs : Math.max(latest, c.tsMs);
+  }
+  return latest;
+}
+
+export function hasSufficientCandleCacheForWindow(
+  candles: readonly Candle[],
+  storage: StorageCandleInterval,
+  window: CandleWindow,
+  now = new Date(),
+): boolean {
+  if (storage === "1d" || storage === "1wk") {
+    if (candles.length < MIN_DAILY_BARS_FOR_WINDOW[window]) return false;
+    const latest = latestTs(candles);
+    if (latest == null) return false;
+    const maxAge = storage === "1wk" ? MAX_WEEKLY_ENDPOINT_AGE_MS : MAX_DAILY_ENDPOINT_AGE_MS;
+    return now.getTime() - latest <= maxAge;
+  }
+
+  if (storage !== "5m" && storage !== "15m" && storage !== "30m") return false;
+  if (window !== "1D" && window !== "5D") return false;
+  const minBars = window === "1D" ? 40 : 150;
+  const usable = isUsEquityRegularSessionOpen(now)
+    ? candles.filter((c) => nyYmdForTs(c.tsMs) === nyYmd(now))
+    : candles;
+  return usable.length >= minBars;
+}
+
 function hasSufficientDailyCache(
   symbol: string,
   storage: StorageCandleInterval,
@@ -55,7 +99,7 @@ function hasSufficientDailyCache(
   if (storage !== "1d" && storage !== "1wk") return false;
   const since = windowSinceMsFromConfig(window);
   const cached = getCachedCandles(symbol, storage, since);
-  return cached.length >= MIN_DAILY_BARS_FOR_WINDOW[window];
+  return hasSufficientCandleCacheForWindow(cached, storage, window);
 }
 
 function hasSufficientIntradayCache(
@@ -67,8 +111,7 @@ function hasSufficientIntradayCache(
   if (window !== "1D" && window !== "5D") return false;
   const since = windowSinceMsFromConfig(window);
   const cached = getCachedCandles(symbol, storage, since);
-  const minBars = window === "1D" ? 40 : 150;
-  return cached.length >= minBars;
+  return hasSufficientCandleCacheForWindow(cached, storage, window);
 }
 
 function hasSufficientCachedCandles(
@@ -78,10 +121,6 @@ function hasSufficientCachedCandles(
 ): boolean {
   return hasSufficientDailyCache(symbol, storage, window) || hasSufficientIntradayCache(symbol, storage, window);
 }
-
-const MS_MIN = 60 * 1000;
-const MS_HOUR = 60 * MS_MIN;
-const MS_DAY = 24 * MS_HOUR;
 
 export const CHART_INTERVAL_BUCKET_MS: Record<ChartCandleInterval, number> = {
   "5m": 5 * MS_MIN,
@@ -214,25 +253,6 @@ export async function ensureCandles(
   if (!opts?.force && opts?.startMs == null && opts?.endMs == null) {
     if (hasSufficientCachedCandles(sym, storage, window)) {
       return;
-    }
-
-    const latest = db
-      .prepare(
-        `
-      SELECT ts_ms AS ts
-      FROM ohlcv_points
-      WHERE provider='schwab' AND symbol=? AND interval=?
-      ORDER BY ts_ms DESC
-      LIMIT 1
-    `,
-      )
-      .get(sym, storage) as { ts: number } | undefined;
-
-    if (latest?.ts) {
-      const ageMs = Date.now() - latest.ts;
-      if (ageMs < 12 * 60 * 60 * 1000) {
-        return;
-      }
     }
   }
 
