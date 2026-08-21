@@ -51,8 +51,10 @@ export async function GET(req: Request) {
         : undefined;
 
     const routeStart = Date.now();
-    const ensureTargets = includeBenchmarks ? [symbol, "QQQ", "SPY"] : [symbol];
-    await Promise.all(ensureTargets.map((s) => ensureChartCandles(s, interval, window, ensureOpts)));
+    await ensureChartCandles(symbol, interval, window, ensureOpts);
+    if (includeBenchmarks) {
+      await Promise.allSettled(["QQQ", "SPY"].map((s) => ensureChartCandles(s, interval, window, ensureOpts)));
+    }
     const ensureMs = Date.now() - routeStart;
 
     const candles = getChartCandles(symbol, interval, readSinceMs, endMs ?? undefined, window);
