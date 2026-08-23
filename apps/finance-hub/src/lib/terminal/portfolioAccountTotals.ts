@@ -5,6 +5,14 @@ import { allSyncedAccountsWhereSql, latestSnapshotPerAccountJoinSql } from "@/li
 import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
 import { isAuroraExclusiveAccountId } from "@/lib/auroraExclusive";
 import { isoDateInUsEastern } from "@/lib/market/glanceSession";
+import { buildLiveEquityMarkMap } from "@/lib/market/liveEquityMarks";
+import {
+  markToMarketFund,
+  needsPlanFundPricing,
+  parseFundStatementBasis,
+} from "@/lib/market/planFundPricing";
+import { fetchYahooLatestPrices } from "@/lib/market/yahooLatestPrice";
+import { isManualAccountId, parseManualPositionMetadata } from "@/lib/manual/manualAccounts";
 import { pickEquityUsd, pickSchwabPriorDayEquityUsd } from "@/lib/schwab/accountBalances";
 import { schwabFetch } from "@/lib/schwab/client";
 import { fetchSchwabSessionNetCashFlow } from "@/lib/terminal/portfolioCashFlows";
@@ -175,6 +183,196 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
   };
 }
 
+export type ExternalPositionRow = {
+  accountId: string;
+  accountBucket: string | null;
+  securityType: string;
+  symbol: string | null;
+  metadataJson: string | null;
+  quantity: number | null;
+  price: number | null;
+  marketValue: number | null;
+};
+
+function collectExternalSnapshotIds(
+  db: Database.Database,
+  priorSessionYmd: string,
+): { currentSnapIds: string[]; priorSnapIds: string[] } {
+  const currentRows = db
+    .prepare(
+      `
+      SELECT hs.id AS snapshot_id
+      FROM holding_snapshots hs
+      JOIN accounts a ON a.id = hs.account_id
+      ${latestSnapshotPerAccountJoinSql("hs")}
+      WHERE a.id NOT LIKE 'schwab_%'
+        AND ${allSyncedAccountsWhereSql("a")}
+    `,
+    )
+    .all() as Array<{ snapshot_id: string }>;
+
+  const priorSnapshots = db
+    .prepare(
+      `
+      SELECT hs.account_id AS account_id, hs.id AS snapshot_id, hs.as_of AS as_of
+      FROM holding_snapshots hs
+      JOIN accounts a ON a.id = hs.account_id
+      WHERE a.id NOT LIKE 'schwab_%'
+        AND ${allSyncedAccountsWhereSql("a")}
+    `,
+    )
+    .all() as Array<{ account_id: string; snapshot_id: string; as_of: string }>;
+
+  const latestPriorSnapPerAccount = new Map<string, string>();
+  for (const snap of priorSnapshots) {
+    if (isoDateInUsEastern(Date.parse(snap.as_of)) > priorSessionYmd) continue;
+    const prevId = latestPriorSnapPerAccount.get(snap.account_id);
+    const prevAsOf = prevId
+      ? priorSnapshots.find((row) => row.snapshot_id === prevId)?.as_of
+      : null;
+    if (!prevId || !prevAsOf || snap.as_of > prevAsOf) {
+      latestPriorSnapPerAccount.set(snap.account_id, snap.snapshot_id);
+    }
+  }
+
+  return {
+    currentSnapIds: currentRows.map((row) => row.snapshot_id),
+    priorSnapIds: [...latestPriorSnapPerAccount.values()],
+  };
+}
+
+function listExternalPositions(db: Database.Database, snapshotIds: string[]): ExternalPositionRow[] {
+  if (snapshotIds.length === 0) return [];
+  return db
+    .prepare(
+      `
+      SELECT
+        a.id AS accountId,
+        a.account_bucket AS accountBucket,
+        s.security_type AS securityType,
+        s.symbol AS symbol,
+        p.metadata_json AS metadataJson,
+        p.quantity AS quantity,
+        p.price AS price,
+        p.market_value AS marketValue
+      FROM positions p
+      JOIN holding_snapshots hs ON hs.id = p.snapshot_id
+      JOIN accounts a ON a.id = hs.account_id
+      JOIN securities s ON s.id = p.security_id
+      WHERE p.snapshot_id IN (SELECT value FROM json_each(@snaps))
+    `,
+    )
+    .all({ snaps: JSON.stringify(snapshotIds) }) as ExternalPositionRow[];
+}
+
+export function effectiveExternalPositionMv(
+  row: ExternalPositionRow,
+  navMap: Map<string, number>,
+): number {
+  const isManual =
+    isManualAccountId(row.accountId) || parseManualPositionMetadata(row.metadataJson) != null;
+  const manualMeta = parseManualPositionMetadata(row.metadataJson);
+  const planFund = needsPlanFundPricing(isManual, row.securityType, row.accountBucket);
+  const fundBasis = parseFundStatementBasis(manualMeta);
+  if (planFund && fundBasis) {
+    const sym = (row.symbol ?? "").trim().toUpperCase();
+    const nav = sym ? navMap.get(sym) : undefined;
+    if (nav != null && Number.isFinite(nav) && nav > 0) {
+      return markToMarketFund(fundBasis, nav);
+    }
+  }
+  const mv = row.marketValue;
+  if (mv != null && Number.isFinite(mv)) return mv;
+  return (row.price ?? 0) * (row.quantity ?? 0);
+}
+
+export function sumExternalPositionsWithNav(
+  rows: ExternalPositionRow[],
+  navMap: Map<string, number>,
+): number {
+  let sum = 0;
+  for (const row of rows) {
+    sum += effectiveExternalPositionMv(row, navMap);
+  }
+  return sum;
+}
+
+function loadFundNavOnOrBefore(
+  db: Database.Database,
+  symbols: Iterable<string>,
+  ymd: string,
+): Map<string, number> {
+  const keys = [...new Set([...symbols].map((s) => s.trim().toUpperCase()).filter(Boolean))];
+  if (keys.length === 0) return new Map();
+
+  const stmt = db.prepare(
+    `
+    SELECT close
+    FROM price_points
+    WHERE provider IN ('yahoo', 'schwab') AND symbol = ? AND date <= ?
+    ORDER BY date DESC
+    LIMIT 1
+  `,
+  );
+  const out = new Map<string, number>();
+  for (const sym of keys) {
+    const row = stmt.get(sym, ymd) as { close: number } | undefined;
+    if (row?.close != null && Number.isFinite(row.close) && row.close > 0) {
+      out.set(sym, row.close);
+    }
+  }
+  return out;
+}
+
+function collectPlanFundSymbols(rows: ExternalPositionRow[]): Set<string> {
+  const symbols = new Set<string>();
+  for (const row of rows) {
+    const isManual =
+      isManualAccountId(row.accountId) || parseManualPositionMetadata(row.metadataJson) != null;
+    if (!needsPlanFundPricing(isManual, row.securityType, row.accountBucket)) continue;
+    const sym = (row.symbol ?? "").trim().toUpperCase();
+    if (sym) symbols.add(sym);
+  }
+  return symbols;
+}
+
+/** External account totals with 529/plan fund mark-to-market (matches `/api/positions` in-memory MV). */
+export async function resolveExternalMarketValue(
+  db: Database.Database,
+  priorSessionYmd: string,
+): Promise<{ current: number; prior: number }> {
+  const raw = externalMarketValueFromDb(db, priorSessionYmd);
+  const { currentSnapIds, priorSnapIds } = collectExternalSnapshotIds(db, priorSessionYmd);
+  const currentRows = listExternalPositions(db, currentSnapIds);
+  const priorRows = listExternalPositions(db, priorSnapIds);
+  const planFundSymbols = collectPlanFundSymbols([...currentRows, ...priorRows]);
+  if (planFundSymbols.size === 0) return raw;
+
+  const schwabMarks = await buildLiveEquityMarkMap(planFundSymbols);
+  const yahooMarks = await fetchYahooLatestPrices(planFundSymbols);
+  const currentNavMap = new Map<string, number>();
+  for (const sym of planFundSymbols) {
+    const px = schwabMarks.get(sym) ?? yahooMarks.get(sym);
+    if (px != null && Number.isFinite(px) && px > 0) currentNavMap.set(sym, px);
+  }
+
+  const priorNavMap = loadFundNavOnOrBefore(db, planFundSymbols, priorSessionYmd);
+  for (const sym of planFundSymbols) {
+    if (!priorNavMap.has(sym) && currentNavMap.has(sym)) {
+      priorNavMap.set(sym, currentNavMap.get(sym)!);
+    }
+  }
+
+  const current = sumExternalPositionsWithNav(currentRows, currentNavMap);
+  const priorRaw = priorSnapIds.length === 0 ? 0 : sumExternalPositionsWithNav(priorRows, priorNavMap);
+  const prior = priorRaw > 0 ? priorRaw : current;
+
+  return {
+    current: Number.isFinite(current) ? current : raw.current,
+    prior: Number.isFinite(prior) ? prior : raw.prior,
+  };
+}
+
 export async function fetchSchwabLiquidationLive(): Promise<{
   byAccount: Map<string, { current: number; prior: number | null }>;
   current: number;
@@ -321,7 +519,7 @@ export async function resolvePortfolioAccountTotals(
   const dbSchwab = schwabLiquidationFromDb(db);
   const dbPriorSchwab = schwabPriorLiquidationFromDb(db, priorSessionYmd);
   const dbPriorEquity = schwabPriorEquityFromLatestSync(db);
-  const external = externalMarketValueFromDb(db, priorSessionYmd);
+  const external = await resolveExternalMarketValue(db, priorSessionYmd);
   const schwabTotals = resolveSchwabAccountTotals(live, dbSchwab, dbPriorSchwab, dbPriorEquity);
 
   const schwabCurrent = schwabTotals.current;
