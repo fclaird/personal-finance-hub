@@ -5,12 +5,15 @@ import test from "node:test";
 import Database from "better-sqlite3";
 
 import {
+  effectiveExternalPositionMv,
   externalMarketValueFromDb,
   priorNySessionYmd,
   schwabIntradayTotalsFromDb,
   schwabLiquidationFromDb,
   schwabPriorEquityFromLatestSync,
   schwabPriorLiquidationFromDb,
+  sumExternalPositionsWithNav,
+  type ExternalPositionRow,
 } from "@/lib/terminal/portfolioAccountTotals";
 import {
   buildPortfolioIndexSeries,
@@ -99,6 +102,29 @@ test("externalMarketValueFromDb adds manual 529 holdings", () => {
 
   const { current } = externalMarketValueFromDb(db, "2026-05-21");
   assert.equal(current, 250000);
+});
+
+test("sumExternalPositionsWithNav marks 529 plan funds to public NAV", () => {
+  const row: ExternalPositionRow = {
+    accountId: "manual_529",
+    accountBucket: "529",
+    securityType: "fund",
+    symbol: "VTI",
+    metadataJson: JSON.stringify({
+      source: "manual",
+      fundBasis: {
+        statementMarketValue: 250000,
+        statementDate: "2026-01-01",
+        basisTickerNav: 354,
+      },
+    }),
+    quantity: 1618,
+    price: 154,
+    marketValue: 250000,
+  };
+  const navMap = new Map([["VTI", 368.58]]);
+  assert.equal(effectiveExternalPositionMv(row, navMap), 250000 * (368.58 / 354));
+  assert.equal(sumExternalPositionsWithNav([row], navMap), 250000 * (368.58 / 354));
 });
 
 test("schwabPriorLiquidationFromDb uses ET session date not UTC date()", () => {
