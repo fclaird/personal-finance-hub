@@ -15,6 +15,41 @@ test("mergeGlanceAlignedDailyTotals sums Schwab liquidation and external MV per 
   assert.equal(merged[0]!.totalMarketValue, 5_250_000);
 });
 
+test("mergeGlanceAlignedDailyTotals keeps same-day external MV when Schwab asOf is later", () => {
+  const merged = mergeGlanceAlignedDailyTotals(
+    [{ asOf: "2026-05-22T20:00:00Z", totalMarketValue: 5_000_000 }],
+    [{ asOf: "2026-05-22T14:00:00Z", totalMarketValue: 250_000 }],
+  );
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]!.totalMarketValue, 5_250_000);
+});
+
+test("mergeGlanceAlignedDailyTotals carries last 529/manual MV onto later Schwab days", () => {
+  const merged = mergeGlanceAlignedDailyTotals(
+    [
+      { asOf: "2026-05-22T20:00:00Z", totalMarketValue: 5_000_000 },
+      { asOf: "2026-05-23T20:00:00Z", totalMarketValue: 5_100_000 },
+    ],
+    [{ asOf: "2026-05-22T14:00:00Z", totalMarketValue: 250_000 }],
+  );
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0]!.totalMarketValue, 5_250_000);
+  assert.equal(merged[1]!.totalMarketValue, 5_350_000);
+});
+
+test("mergeGlanceAlignedDailyTotals does not apply later external MV to earlier Schwab days", () => {
+  const merged = mergeGlanceAlignedDailyTotals(
+    [
+      { asOf: "2026-05-21T20:00:00Z", totalMarketValue: 5_000_000 },
+      { asOf: "2026-05-22T20:00:00Z", totalMarketValue: 5_000_000 },
+    ],
+    [{ asOf: "2026-05-22T14:00:00Z", totalMarketValue: 250_000 }],
+  );
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0]!.totalMarketValue, 5_000_000);
+  assert.equal(merged[1]!.totalMarketValue, 5_250_000);
+});
+
 test("resolvePerformanceTrackingBaselineYmd uses lookback when enough history exists", () => {
   const series = [
     { asOf: "2026-05-05T12:00:00Z", totalMarketValue: 1 },
