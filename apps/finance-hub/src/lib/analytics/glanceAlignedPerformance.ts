@@ -91,37 +91,43 @@ function externalMarketValuePoints(db: Database.Database, bucket: PerformanceBuc
     .map(([asOf, totalMarketValue]) => ({ asOf, totalMarketValue }));
 }
 
-/** Merge Schwab liquidation and external holdings into one daily total (quick-glance semantics). */
+function latestPointByDay(points: PortfolioValuePoint[]): Map<string, PortfolioValuePoint> {
+  const byDay = new Map<string, PortfolioValuePoint>();
+  for (const point of points) {
+    const day = portfolioAsOfIsoDate(point.asOf);
+    const prev = byDay.get(day);
+    if (!prev || point.asOf.localeCompare(prev.asOf) >= 0) byDay.set(day, point);
+  }
+  return byDay;
+}
+
+/**
+ * Merge Schwab liquidation and external holdings into one daily total.
+ * Each source is taken independently (a later Schwab sync must not drop that day's 529 MV),
+ * and the last known value of each source is carried forward so a stale manual snapshot
+ * as_of does not make the 529 vanish from later performance days.
+ */
 export function mergeGlanceAlignedDailyTotals(
   schwab: PortfolioValuePoint[],
   external: PortfolioValuePoint[],
 ): PortfolioValuePoint[] {
-  const byDay = new Map<string, { asOf: string; schwab: number; external: number }>();
+  const schwabByDay = latestPointByDay(schwab);
+  const externalByDay = latestPointByDay(external);
+  const days = [...new Set([...schwabByDay.keys(), ...externalByDay.keys()])].sort();
 
-  for (const point of schwab) {
-    const day = portfolioAsOfIsoDate(point.asOf);
-    const row = byDay.get(day) ?? { asOf: point.asOf, schwab: 0, external: 0 };
-    if (point.asOf.localeCompare(row.asOf) >= 0) {
-      row.asOf = point.asOf;
-      row.schwab = point.totalMarketValue;
-    }
-    byDay.set(day, row);
+  let lastSchwab = 0;
+  let lastExternal = 0;
+  const out: PortfolioValuePoint[] = [];
+  for (const day of days) {
+    const s = schwabByDay.get(day);
+    const e = externalByDay.get(day);
+    if (s) lastSchwab = s.totalMarketValue;
+    if (e) lastExternal = e.totalMarketValue;
+    const asOf = [s?.asOf, e?.asOf].filter((x): x is string => Boolean(x)).sort().at(-1);
+    const totalMarketValue = lastSchwab + lastExternal;
+    if (asOf && totalMarketValue > 0) out.push({ asOf, totalMarketValue });
   }
-
-  for (const point of external) {
-    const day = portfolioAsOfIsoDate(point.asOf);
-    const row = byDay.get(day) ?? { asOf: point.asOf, schwab: 0, external: 0 };
-    if (point.asOf.localeCompare(row.asOf) >= 0) {
-      row.asOf = point.asOf;
-      row.external = point.totalMarketValue;
-    }
-    byDay.set(day, row);
-  }
-
-  return [...byDay.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([, row]) => ({ asOf: row.asOf, totalMarketValue: row.schwab + row.external }))
-    .filter((point) => point.totalMarketValue > 0);
+  return out;
 }
 
 export function getGlanceAlignedPortfolioValueSeriesByBucket(
