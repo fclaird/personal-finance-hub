@@ -54,6 +54,7 @@ function schwabLiquidationPoints(db: Database.Database, bucket: PerformanceBucke
     .map(([asOf, totalMarketValue]) => ({ asOf, totalMarketValue }));
 }
 
+/** Non-Schwab holdings, including manual/Plaid cash. Schwab cash is already inside liquidation points. */
 function externalMarketValuePoints(db: Database.Database, bucket: PerformanceBucket): PortfolioValuePoint[] {
   const rows = db
     .prepare(
@@ -66,7 +67,6 @@ function externalMarketValuePoints(db: Database.Database, bucket: PerformanceBuc
       JOIN securities s ON s.id = p.security_id
       WHERE a.id NOT LIKE 'schwab_%'
         AND ${allSyncedAccountsWhereSql("a")}
-        AND s.security_type != 'cash'
       GROUP BY hs.as_of, a.id
       ORDER BY hs.as_of ASC
     `,
