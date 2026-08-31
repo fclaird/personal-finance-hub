@@ -5,11 +5,15 @@ import test from "node:test";
 import Database from "better-sqlite3";
 
 import {
+  effectiveExternalPositionMv,
   externalMarketValueFromDb,
   priorNySessionYmd,
   schwabIntradayTotalsFromDb,
   schwabLiquidationFromDb,
   schwabPriorEquityFromLatestSync,
+  schwabPriorLiquidationFromDb,
+  sumExternalPositionsWithNav,
+  type ExternalPositionRow,
 } from "@/lib/terminal/portfolioAccountTotals";
 import {
   buildPortfolioIndexSeries,
@@ -98,6 +102,76 @@ test("externalMarketValueFromDb adds manual 529 holdings", () => {
 
   const { current } = externalMarketValueFromDb(db, "2026-05-21");
   assert.equal(current, 250000);
+});
+
+test("sumExternalPositionsWithNav marks 529 plan funds to public NAV", () => {
+  const row: ExternalPositionRow = {
+    accountId: "manual_529",
+    accountBucket: "529",
+    securityType: "fund",
+    symbol: "VTI",
+    metadataJson: JSON.stringify({
+      source: "manual",
+      fundBasis: {
+        statementMarketValue: 250000,
+        statementDate: "2026-01-01",
+        basisTickerNav: 354,
+      },
+    }),
+    quantity: 1618,
+    price: 154,
+    marketValue: 250000,
+  };
+  const navMap = new Map([["VTI", 368.58]]);
+  assert.equal(effectiveExternalPositionMv(row, navMap), 250000 * (368.58 / 354));
+  assert.equal(sumExternalPositionsWithNav([row], navMap), 250000 * (368.58 / 354));
+});
+
+test("schwabPriorLiquidationFromDb uses ET session date not UTC date()", () => {
+  const db = createTestDb();
+  db.prepare(
+    `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('c1', 'schwab', 'S', 'active')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO accounts (id, connection_id, name, account_bucket, type) VALUES ('schwab_a', 'c1', 'Taxable', 'brokerage', 'brokerage')`,
+  ).run();
+  // Evening ET May 27 → UTC May 28; must count as May 27 prior baseline.
+  db.prepare(
+    `INSERT INTO account_value_points (account_id, as_of, equity_value, cash_value, source) VALUES ('schwab_a', '2026-05-28T00:04:55.748Z', 1000500, 0, 'schwab_balances')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO account_value_points (account_id, as_of, equity_value, cash_value, source) VALUES ('schwab_a', '2026-05-27T20:00:00.000Z', 1000000, 0, 'schwab_balances')`,
+  ).run();
+
+  const { prior } = schwabPriorLiquidationFromDb(db, "2026-05-27");
+  assert.equal(prior, 1000500);
+});
+
+test("externalMarketValueFromDb prior snapshot uses ET session date", () => {
+  const db = createTestDb();
+  db.prepare(
+    `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('conn_manual', 'manual', 'Manual', 'active')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO accounts (id, connection_id, name, account_bucket, type) VALUES ('manual_529', 'conn_manual', '529', '529', 'manual')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('snapLate', 'manual_529', '2026-05-28T00:04:55.748Z')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('snapPrior', 'manual_529', '2026-05-27T20:00:00.000Z')`,
+  ).run();
+  db.prepare(`INSERT INTO securities (id, symbol, name, security_type) VALUES ('sec_529', '529FUND', '529 Fund', 'fund')`).run();
+  db.prepare(
+    `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('pLate', 'snapLate', 'sec_529', 1, 260000, 260000)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('pPrior', 'snapPrior', 'sec_529', 1, 250000, 250000)`,
+  ).run();
+
+  const { current, prior } = externalMarketValueFromDb(db, "2026-05-27");
+  assert.equal(current, 260000);
+  assert.equal(prior, 260000);
 });
 
 test("schwabPriorEquityFromLatestSync reads prior-day equity from the latest sync row", () => {
