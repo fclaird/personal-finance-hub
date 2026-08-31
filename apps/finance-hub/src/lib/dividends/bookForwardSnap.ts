@@ -85,21 +85,35 @@ export async function captureBookForwardSnap(
   }
   const divPeriod = dividendsForHoldingsInRange(db, withShares, periodStartExclusive, asOf);
 
+  persistBookForwardSnap(db, asOf, nav, divPeriod, computedAt);
+
+  db.prepare(`UPDATE dividend_book_meta SET updated_at = ? WHERE id = ?`).run(computedAt, BOOK_META_ID);
+
+  return { ok: true, asOf };
+}
+
+/**
+ * Write a weekly book snap. A non-positive NAV is stored as NULL on insert and
+ * never overwrites a previously stored positive NAV (failed/empty quote refresh).
+ */
+export function persistBookForwardSnap(
+  db: Database.Database,
+  asOf: string,
+  nav: number,
+  dividendsPeriod: number,
+  computedAt: string,
+): void {
   db.prepare(
     `
     INSERT INTO dividend_book_forward_snap (as_of, nav_total, dividends_period, status, computed_at)
     VALUES (?, ?, ?, 'partial', ?)
     ON CONFLICT(as_of) DO UPDATE SET
-      nav_total = excluded.nav_total,
+      nav_total = COALESCE(excluded.nav_total, dividend_book_forward_snap.nav_total),
       dividends_period = excluded.dividends_period,
       computed_at = excluded.computed_at,
       status = 'partial'
   `,
-  ).run(asOf, nav > 0 ? nav : null, divPeriod, computedAt);
-
-  db.prepare(`UPDATE dividend_book_meta SET updated_at = ? WHERE id = ?`).run(computedAt, BOOK_META_ID);
-
-  return { ok: true, asOf };
+  ).run(asOf, nav > 0 ? nav : null, dividendsPeriod, computedAt);
 }
 
 export function getBookLiveStartedAt(db: Database.Database): string | null {

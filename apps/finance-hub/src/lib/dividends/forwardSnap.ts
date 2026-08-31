@@ -125,18 +125,33 @@ export async function captureForwardSnapForPortfolio(
   }
   const divPeriod = dividendsForHoldingsInRange(db, withShares, periodStartExclusive, asOf);
 
+  persistPortfolioForwardSnap(db, portfolioId, asOf, nav, divPeriod, computedAt);
+
+  return { ok: true, asOf };
+}
+
+/**
+ * Write a weekly model-portfolio snap. A non-positive NAV is stored as NULL on insert
+ * and never overwrites a previously stored positive NAV (failed/empty quote refresh).
+ */
+export function persistPortfolioForwardSnap(
+  db: Database.Database,
+  portfolioId: string,
+  asOf: string,
+  nav: number,
+  dividendsPeriod: number,
+  computedAt: string,
+): void {
   db.prepare(
     `
     INSERT INTO dividend_model_portfolio_forward_snap
       (portfolio_id, as_of, nav_total, dividends_period, status, computed_at, spy_rebased_pct, qqq_rebased_pct)
     VALUES (?, ?, ?, ?, 'partial', ?, NULL, NULL)
     ON CONFLICT(portfolio_id, as_of) DO UPDATE SET
-      nav_total = excluded.nav_total,
+      nav_total = COALESCE(excluded.nav_total, dividend_model_portfolio_forward_snap.nav_total),
       dividends_period = excluded.dividends_period,
       computed_at = excluded.computed_at,
       status = 'partial'
   `,
-  ).run(portfolioId, asOf, nav > 0 ? nav : null, divPeriod, computedAt);
-
-  return { ok: true, asOf };
+  ).run(portfolioId, asOf, nav > 0 ? nav : null, dividendsPeriod, computedAt);
 }
