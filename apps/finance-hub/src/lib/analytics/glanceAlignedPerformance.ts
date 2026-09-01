@@ -3,12 +3,16 @@ import type Database from "better-sqlite3";
 import { bucketFromAccount } from "@/lib/accountBuckets";
 import type { PortfolioValuePoint } from "@/lib/analytics/performance";
 import { getDb } from "@/lib/db";
+import type { FlavorId } from "@/lib/flavor";
 import { allSyncedAccountsWhereSql } from "@/lib/holdings/latestSnapshots";
 import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
 import { glanceSessionYmd } from "@/lib/market/glanceSession";
 import { collapseToTradingDays, portfolioAsOfIsoDate } from "@/lib/portfolio/snapshots";
 
-export const PERFORMANCE_BACKFILL_LOOKBACK_DAYS = 19;
+/** Recency check only: if fewer than two trading days exist in this window, tracking resets to today. Not a history cap. */
+export const PERFORMANCE_TRACKING_RECENCY_DAYS = 19;
+/** @deprecated Use PERFORMANCE_TRACKING_RECENCY_DAYS */
+export const PERFORMANCE_BACKFILL_LOOKBACK_DAYS = PERFORMANCE_TRACKING_RECENCY_DAYS;
 
 type PerformanceBucket = "combined" | "retirement" | "brokerage";
 
@@ -22,7 +26,11 @@ function accountInBucket(
   return bucketFromAccount(accountName, accountNickname, accountBucket) === bucket;
 }
 
-function schwabLiquidationPoints(db: Database.Database, bucket: PerformanceBucket): PortfolioValuePoint[] {
+function schwabLiquidationPoints(
+  db: Database.Database,
+  bucket: PerformanceBucket,
+  flavor: FlavorId = "main",
+): PortfolioValuePoint[] {
   const rows = db
     .prepare(
       `
@@ -30,7 +38,7 @@ function schwabLiquidationPoints(db: Database.Database, bucket: PerformanceBucke
              a.name AS account_name, a.nickname AS account_nickname, a.account_bucket AS account_bucket
       FROM account_value_points av
       JOIN accounts a ON a.id = av.account_id
-      WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql("a")}
+      WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql(flavor, "a")}
       ORDER BY av.as_of ASC
     `,
     )
@@ -54,7 +62,11 @@ function schwabLiquidationPoints(db: Database.Database, bucket: PerformanceBucke
     .map(([asOf, totalMarketValue]) => ({ asOf, totalMarketValue }));
 }
 
-function externalMarketValuePoints(db: Database.Database, bucket: PerformanceBucket): PortfolioValuePoint[] {
+function externalMarketValuePoints(
+  db: Database.Database,
+  bucket: PerformanceBucket,
+  flavor: FlavorId = "main",
+): PortfolioValuePoint[] {
   const rows = db
     .prepare(
       `
@@ -65,7 +77,7 @@ function externalMarketValuePoints(db: Database.Database, bucket: PerformanceBuc
       JOIN positions p ON p.snapshot_id = hs.id
       JOIN securities s ON s.id = p.security_id
       WHERE a.id NOT LIKE 'schwab_%'
-        AND ${allSyncedAccountsWhereSql("a")}
+        AND ${allSyncedAccountsWhereSql(flavor, "a")}
         AND s.security_type != 'cash'
       GROUP BY hs.as_of, a.id
       ORDER BY hs.as_of ASC
@@ -127,10 +139,30 @@ export function mergeGlanceAlignedDailyTotals(
 export function getGlanceAlignedPortfolioValueSeriesByBucket(
   bucket: PerformanceBucket,
   db: Database.Database = getDb(),
+  flavor: FlavorId = "main",
 ): PortfolioValuePoint[] {
-  const schwab = collapseToTradingDays(schwabLiquidationPoints(db, bucket));
-  const external = collapseToTradingDays(externalMarketValuePoints(db, bucket));
+  const schwab = collapseToTradingDays(schwabLiquidationPoints(db, bucket, flavor));
+  const external = collapseToTradingDays(externalMarketValuePoints(db, bucket, flavor));
   return mergeGlanceAlignedDailyTotals(schwab, external);
+}
+
+/** Fill trading days that have a weekly snapshot but no liquidation/external point. */
+export function mergeMissingSnapshotDays(
+  series: PortfolioValuePoint[],
+  snapshots: Array<{ snapshot_date: string; total_value: number }>,
+): PortfolioValuePoint[] {
+  const existing = new Set(series.map((p) => portfolioAsOfIsoDate(p.asOf)));
+  const extra: PortfolioValuePoint[] = [];
+  for (const snap of snapshots) {
+    const day = snap.snapshot_date.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+    if (existing.has(day)) continue;
+    if (!Number.isFinite(snap.total_value) || snap.total_value <= 0) continue;
+    extra.push({ asOf: `${day}T20:00:00.000Z`, totalMarketValue: snap.total_value });
+    existing.add(day);
+  }
+  if (extra.length === 0) return series;
+  return [...series, ...extra].sort((a, b) => a.asOf.localeCompare(b.asOf));
 }
 
 function lookbackCutoffYmd(now: Date, days: number): string {
@@ -142,7 +174,7 @@ function lookbackCutoffYmd(now: Date, days: number): string {
 export function resolvePerformanceTrackingBaselineYmd(
   series: PortfolioValuePoint[],
   now: Date = new Date(),
-  lookbackDays: number = PERFORMANCE_BACKFILL_LOOKBACK_DAYS,
+  lookbackDays: number = PERFORMANCE_TRACKING_RECENCY_DAYS,
 ): { baselineYmd: string; resetForward: boolean } {
   const forced = process.env.PERFORMANCE_TRACKING_BASELINE_YMD?.trim();
   if (forced && /^\d{4}-\d{2}-\d{2}$/.test(forced)) {
@@ -153,8 +185,8 @@ export function resolvePerformanceTrackingBaselineYmd(
   const cutoffYmd = lookbackCutoffYmd(now, lookbackDays);
   const inWindow = collapseToTradingDays(series.filter((p) => portfolioAsOfIsoDate(p.asOf) >= cutoffYmd));
 
-  if (inWindow.length >= 2) {
-    return { baselineYmd: portfolioAsOfIsoDate(inWindow[0]!.asOf), resetForward: false };
+  if (inWindow.length >= 2 && series.length >= 2) {
+    return { baselineYmd: portfolioAsOfIsoDate(series[0]!.asOf), resetForward: false };
   }
 
   return { baselineYmd: today, resetForward: true };

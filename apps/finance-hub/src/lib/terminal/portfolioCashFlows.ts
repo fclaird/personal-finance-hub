@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 
+import type { FlavorId } from "@/lib/flavor";
 import { allSyncedAccountsWhereSql } from "@/lib/holdings/latestSnapshots";
 import {
   fetchSchwabTransactionsWindow,
@@ -37,6 +38,7 @@ function activityKey(hash: string, tx: SchwabTxnRaw): string {
 export async function fetchSchwabSessionNetCashFlow(
   sessionYmd: string,
   db: Database.Database,
+  flavor: FlavorId = "main",
 ): Promise<number> {
   const rows = db
     .prepare(
@@ -46,7 +48,7 @@ export async function fetchSchwabSessionNetCashFlow(
       WHERE a.id LIKE 'schwab_%'
         AND schwab_account_hash IS NOT NULL
         AND TRIM(schwab_account_hash) != ''
-        AND ${allSyncedAccountsWhereSql("a")}
+        AND ${allSyncedAccountsWhereSql(flavor, "a")}
     `,
     )
     .all() as Array<{ hash: string }>;

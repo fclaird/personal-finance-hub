@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/db";
 import type { DataMode } from "@/lib/dataMode";
+import type { FlavorId } from "@/lib/flavor";
 import { bucketFromAccount } from "@/lib/accountBuckets";
 import { syncedBrokerAndManualWhereSql, allSyncedAccountsWhereSql } from "@/lib/holdings/latestSnapshots";
 import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
@@ -9,9 +10,9 @@ export type PortfolioValuePoint = {
   totalMarketValue: number;
 };
 
-export function getPortfolioValueSeries(mode: DataMode = "auto"): PortfolioValuePoint[] {
+export function getPortfolioValueSeries(mode: DataMode = "auto", flavor: FlavorId = "main"): PortfolioValuePoint[] {
   const db = getDb();
-  const accountWhere = mode === "schwab" ? syncedBrokerAndManualWhereSql("a") : allSyncedAccountsWhereSql("a");
+  const accountWhere = mode === "schwab" ? syncedBrokerAndManualWhereSql(flavor, "a") : allSyncedAccountsWhereSql(flavor, "a");
   const where = `WHERE ${accountWhere}`;
 
   if (mode === "schwab") {
@@ -21,7 +22,7 @@ export function getPortfolioValueSeries(mode: DataMode = "auto"): PortfolioValue
         SELECT av.as_of AS as_of, SUM(av.equity_value) AS mv
         FROM account_value_points av
         JOIN accounts a ON a.id = av.account_id
-        WHERE ${syncedBrokerAndManualWhereSql("a")}
+        WHERE ${syncedBrokerAndManualWhereSql(flavor, "a")}
         GROUP BY av.as_of
         ORDER BY av.as_of ASC
       `,
@@ -52,11 +53,15 @@ export function getPortfolioValueSeries(mode: DataMode = "auto"): PortfolioValue
 
 type BucketKey = "combined" | "retirement" | "brokerage";
 
-export function getPortfolioValueSeriesByBucket(bucket: BucketKey, mode: DataMode = "auto"): PortfolioValuePoint[] {
+export function getPortfolioValueSeriesByBucket(
+  bucket: BucketKey,
+  mode: DataMode = "auto",
+  flavor: FlavorId = "main",
+): PortfolioValuePoint[] {
   const db = getDb();
-  if (bucket === "combined") return getPortfolioValueSeries(mode);
+  if (bucket === "combined") return getPortfolioValueSeries(mode, flavor);
 
-  const accountWhere = mode === "schwab" ? syncedBrokerAndManualWhereSql("a") : allSyncedAccountsWhereSql("a");
+  const accountWhere = mode === "schwab" ? syncedBrokerAndManualWhereSql(flavor, "a") : allSyncedAccountsWhereSql(flavor, "a");
   const where = `WHERE ${accountWhere}`;
 
   if (mode === "schwab") {
@@ -67,7 +72,7 @@ export function getPortfolioValueSeriesByBucket(bucket: BucketKey, mode: DataMod
         SELECT av.as_of as as_of, a.name as account_name, a.nickname as account_nickname, a.account_bucket as account_bucket, av.equity_value as mv
         FROM account_value_points av
         JOIN accounts a ON a.id = av.account_id
-        WHERE ${syncedBrokerAndManualWhereSql("a")}
+        WHERE ${syncedBrokerAndManualWhereSql(flavor, "a")}
         ORDER BY av.as_of ASC
       `,
       )

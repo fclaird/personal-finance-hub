@@ -5,6 +5,7 @@ import {
   readHeatmapHiddenSymbols,
   readGlanceAlternateInstrument,
   readOptionFlowMode,
+  readPortfolioGlanceDisplayMode,
   readQuotesSort,
   readTerminalTableColumnOrder,
   readVolumeLeadersMode,
@@ -12,6 +13,7 @@ import {
   writeHeatmapHiddenSymbols,
   writeGlanceAlternateInstrument,
   writeOptionFlowMode,
+  writePortfolioGlanceDisplayMode,
   writeQuotesSort,
   writeTerminalTableColumnOrder,
   writeVolumeLeadersMode,
@@ -50,6 +52,11 @@ test("terminal display prefs round-trip in localStorage", () => {
 
     writeOptionFlowMode("relative");
     assert.equal(readOptionFlowMode(), "relative");
+
+    writePortfolioGlanceDisplayMode("dollar");
+    assert.equal(readPortfolioGlanceDisplayMode(), "dollar");
+    writePortfolioGlanceDisplayMode("indexed");
+    assert.equal(readPortfolioGlanceDisplayMode(), "indexed");
 
     writeTerminalTableColumnOrder(["symbol", "last", "chgPct", "company", "chg", "volume", "volX"]);
     const order = readTerminalTableColumnOrder(["symbol", "company", "last", "chg", "chgPct", "volume", "volX"]);

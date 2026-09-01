@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/db";
 import type { DataMode } from "@/lib/dataMode";
+import type { FlavorId } from "@/lib/flavor";
 import { latestSnapshotIds } from "@/lib/holdings/latestSnapshots";
 
 function normSym(s: string) {
@@ -8,6 +9,7 @@ function normSym(s: string) {
 
 export type TerminalUniverseParams = {
   mode?: DataMode;
+  flavor?: FlavorId;
   includeWatchlistId?: string | null;
 };
 
@@ -21,9 +23,10 @@ export type TerminalUniverseParams = {
 export function getTerminalUniverseSymbols(params: TerminalUniverseParams = {}): string[] {
   const db = getDb();
   const mode = params.mode ?? "auto";
+  const flavor = params.flavor ?? "main";
 
   const scope = mode === "schwab" ? "schwab_only" : "all_synced";
-  const snapshotIds = latestSnapshotIds(db, scope);
+  const snapshotIds = latestSnapshotIds(db, scope, flavor);
   if (snapshotIds.length === 0) return [];
 
   const rows = db

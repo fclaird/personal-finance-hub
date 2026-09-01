@@ -15,6 +15,7 @@ import {
 } from "@/lib/positions/positionsColumnOrder";
 import { usePositionsColumnOrder } from "@/lib/positions/usePositionsColumnOrder";
 import { optionMarginRoiForRow } from "@/lib/options/optionMarginRoiDisplay";
+import { optionPositionTheta } from "@/lib/options/optionPositionTheta";
 import { symbolPageTargetFromInstrument } from "@/lib/symbolPage";
 import { posNegClass } from "@/lib/terminal/colors";
 
@@ -30,6 +31,7 @@ const SYMBOL_POSITIONS_COLUMNS: readonly PositionsColumnId[] = [
   "delta",
   "gamma",
   "theta",
+  "positionTheta",
   "dte",
   "intrinsic",
   "extrinsic",
@@ -179,6 +181,19 @@ export function SymbolPositionsTable({
             {r.theta == null ? "—" : formatNum(r.theta, 3)}
           </td>
         );
+      case "positionTheta": {
+        const posTheta = optionPositionTheta(r);
+        return (
+          <td
+            key={colId}
+            className={
+              "whitespace-nowrap py-1 pr-4 text-right " + (posTheta == null ? "" : posNegClass(posTheta))
+            }
+          >
+            {posTheta == null ? "—" : usd2Masked(posTheta, privacyMasked)}
+          </td>
+        );
+      }
       case "dte":
         return (
           <td key={colId} className="whitespace-nowrap py-1 pr-4 text-right">

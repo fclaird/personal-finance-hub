@@ -137,21 +137,6 @@ export function SymbolCandleChartPanel({
     if (!timeRange.needsEarlierData || loadedFromMs == null) return;
     const next = extendFetchStartMs(windowKey, loadedFromMs);
     if (fetchStartMs == null || next < fetchStartMs) {
-      // #region agent log
-      fetch("http://127.0.0.1:7246/ingest/2ceda99a-8078-4e27-9f3d-2d8ce02fa8d7", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b0a6ec" },
-        body: JSON.stringify({
-          sessionId: "b0a6ec",
-          runId: "post-fix-needsEarlier",
-          location: "SymbolCandleChartPanel.tsx:extend",
-          message: "extend fetch triggered",
-          hypothesisId: "C6",
-          timestamp: Date.now(),
-          data: { symbol, windowKey, next, loadedFromMs, fetchStartMs: fetchStartMs ?? null },
-        }),
-      }).catch(() => {});
-      // #endregion
       setFetchStartMs(next);
     }
   }, [timeRange.needsEarlierData, loadedFromMs, windowKey, fetchStartMs, symbol]);

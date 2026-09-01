@@ -1,8 +1,8 @@
 import type Database from "better-sqlite3";
 
-import { isAuroraExclusiveAccountId } from "@/lib/auroraExclusive";
 import { getDb } from "@/lib/db";
 import { pickEquityUsd, pickSchwabPriorDayEquityUsd } from "@/lib/schwab/accountBalances";
+import { bucketAccountValueAsOf, shouldSkipAccountValueWrite } from "@/lib/schwab/accountValuePoints";
 import { schwabFetch } from "@/lib/schwab/client";
 
 type SchwabAccount = {
@@ -47,7 +47,7 @@ export async function runSchwabAccountValueSync(db?: Database.Database): Promise
   const database = db ?? getDb();
   try {
     const accounts = await schwabFetch<SchwabAccount[]>("accounts");
-    const nowIso = new Date().toISOString();
+    const nowIso = bucketAccountValueAsOf();
 
     const upsert = database.prepare(`
       INSERT INTO account_value_points (account_id, as_of, equity_value, cash_value, prior_equity_value, source)
@@ -67,11 +67,11 @@ export async function runSchwabAccountValueSync(db?: Database.Database): Promise
           (sa.accountNumber != null && String(sa.accountNumber).trim() !== "" ? String(sa.accountNumber) : null);
         if (!acctIdPart) continue;
         const accountId = `schwab_${acctIdPart}`;
-        if (isAuroraExclusiveAccountId(accountId)) continue;
         const cash = pickCashUsd(sa.currentBalances);
         const equity = pickEquityUsd(sa.currentBalances);
         const priorEquity = pickSchwabPriorDayEquityUsd(sa.currentBalances);
         if (equity == null || !Number.isFinite(equity)) continue;
+        if (shouldSkipAccountValueWrite(database, accountId, nowIso, equity)) continue;
         upsert.run({
           account_id: accountId,
           as_of: nowIso,

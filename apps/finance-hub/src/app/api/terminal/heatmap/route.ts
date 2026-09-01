@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 
 import { logError } from "@/lib/log";
-import { DATA_MODE_COOKIE, parseDataMode } from "@/lib/dataMode";
+import { resolveViewScope } from "@/lib/viewScope";
 import { getDb } from "@/lib/db";
 import { BASKETS } from "@/lib/terminal/baskets";
 import { buildTerminalMarketBundle } from "@/lib/terminal/terminalMarketBundle";
@@ -20,13 +19,12 @@ export async function GET(req: Request) {
   const watchlistId = url.searchParams.get("watchlistId");
 
   try {
-    const jar = await cookies();
-    const mode = parseDataMode(jar.get(DATA_MODE_COOKIE)?.value);
+    const { flavor, dataMode: mode } = await resolveViewScope();
 
     let symbols: string[] = [];
     if (view === "spy") symbols = SP500_SYMBOLS.map(normSym).filter(Boolean);
     else if (view === "qqq") symbols = (BASKETS.big50 ?? []).map(normSym).filter(Boolean);
-    else symbols = getTerminalUniverseSymbols({ mode, includeWatchlistId: watchlistId });
+    else symbols = getTerminalUniverseSymbols({ mode, flavor, includeWatchlistId: watchlistId });
 
     const db = getDb();
     const caps =

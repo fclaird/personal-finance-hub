@@ -1,13 +1,14 @@
 import type Database from "better-sqlite3";
 
-import { AURORA_EXCLUSIVE_ACCOUNT_IDS, isAuroraExclusiveAccountId } from "@/lib/auroraExclusive";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
-import { logError } from "@/lib/log";
+import { logError, logLine } from "@/lib/log";
 import type { DataMode } from "@/lib/dataMode";
 import { ensureBenchmarkHistory } from "@/lib/market/benchmarks";
 import { ensureOptionGreeksOnLatestSnapshots } from "@/lib/schwab/ensureOptionGreeks";
 import { pickEquityUsd, pickSchwabPriorDayEquityUsd } from "@/lib/schwab/accountBalances";
+import { bucketAccountValueAsOf, shouldSkipAccountValueWrite } from "@/lib/schwab/accountValuePoints";
+import { pruneHoldingSnapshots } from "@/lib/schwab/pruneHoldingSnapshots";
 import { lastCompletedNyWeekday } from "@/lib/analytics/allocationNyDate";
 import { recordAllocationDailyCloseModes } from "@/lib/analytics/recordAllocationDailyClose";
 import { upsertWeekEndingPortfolioSnapshots } from "@/lib/portfolio/snapshots";
@@ -71,14 +72,12 @@ export async function runSchwabHoldingsSync(
   opts?: { db?: Database.Database; dataMode?: DataMode },
 ): Promise<SchwabHoldingsSyncResult> {
   const db = opts?.db ?? getDb();
-  const nowIso = new Date().toISOString();
+    const nowIso = new Date().toISOString();
+    const accountValueAsOf = bucketAccountValueAsOf();
 
   try {
     db.prepare(`DELETE FROM accounts WHERE id = 'schwab_undefined'`).run();
     db.prepare(`DELETE FROM accounts WHERE id LIKE 'demo_%'`).run();
-    for (const auroraId of AURORA_EXCLUSIVE_ACCOUNT_IDS) {
-      db.prepare(`DELETE FROM accounts WHERE id = ?`).run(auroraId);
-    }
 
     let accounts: Array<SchwabAccount & { __accountNumber: string | null }> = [];
     try {
@@ -170,7 +169,6 @@ export async function runSchwabHoldingsSync(
           newId("schwabacct");
 
         const accountId = `schwab_${acctIdPart}`;
-        if (isAuroraExclusiveAccountId(accountId)) continue;
         upsertAccount.run({
           id: accountId,
           connection_id: connId,
@@ -265,18 +263,27 @@ export async function runSchwabHoldingsSync(
         const equityValue =
           equityFromBalances ?? (cashUsd ?? 0) + (hasAnyPosMv ? computedPositionsMv : 0);
         if (Number.isFinite(equityValue)) {
-          upsertAccountValuePoint.run({
-            account_id: accountId,
-            as_of: nowIso,
-            equity_value: equityValue,
-            cash_value: cashUsd,
-            prior_equity_value: priorEquity,
-          });
+          if (!shouldSkipAccountValueWrite(db, accountId, accountValueAsOf, equityValue)) {
+            upsertAccountValuePoint.run({
+              account_id: accountId,
+              as_of: accountValueAsOf,
+              equity_value: equityValue,
+              cash_value: cashUsd,
+              prior_equity_value: priorEquity,
+            });
+          }
         }
       }
     });
 
     tx();
+
+    try {
+      const pruned = pruneHoldingSnapshots(db);
+      if (pruned > 0) logLine(`holding_snapshots_pruned count=${pruned}`);
+    } catch (e) {
+      logError("holding_snapshots_prune_failed", e);
+    }
 
     try {
       ensureOptionGreeksOnLatestSnapshots(db);

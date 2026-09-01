@@ -9,6 +9,7 @@ export type TerminalHeatmapItem = {
   changePercent: number | null;
   marketCap: number | null;
   companyName: string | null;
+  spotPrice: number | null;
 };
 
 function asNumber(v: unknown): number | null {
@@ -63,7 +64,13 @@ export async function buildTerminalMarketBundle(
         companyName,
         updatedAt: nowIso,
       });
-      heatItems.push({ symbol: sym, changePercent: null, marketCap: capMap.get(sym) ?? null, companyName });
+      heatItems.push({
+        symbol: sym,
+        changePercent: null,
+        marketCap: capMap.get(sym) ?? null,
+        companyName,
+        spotPrice: null,
+      });
       continue;
     }
 
@@ -111,6 +118,7 @@ export async function buildTerminalMarketBundle(
       changePercent: changePercent == null ? null : changePercent,
       marketCap: capMap.get(sym) ?? null,
       companyName,
+      spotPrice: last,
     });
   }
 

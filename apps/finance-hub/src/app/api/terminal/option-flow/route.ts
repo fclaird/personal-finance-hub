@@ -1,14 +1,13 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { schwabMarketFetch } from "@/lib/schwab/client";
-import { DATA_MODE_COOKIE, parseDataMode } from "@/lib/dataMode";
 import {
   optionFlowSessionDate,
   recordOptionFlowVolumes,
   trailingAvgOptionVolume,
 } from "@/lib/terminal/optionFlowHistory";
 import { getTerminalUniverseSymbols } from "@/lib/terminal/universe";
+import { resolveViewScope } from "@/lib/viewScope";
 
 export type OptionFlowItem = {
   symbol: string;
@@ -57,10 +56,9 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const watchlistId = url.searchParams.get("watchlistId");
 
-  const jar = await cookies();
-  const mode = parseDataMode(jar.get(DATA_MODE_COOKIE)?.value);
+  const { flavor, dataMode: mode } = await resolveViewScope();
 
-  const symbols = getTerminalUniverseSymbols({ mode, includeWatchlistId: watchlistId })
+  const symbols = getTerminalUniverseSymbols({ mode, flavor, includeWatchlistId: watchlistId })
     .map(normSym)
     .filter(Boolean)
     .slice(0, MAX_SYMBOLS);

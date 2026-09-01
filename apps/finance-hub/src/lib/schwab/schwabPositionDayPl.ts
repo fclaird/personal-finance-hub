@@ -26,6 +26,7 @@ export type UnderlyingDayPlPosition = {
   underlyingSymbol?: string | null;
   effectiveUnderlyingSymbol?: string | null;
   metadataJson?: string | null;
+  schwabDayProfitLoss?: number | null;
 };
 
 /** Group key for quotes heatmap rows: equity symbol or option underlying. */
@@ -47,7 +48,7 @@ export function aggregateUnderlyingDayPlFromPositions(
 ): Map<string, number> {
   const out = new Map<string, number>();
   for (const p of positions) {
-    const pl = schwabCurrentDayProfitLoss(p.metadataJson);
+    const pl = p.schwabDayProfitLoss ?? schwabCurrentDayProfitLoss(p.metadataJson);
     if (pl == null) continue;
     const key = underlyingKeyForDayPl(p);
     if (!key) continue;

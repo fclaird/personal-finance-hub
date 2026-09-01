@@ -1,4 +1,3 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import {
@@ -6,9 +5,9 @@ import {
   type AllocationHistoryBucket,
   type AllocationHistoryMetric,
 } from "@/lib/analytics/allocationUnderlyingHistoryQuery";
-import { DATA_MODE_COOKIE, parseDataMode } from "@/lib/dataMode";
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
+import { resolveViewScope } from "@/lib/viewScope";
 
 function isBucket(s: string): s is AllocationHistoryBucket {
   return s === "net" || s === "brokerage" || s === "retirement" || s === "529";
@@ -20,8 +19,7 @@ function isMetric(s: string): s is AllocationHistoryMetric {
 
 export async function GET(req: Request) {
   try {
-    const jar = await cookies();
-    const mode = parseDataMode(jar.get(DATA_MODE_COOKIE)?.value);
+    const { dataMode: mode } = await resolveViewScope();
     const { searchParams } = new URL(req.url);
     const daysRaw = Number(searchParams.get("days") ?? "365");
     const days = Number.isFinite(daysRaw) ? Math.min(730, Math.max(1, Math.floor(daysRaw))) : 365;

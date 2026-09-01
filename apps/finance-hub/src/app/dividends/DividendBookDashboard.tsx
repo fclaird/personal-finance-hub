@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, Treemap, XAxis, YAxis } from "recharts";
 
 import { TerminalTreemapWeightControls } from "@/app/components/terminal/TerminalTreemapWeightControls";
@@ -21,7 +21,7 @@ import {
   EARTH_TONE_PIE_COLORS,
   assignColorsForAdjacentContrast,
 } from "@/lib/charts/pieEarthTones";
-import { formatUsd2 } from "@/lib/format";
+import { formatUsd2, formatUsdCompact } from "@/lib/format";
 import { formatDisplayDate, formatDisplayMonth } from "@/lib/formatDate";
 
 function usd(v: number | null, mask: boolean) {
@@ -32,6 +32,145 @@ function usd(v: number | null, mask: boolean) {
 function pct(v: number | null) {
   if (v == null || !Number.isFinite(v)) return "—";
   return `${v.toFixed(1)}%`;
+}
+
+function yieldLineLabel(
+  yieldPct: number | null | undefined,
+  annualUsd: number | null | undefined,
+  mask: boolean,
+) {
+  const pct = yieldPct != null && Number.isFinite(yieldPct) ? `${yieldPct.toFixed(1)}%` : null;
+  const usd =
+    annualUsd != null && Number.isFinite(annualUsd) ? formatUsdCompact(annualUsd, { mask }) : null;
+  if (pct && usd) return `yield -> ${pct} = ${usd}/yr`;
+  if (pct) return `yield -> ${pct}`;
+  if (usd) return `yield -> ${usd}/yr`;
+  return "yield -> —";
+}
+
+type DividendTreemapRow = {
+  name: string;
+  symbol: string;
+  size: number;
+  sizeLine: string;
+  yieldLine: string;
+  fill: string;
+};
+
+function DividendTreemapCell(props: Record<string, unknown>) {
+  const { x, y, width, height, payload } = props;
+  const p = (payload ?? props) as DividendTreemapRow;
+  const x0 = Number(x);
+  const y0 = Number(y);
+  const w = Number(width);
+  const h = Number(height);
+  if (!Number.isFinite(w) || w < 2 || !Number.isFinite(h) || h < 2) return null;
+
+  const sym = p.symbol ?? "";
+  const sizeLine = p.sizeLine ?? "—";
+  const yieldLine = p.yieldLine ?? "yield -> —";
+  const fill = p.fill ?? "#3f3f46";
+  const clipId = `div-tm-${sym}-${Math.round(x0)}-${Math.round(y0)}`.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const tc = "#ffffff";
+  const minDim = Math.min(w, h);
+  const area = w * h;
+  const fsSym = Math.round(Math.max(9, Math.min(22, minDim * 0.14 + Math.sqrt(area) * 0.016)));
+  const fsSize = Math.max(8, Math.round(fsSym * 0.78));
+  const fsYield = Math.max(7, Math.round(fsSym * 0.68));
+  const gap1 = Math.max(2, Math.round(fsSym * 0.12));
+  const gap2 = Math.max(3, Math.round(fsSym * 0.2));
+  const blockH = fsSym * 1.05 + gap1 + fsSize * 1.05 + gap2 + fsYield * 1.05;
+  const cx = x0 + w / 2;
+  const cy = y0 + h / 2;
+  const textStroke = "rgba(0,0,0,0.72)";
+  const textStyle = (strokeW: number): CSSProperties => ({
+    paintOrder: "stroke fill",
+    stroke: textStroke,
+    strokeWidth: strokeW,
+  });
+
+  if (minDim < 22 || h < 20) {
+    return (
+      <g>
+        <title>{`${sym} · ${sizeLine} · ${yieldLine}`}</title>
+        <rect x={x0} y={y0} width={w} height={h} fill={fill} stroke="#09090b" strokeWidth={1} />
+      </g>
+    );
+  }
+
+  if (h < blockH + 4 || w < 40) {
+    const fsSmall = Math.max(8, Math.min(13, Math.round(minDim * 0.36)));
+    return (
+      <g>
+        <title>{`${sym} · ${sizeLine} · ${yieldLine}`}</title>
+        <rect x={x0} y={y0} width={w} height={h} fill={fill} stroke="#09090b" strokeWidth={1} />
+        <text
+          x={cx}
+          y={cy + fsSmall * 0.35}
+          textAnchor="middle"
+          fill={tc}
+          fontSize={fsSmall}
+          fontWeight={800}
+          style={textStyle(Math.max(1.5, fsSmall * 0.14))}
+        >
+          {sym}
+        </text>
+      </g>
+    );
+  }
+
+  const ySym = cy - blockH / 2 + fsSym * 0.88;
+  const ySize = ySym + gap1 + fsSize * 0.85;
+  const yYield = ySize + gap2 + fsYield * 0.85;
+
+  return (
+    <g>
+      <defs>
+        <clipPath id={clipId}>
+          <rect x={x0} y={y0} width={w} height={h} rx={1} />
+        </clipPath>
+      </defs>
+      <title>{`${sym} · ${sizeLine} · ${yieldLine}`}</title>
+      <rect x={x0} y={y0} width={w} height={h} fill={fill} stroke="#09090b" strokeWidth={1} />
+      <g clipPath={`url(#${clipId})`}>
+        <text
+          x={cx}
+          y={ySym}
+          textAnchor="middle"
+          fill={tc}
+          fontSize={fsSym}
+          fontWeight={800}
+          style={textStyle(Math.max(2, fsSym * 0.14))}
+        >
+          {sym}
+        </text>
+        <text
+          x={cx}
+          y={ySize}
+          textAnchor="middle"
+          fill={tc}
+          fontSize={fsSize}
+          fontWeight={600}
+          opacity={0.98}
+          style={textStyle(Math.max(1.5, fsSize * 0.12))}
+        >
+          {sizeLine}
+        </text>
+        <text
+          x={cx}
+          y={yYield}
+          textAnchor="middle"
+          fill={tc}
+          fontSize={fsYield}
+          fontWeight={500}
+          opacity={0.92}
+          style={textStyle(Math.max(1.2, fsYield * 0.12))}
+        >
+          {yieldLine}
+        </text>
+      </g>
+    </g>
+  );
 }
 
 function num(v: number | null, d = 2) {
@@ -192,12 +331,13 @@ export function DividendBookDashboard({ dashboard, masked }: Props) {
         const size = treemapMvBySym.get(t.symbol.toUpperCase()) ?? t.value;
         if (!Number.isFinite(size) || size <= 0) return null;
         const sharePct = totalValue > 0 ? (size / totalValue) * 100 : null;
-        const label =
-          treemapLabelMode === "dollars"
-            ? `${t.symbol}\n${usd(size, masked)}`
-            : `${t.symbol}\n${pct(sharePct)}`;
+        const sizeLine =
+          treemapLabelMode === "dollars" ? usd(size, masked) : pct(sharePct);
         return {
-          name: label,
+          name: t.symbol,
+          symbol: t.symbol,
+          sizeLine,
+          yieldLine: yieldLineLabel(t.yieldPct, t.annualDivUsd, masked),
           size,
           fill: colorBySym.get(t.symbol) ?? distinctColorForIndex(0),
         };
@@ -499,6 +639,7 @@ export function DividendBookDashboard({ dashboard, masked }: Props) {
                 aspectRatio={4 / 3}
                 stroke="#09090b"
                 isAnimationActive={false}
+                content={<DividendTreemapCell />}
               />
             </ResponsiveContainer>
           )}

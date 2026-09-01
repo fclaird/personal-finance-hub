@@ -15,6 +15,7 @@ import {
 } from "@/lib/holdings/latestSnapshots";
 import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
 import type { DataMode } from "@/lib/dataMode";
+import type { FlavorId } from "@/lib/flavor";
 import type { AnalyticsBucketKey } from "@/lib/accountBuckets";
 import { bucketFromAccount } from "@/lib/accountBuckets";
 
@@ -53,10 +54,11 @@ export function getConsolidatedAllocation(
   includeSynthetic: boolean,
   mode: DataMode = "auto",
   equityMarkMap?: Map<string, number>,
+  flavor: FlavorId = "main",
 ): AllocationResult {
   const db = getDb();
   const scope = latestSnapshotScopeForMode(mode);
-  const snapshotIds = latestSnapshotIds(db, scope);
+  const snapshotIds = latestSnapshotIds(db, scope, flavor);
   if (snapshotIds.length === 0) return { totalMarketValue: 0, byAssetClass: [] };
 
   const rows = db
@@ -90,7 +92,7 @@ export function getConsolidatedAllocation(
 
   if (includeSynthetic) {
     // Add synthetic option delta exposure into equities bucket.
-    const exposures = getUnderlyingExposureRollup(mode, equityMarkMap);
+    const exposures = getUnderlyingExposureRollup(mode, equityMarkMap, flavor);
     const syntheticEquityMv = exposures.reduce((sum, e) => sum + e.syntheticMarketValue, 0);
     buckets.set("equity", (buckets.get("equity") ?? 0) + syntheticEquityMv);
   }
@@ -111,10 +113,11 @@ export function getAllocationByAccount(
   includeSynthetic: boolean,
   mode: DataMode = "auto",
   equityMarkMap?: Map<string, number>,
+  flavor: FlavorId = "main",
 ): AllocationByAccountRow[] {
   const db = getDb();
   const priceByUnderlying =
-    includeSynthetic ? (equityMarkMap ?? portfolioImpliedEquityPriceMap(db, mode)) : undefined;
+    includeSynthetic ? (equityMarkMap ?? portfolioImpliedEquityPriceMap(db, mode, flavor)) : undefined;
 
   const snapshots = db
     .prepare(
@@ -123,7 +126,7 @@ export function getAllocationByAccount(
       FROM holding_snapshots hs
       JOIN accounts a ON a.id = hs.account_id
       ${latestSnapshotPerAccountJoinSql("hs")}
-      WHERE ${accountsInDataModeWhereSql(mode, "a")}
+      WHERE ${accountsInDataModeWhereSql(mode, flavor, "a")}
       ORDER BY a.name ASC
     `,
     )
@@ -242,12 +245,13 @@ export function getAllocationByBucket(
   includeSynthetic: boolean,
   mode: DataMode = "auto",
   equityMarkMap?: Map<string, number>,
+  flavor: FlavorId = "main",
 ): AllocationBucketedResult {
   const db = getDb();
   const priceByUnderlying =
-    includeSynthetic ? (equityMarkMap ?? portfolioImpliedEquityPriceMap(db, mode)) : undefined;
+    includeSynthetic ? (equityMarkMap ?? portfolioImpliedEquityPriceMap(db, mode, flavor)) : undefined;
   const scope = latestSnapshotScopeForMode(mode);
-  const snapshotIdSet = new Set(latestSnapshotIds(db, scope));
+  const snapshotIdSet = new Set(latestSnapshotIds(db, scope, flavor));
 
   const snapshots = db
     .prepare(
@@ -295,7 +299,7 @@ export function getAllocationByBucket(
     if (includeSynthetic) {
       buckets.set(
         "equity",
-        (buckets.get("equity") ?? 0) + syntheticEquityMvForSnapshot(db, s.snapshot_id, mode, priceByUnderlying),
+        (buckets.get("equity") ?? 0) + syntheticEquityMvForSnapshot(db, s.snapshot_id, mode, priceByUnderlying, flavor),
       );
     }
   }

@@ -38,12 +38,16 @@ Complete this checklist **before** binding to `0.0.0.0` or exposing the app via 
 
 When `FINANCE_HUB_API_KEY` is set, the UI shows a one-time prompt (stored in `sessionStorage` for the browser tab). All `fetch` calls are patched to include the Bearer token.
 
-## OAuth callbacks (exempt from API key)
+## OAuth routes (exempt from API key)
 
+- `/api/schwab/start`
 - `/api/schwab/callback`
+- `/api/x/oauth/start`
 - `/api/x/oauth/callback`
 
-These must remain reachable for broker OAuth redirects.
+These must remain reachable for broker OAuth (browser “Connect” navigation and redirect callbacks carry no Bearer header).
+
+`/api/flavor`, `/api/plaid/*`, and all other `/api/*` routes require `FINANCE_HUB_API_KEY` when LAN auth is enabled.
 
 ## Cron / internal routes (when LAN auth is enabled)
 

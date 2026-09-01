@@ -37,7 +37,8 @@ function nearPrice(a: number, b: number): boolean {
 }
 
 export function isIndexedGlanceChartItem(item: UsMarketGlanceItem): boolean {
-  return item.id === "portfolio" || item.valueMode === "percent";
+  if (item.id === "portfolio") return item.valueMode !== "price";
+  return item.valueMode === "percent";
 }
 
 export function resolvePriorSessionClose(item: UsMarketGlanceItem): number | null {
@@ -71,10 +72,11 @@ export function indexTileChartRows(rows: TileChartRow[], item: UsMarketGlanceIte
 /** RTH path in regular column; pre/post in extended (gray). Prior close anchors the left. */
 export function buildTileChartRows(
   item: UsMarketGlanceItem,
-  options?: { omitPriorAnchor?: boolean },
+  options?: { omitPriorAnchor?: boolean; bridgeTradingGaps?: boolean },
 ): TileChartRow[] {
   const prev = item.previousClose;
   const rows: TileChartRow[] = [];
+  const bridgeGaps = options?.bridgeTradingGaps !== false && item.id !== "portfolio";
 
   if (prev != null && Number.isFinite(prev) && !options?.omitPriorAnchor) {
     rows.push({ idx: 0, regular: prev, extended: null, segment: "prior" });
@@ -83,7 +85,7 @@ export function buildTileChartRows(
   for (const p of item.series) {
     if (rows.length === 1 && prev != null && nearPrice(p.close, prev)) continue;
     const lastRow = rows[rows.length - 1];
-    if (lastRow?.tsMs != null && p.tsMs != null && hasTradingGap(lastRow.tsMs, p.tsMs)) {
+    if (lastRow?.tsMs != null && p.tsMs != null && bridgeGaps && hasTradingGap(lastRow.tsMs, p.tsMs)) {
       rows.push({
         idx: rows.length,
         regular: null,
@@ -124,7 +126,7 @@ export function buildTileChartRows(
     start = 1;
   }
 
-  if (start < ext.length && hasTradingGap(lastRow?.tsMs, ext[start]!.tsMs)) {
+  if (start < ext.length && bridgeGaps && hasTradingGap(lastRow?.tsMs, ext[start]!.tsMs)) {
     rows.push({
       idx: rows.length,
       regular: null,
@@ -134,7 +136,7 @@ export function buildTileChartRows(
   }
 
   for (let i = start; i < ext.length; i++) {
-    if (i > start && hasTradingGap(ext[i - 1]!.tsMs, ext[i]!.tsMs)) {
+    if (i > start && bridgeGaps && hasTradingGap(ext[i - 1]!.tsMs, ext[i]!.tsMs)) {
       rows.push({
         idx: rows.length,
         regular: null,

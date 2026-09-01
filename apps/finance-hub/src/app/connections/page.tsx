@@ -1,11 +1,21 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { EditablePageHeading } from "@/app/components/EditableHeading";
+import { FlavorPasswordDialog } from "@/app/components/FlavorPasswordDialog";
+import type { FlavorId } from "@/lib/flavor";
 import { formatDisplayDateTime } from "@/lib/formatDate";
 import { MAX_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
+
+type FlavorOption = {
+  id: FlavorId;
+  label: string;
+  features: { plaid: boolean };
+  passwordRequired?: boolean;
+};
 
 type SyncResult = { ok: boolean; accounts?: number; error?: string };
 type TxSyncResult = {
@@ -42,7 +52,21 @@ declare global {
   }
 }
 
+function flavorPillClass(active: boolean) {
+  return (
+    "rounded-full px-4 py-2 text-sm font-medium " +
+    (active
+      ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
+      : "border border-zinc-300 bg-white text-zinc-900 shadow-sm hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
+  );
+}
+
 export default function ConnectionsPage() {
+  const router = useRouter();
+  const [flavor, setFlavor] = useState<FlavorId | null>(null);
+  const [flavorOptions, setFlavorOptions] = useState<FlavorOption[]>([]);
+  const [pendingFlavor, setPendingFlavor] = useState<FlavorId | null>(null);
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncingTx, setSyncingTx] = useState(false);
   const [result, setResult] = useState<SyncResult | null>(null);
@@ -78,12 +102,55 @@ export default function ConnectionsPage() {
     }
   }
 
+  async function loadFlavor() {
+    try {
+      const resp = await fetch("/api/flavor", { cache: "no-store" });
+      const json = (await resp.json()) as {
+        ok: boolean;
+        flavor?: FlavorId | null;
+        flavors?: FlavorOption[];
+      };
+      if (json.ok) {
+        setFlavor(json.flavor ?? null);
+        setFlavorOptions(json.flavors ?? []);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  function beginFlavorUnlock(next: FlavorId) {
+    setPendingFlavor(next);
+    setPasswordOpen(true);
+  }
+
+  function closePasswordDialog() {
+    setPasswordOpen(false);
+    setPendingFlavor(null);
+  }
+
+  function onFlavorUnlocked(unlocked: FlavorId) {
+    setFlavor(unlocked);
+    setPasswordOpen(false);
+    setPendingFlavor(null);
+    router.push("/terminal");
+  }
+
+  const pendingFlavorLabel =
+    pendingFlavor != null ? (flavorOptions.find((f) => f.id === pendingFlavor)?.label ?? pendingFlavor) : "";
+  const pendingPasswordRequired =
+    pendingFlavor != null ? flavorOptions.find((f) => f.id === pendingFlavor)?.passwordRequired : undefined;
+
   useEffect(() => {
     const t = setTimeout(() => {
+      void loadFlavor();
       void loadSchwabStatus();
     }, 0);
     return () => clearTimeout(t);
   }, []);
+
+  const showPlaid = flavor == null || flavorOptions.find((f) => f.id === flavor)?.features.plaid !== false;
+  const tileOrder = showPlaid ? (["flavor", "schwab", "plaid"] as const) : (["flavor", "schwab"] as const);
 
   async function syncNow() {
     setSyncing(true);
@@ -137,19 +204,68 @@ export default function ConnectionsPage() {
 
   return (
     <div className="flex w-full max-w-[84rem] flex-1 flex-col gap-8 py-10 pl-5 pr-6 sm:pl-6 sm:pr-8">
+      <FlavorPasswordDialog
+        flavor={pendingFlavor}
+        label={pendingFlavorLabel}
+        passwordRequired={pendingPasswordRequired}
+        open={passwordOpen}
+        onClose={closePasswordDialog}
+        onSuccess={onFlavorUnlocked}
+      />
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">
           <EditablePageHeading pageId="connections" defaultTitle="Welcome" />
         </h1>
         <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-          This is local-only. Tokens are stored encrypted on disk using `FINANCE_HUB_PASSPHRASE`.
+          Choose a flavor to scope accounts and navigation, then connect Schwab. Tokens are stored encrypted on disk
+          using `FINANCE_HUB_PASSPHRASE`.
         </p>
       </div>
 
       <DraggableTileLayout
-        storageKey="fh.connections.tiles.v1"
-        defaultOrder={["schwab", "plaid"]}
+        storageKey="fh.connections.tiles.v2"
+        defaultOrder={[...tileOrder]}
         tiles={{
+          flavor: {
+            title: "Flavor",
+            children: (
+              <>
+                <div className="text-sm text-zinc-600 dark:text-zinc-400">
+                  Select a flavor, then enter its password to open the terminal. You can switch flavors here anytime.
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {flavorOptions.map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      className={flavorPillClass(flavor === f.id)}
+                      onClick={() => beginFlavorUnlock(f.id)}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+                {flavor == null ? (
+                  <div className="mt-4 rounded-xl border border-amber-300/70 bg-amber-50/80 px-3 py-2 text-sm text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                    Pick a flavor and enter the password to continue.
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-xl bg-zinc-50 px-3 py-2 text-sm text-zinc-800 dark:bg-black/40 dark:text-zinc-200">
+                    Last unlocked:{" "}
+                    <span className="font-semibold">{flavorOptions.find((f) => f.id === flavor)?.label ?? flavor}</span>
+                    {" · "}
+                    <button
+                      type="button"
+                      className="font-medium underline underline-offset-2"
+                      onClick={() => beginFlavorUnlock(flavor)}
+                    >
+                      Re-enter to open terminal
+                    </button>
+                  </div>
+                )}
+              </>
+            ),
+          },
           schwab: {
             title: "Schwab",
             children: (
@@ -280,73 +396,77 @@ export default function ConnectionsPage() {
               </>
             ),
           },
-          plaid: {
-            title: "Plaid (later)",
-            children: (
-              <>
-        <div className="text-sm text-zinc-600 dark:text-zinc-400">
-          We’ll add Plaid as an alternate ingestion path (and for Vanguard 529 later).
-        </div>
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
-            onClick={async () => {
-              const ensurePlaid = () =>
-                new Promise<void>((resolve, reject) => {
-                  if (window.Plaid) return resolve();
-                  const s = document.createElement("script");
-                  s.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
-                  s.async = true;
-                  s.onload = () => resolve();
-                  s.onerror = () => reject(new Error("Failed to load Plaid Link script"));
-                  document.head.appendChild(s);
-                });
+          ...(showPlaid
+            ? {
+                plaid: {
+                  title: "Plaid (later)",
+                  children: (
+                    <>
+                      <div className="text-sm text-zinc-600 dark:text-zinc-400">
+                        We’ll add Plaid as an alternate ingestion path (and for Vanguard 529 later).
+                      </div>
+                      <div className="mt-4 flex flex-wrap items-center gap-3">
+                        <button
+                          type="button"
+                          className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
+                          onClick={async () => {
+                            const ensurePlaid = () =>
+                              new Promise<void>((resolve, reject) => {
+                                if (window.Plaid) return resolve();
+                                const s = document.createElement("script");
+                                s.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
+                                s.async = true;
+                                s.onload = () => resolve();
+                                s.onerror = () => reject(new Error("Failed to load Plaid Link script"));
+                                document.head.appendChild(s);
+                              });
 
-              await ensurePlaid();
-              const ltResp = await fetch("/api/plaid/link-token", { method: "POST" });
-              const raw = await ltResp.text().catch(() => "");
-              let ltJson: { ok: boolean; link_token?: string; error?: string };
-              try {
-                ltJson = raw ? (JSON.parse(raw) as typeof ltJson) : { ok: false, error: "Empty response" };
-              } catch {
-                throw new Error(
-                  `Plaid link token failed (${ltResp.status}): ${raw?.slice(0, 280) || "non-JSON body"}`,
-                );
-              }
-              if (!ltJson.ok || !ltJson.link_token) {
-                throw new Error(ltJson.error ?? `Failed to create link token (${ltResp.status})`);
-              }
+                            await ensurePlaid();
+                            const ltResp = await fetch("/api/plaid/link-token", { method: "POST" });
+                            const raw = await ltResp.text().catch(() => "");
+                            let ltJson: { ok: boolean; link_token?: string; error?: string };
+                            try {
+                              ltJson = raw ? (JSON.parse(raw) as typeof ltJson) : { ok: false, error: "Empty response" };
+                            } catch {
+                              throw new Error(
+                                `Plaid link token failed (${ltResp.status}): ${raw?.slice(0, 280) || "non-JSON body"}`,
+                              );
+                            }
+                            if (!ltJson.ok || !ltJson.link_token) {
+                              throw new Error(ltJson.error ?? `Failed to create link token (${ltResp.status})`);
+                            }
 
-              const handler = window.Plaid?.create({
-                token: ltJson.link_token,
-                onSuccess: async (public_token: string) => {
-                  await fetch("/api/plaid/exchange", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ public_token }),
-                  });
+                            const handler = window.Plaid?.create({
+                              token: ltJson.link_token,
+                              onSuccess: async (public_token: string) => {
+                                await fetch("/api/plaid/exchange", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ public_token }),
+                                });
+                              },
+                            });
+                            if (!handler) throw new Error("Plaid Link is not available");
+                            handler.open();
+                          }}
+                        >
+                          Connect Plaid
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
+                          onClick={async () => {
+                            await fetch("/api/plaid/sync", { method: "POST" });
+                          }}
+                        >
+                          Sync Plaid holdings
+                        </button>
+                      </div>
+                    </>
+                  ),
                 },
-              });
-              if (!handler) throw new Error("Plaid Link is not available");
-              handler.open();
-            }}
-          >
-            Connect Plaid
-          </button>
-          <button
-            type="button"
-            className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
-            onClick={async () => {
-              await fetch("/api/plaid/sync", { method: "POST" });
-            }}
-          >
-            Sync Plaid holdings
-          </button>
-        </div>
-              </>
-            ),
-          },
+              }
+            : {}),
         }}
       />
     </div>

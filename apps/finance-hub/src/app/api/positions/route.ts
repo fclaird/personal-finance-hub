@@ -5,8 +5,12 @@ import { logError } from "@/lib/log";
 import { isManualAccountId, parseManualPositionMetadata } from "@/lib/manual/manualAccounts";
 import { isPosterityAccountId, notPosterityWhereSql } from "@/lib/posterity";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
-import { latestSnapshotIds as latestSyncedSnapshotIds } from "@/lib/holdings/latestSnapshots";
+import { latestSnapshotIds as latestSyncedSnapshotIds, latestSnapshotScopeForMode } from "@/lib/holdings/latestSnapshots";
+import { isAccountInFlavor } from "@/lib/flavors/accounts";
+import { resolveViewScope } from "@/lib/viewScope";
 import { resolvePositionAveragePrice } from "@/lib/holdings/positionAveragePrice";
+import { ensureFreshOptionData } from "@/lib/schwab/ensureOptionGreeks";
+import { schwabCurrentDayProfitLoss } from "@/lib/schwab/schwabPositionDayPl";
 import { buildLiveEquityMarkMap, resolveEquityMarkPx } from "@/lib/market/liveEquityMarks";
 import { normalizeEquitySymbol } from "@/lib/market/equityMarkPrice";
 import {
@@ -289,12 +293,14 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
         marketValue = r.marketValue;
       }
       return {
-        ...r,
+        accountId: r.accountId,
+        positionId: r.positionId,
         symbol: r.symbol ?? "",
         securityName: r.securityName ?? "",
         effectiveUnderlyingSymbol: sym,
         price,
         marketValue,
+        averagePrice: price,
         optionExpiration: null,
         optionRight: null,
         optionStrike: null,
@@ -303,6 +309,11 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
         extrinsic: null,
         isManual,
         purchaseDate: manualMeta?.purchaseDate ?? null,
+        quantity: r.quantity,
+        securityType: r.securityType,
+        underlyingSymbol: r.underlyingSymbol,
+        asOf: r.asOf,
+        schwabDayProfitLoss: schwabCurrentDayProfitLoss(r.metadataJson),
       };
     }
 
@@ -340,7 +351,8 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
     const extrinsic = intrinsic == null ? null : premium - intrinsic;
 
     return {
-      ...r,
+      positionId: r.positionId,
+      accountId: r.accountId,
       symbol: r.symbol ?? "",
       securityName: r.securityName ?? "",
       effectiveUnderlyingSymbol,
@@ -355,6 +367,11 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
       extrinsic,
       isManual,
       purchaseDate: manualMeta?.purchaseDate ?? null,
+      quantity: r.quantity,
+      securityType: r.securityType,
+      underlyingSymbol: r.underlyingSymbol,
+      asOf: r.asOf,
+      schwabDayProfitLoss: schwabCurrentDayProfitLoss(r.metadataJson),
     };
   });
 
@@ -396,7 +413,9 @@ export async function GET(req: Request) {
     const snapshotId = url.searchParams.get("snapshotId");
 
     const db = getDb();
-    const latest = latestSnapshotId(db);
+    const { flavor, dataMode: mode } = await resolveViewScope();
+    await ensureFreshOptionData({ db });
+    const latest = latestSnapshotId(db, mode);
 
     let snaps: string[] = [];
     let responseSnapshotLabel: string | null = null;
@@ -407,6 +426,9 @@ export async function GET(req: Request) {
           { ok: false, error: "Posterity accounts are not served by this route; use posterity APIs." },
           { status: 400 },
         );
+      }
+      if (!isAccountInFlavor(flavor, accountIdParam)) {
+        return NextResponse.json({ ok: false, error: "Account not in active flavor scope" }, { status: 400 });
       }
       const snap = db
         .prepare(
@@ -419,7 +441,7 @@ export async function GET(req: Request) {
       snaps = [snapshotId];
       responseSnapshotLabel = snapshotId;
     } else {
-      snaps = latestSyncedSnapshotIds(db, "all_synced");
+      snaps = latestSyncedSnapshotIds(db, latestSnapshotScopeForMode(mode), flavor);
       responseSnapshotLabel = latest ?? null;
     }
 
@@ -441,22 +463,24 @@ export async function GET(req: Request) {
     const out = await buildPositionsForSnapshots(db, snaps);
     const nonIndividualSecuritySymbols = nonIndividualSecuritySymbolsForSnapshots(db, snaps);
 
-    const accounts = db
-      .prepare(
-        `
+    const accounts = (
+      db
+        .prepare(
+          `
         SELECT id, name, nickname, type, connection_id, account_bucket AS accountBucket
         FROM accounts
         ORDER BY name ASC
       `,
-      )
-      .all() as Array<{
-      id: string;
-      name: string;
-      nickname: string | null;
-      type: string;
-      connection_id: string;
-      accountBucket: string | null;
-    }>;
+        )
+        .all() as Array<{
+        id: string;
+        name: string;
+        nickname: string | null;
+        type: string;
+        connection_id: string;
+        accountBucket: string | null;
+      }>
+    ).filter((a) => isAccountInFlavor(flavor, a.id) && !isPosterityAccountId(a.id));
 
     return NextResponse.json({
       ok: true,

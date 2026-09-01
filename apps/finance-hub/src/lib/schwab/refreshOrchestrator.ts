@@ -8,7 +8,10 @@ import { runSchwabHoldingsSync } from "@/lib/schwab/holdingsSync";
 import { runSchwabGreeksRefresh } from "@/lib/schwab/schwabGreeksRefresh";
 import { runSchwabQuotesPersist } from "@/lib/schwab/schwabQuotesPersist";
 import { runSchwabAccountValueSync } from "@/lib/schwab/schwabAccountValueSync";
+import { pruneSchwabRefreshRuns } from "@/lib/schwab/pruneHoldingSnapshots";
 import { runSchwabTaxonomySyncForPortfolio } from "@/lib/schwab/schwabTaxonomySync";
+import { syncSchwabBrokerTransactions } from "@/lib/schwab/syncBrokerTransactions";
+import { SCHWAB_REFRESH_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
 
 export type SchwabRefreshBundle = "rth" | "slow" | "closed";
 
@@ -116,6 +119,11 @@ function finishRefreshRun(
     quotes_symbols: quotesSymbols,
     holdings_as_of: holdingsAsOf,
   });
+  try {
+    pruneSchwabRefreshRuns(db);
+  } catch {
+    // non-fatal retention trim
+  }
 }
 
 export async function runSchwabRefresh(
@@ -174,7 +182,19 @@ export async function runSchwabRefresh(
         ),
       );
 
-      steps.push(await runStep("account_value", () => runSchwabAccountValueSync(db)));
+      steps.push(
+        await runStep("transactions", async () => {
+          const res = await syncSchwabBrokerTransactions({
+            db,
+            lookbackDays: SCHWAB_REFRESH_TRANSACTION_LOOKBACK_DAYS,
+          });
+          return { ok: true, ...res };
+        }),
+      );
+
+      if (!h.ok) {
+        steps.push(await runStep("account_value", () => runSchwabAccountValueSync(db)));
+      }
     }
 
     const ok = steps.length === 0 || steps.every((s) => s.ok);
@@ -191,27 +211,46 @@ export async function runSchwabRefresh(
   }
 }
 
+/** Lightweight RTH account-value sync for portfolio glance (between full slow bundles). */
+export async function runSchwabAccountValueRefresh(
+  opts?: { db?: Database.Database; reason?: string },
+): Promise<SchwabRefreshStepResult> {
+  const db = opts?.db ?? getDb();
+  logLine(`schwab_account_value_refresh reason=${opts?.reason ?? "scheduler_rth"}`);
+  return runStep("account_value", () => runSchwabAccountValueSync(db));
+}
+
 /** Scheduler tick: RTH fast bundle every call; slow bundle when due. */
 export async function runSchwabRefreshSchedulerTick(opts?: {
   lastSlowRunAt: number;
   slowIntervalMs: number;
+  lastAccountValueRunAt?: number;
+  accountValueIntervalMs?: number;
   dataMode?: DataMode;
-}): Promise<{ lastSlowRunAt: number }> {
+}): Promise<{ lastSlowRunAt: number; lastAccountValueRunAt: number }> {
   const slowIntervalMs = opts?.slowIntervalMs ?? 600_000;
+  const accountValueIntervalMs = opts?.accountValueIntervalMs ?? 180_000;
   let lastSlowRunAt = opts?.lastSlowRunAt ?? 0;
+  let lastAccountValueRunAt = opts?.lastAccountValueRunAt ?? 0;
   const now = Date.now();
   const rth = isUsEquityRegularSessionOpen(new Date());
 
   if (rth) {
     await runSchwabRefresh("rth", { dataMode: opts?.dataMode, reason: "scheduler_rth" });
+    if (now - lastAccountValueRunAt >= accountValueIntervalMs) {
+      await runSchwabAccountValueRefresh({ reason: "scheduler_rth_account_value" });
+      lastAccountValueRunAt = now;
+    }
     if (now - lastSlowRunAt >= slowIntervalMs) {
       await runSchwabRefresh("slow", { dataMode: opts?.dataMode, reason: "scheduler_slow" });
       lastSlowRunAt = now;
+      lastAccountValueRunAt = now;
     }
   } else if (now - lastSlowRunAt >= slowIntervalMs) {
     await runSchwabRefresh("closed", { dataMode: opts?.dataMode, reason: "scheduler_closed" });
     lastSlowRunAt = now;
+    lastAccountValueRunAt = now;
   }
 
-  return { lastSlowRunAt };
+  return { lastSlowRunAt, lastAccountValueRunAt };
 }

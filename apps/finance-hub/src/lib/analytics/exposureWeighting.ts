@@ -109,5 +109,5 @@ export function terminalTreemapSizeCaption(
   pieMetric: ExposurePieMetric,
   syntheticChartBasis: SyntheticChartBasis,
 ): string {
-  return `${exposureTileSizeCaption(scope, pieMetric, syntheticChartBasis)} Color = today’s % change (same scale as heatmap).`;
+  return `${exposureTileSizeCaption(scope, pieMetric, syntheticChartBasis)}`;
 }

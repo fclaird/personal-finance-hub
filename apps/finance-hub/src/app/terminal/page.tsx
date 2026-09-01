@@ -21,6 +21,7 @@ import {
   type OptionFlowPayload,
 } from "@/app/components/terminal/OptionFlowPanel";
 import { PortfolioTreemapSection } from "@/app/components/terminal/PortfolioTreemapSection";
+import { TerminalPerfDisplayControls } from "@/app/components/terminal/TerminalPerfDisplayControls";
 import { Sparkline } from "@/app/components/terminal/Sparkline";
 import {
   readTreemapMetric,
@@ -57,6 +58,12 @@ import {
 import { heatmapCellStyle } from "@/lib/terminal/dailyPerfColor";
 import { posNegClass, priceDirClass } from "@/lib/terminal/colors";
 import { computeMovers } from "@/lib/terminal/movers";
+import {
+  readTerminalPerfDisplayMode,
+  resolveHeatmapPerfView,
+  writeTerminalPerfDisplayMode,
+  type TerminalPerfDisplayMode,
+} from "@/lib/terminal/terminalPerfDisplay";
 import { shouldHideNonIndividualSymbol } from "@/lib/terminal/individualSecurityFilter";
 import { aggregateUnderlyingDayPlFromPositions } from "@/lib/schwab/schwabPositionDayPl";
 import { usePersistedColumnOrder } from "@/lib/usePersistedColumnOrder";
@@ -232,6 +239,7 @@ export default function TerminalPage() {
   const [treemapScope, setTreemapScope] = useState<ExposureScope>("net");
   const [treemapMetric, setTreemapMetric] = useState<ExposurePieMetric>("net");
   const [treemapSyntheticBasis, setTreemapSyntheticBasis] = useState<SyntheticChartBasis>("delta");
+  const [perfDisplayMode, setPerfDisplayMode] = useState<TerminalPerfDisplayMode>("stock_pct");
   const [stocksOnlyView, setStocksOnlyView] = useState(false);
   const [heatmapHiddenSymbols, setHeatmapHiddenSymbols] = useState<Set<string>>(() => new Set());
   const [nonIndividualSymbols, setNonIndividualSymbols] = useState<Set<string>>(() => new Set());
@@ -673,6 +681,7 @@ export default function TerminalPage() {
     setTreemapScope(readTreemapScope());
     setTreemapMetric(readTreemapMetric());
     setTreemapSyntheticBasis(readTreemapSyntheticBasis());
+    setPerfDisplayMode(readTerminalPerfDisplayMode());
     setDisplayPrefsHydrated(true);
   }, []);
 
@@ -740,6 +749,11 @@ export default function TerminalPage() {
       // ignore
     }
   }, [treemapScope, treemapMetric, treemapSyntheticBasis, displayPrefsHydrated]);
+
+  useEffect(() => {
+    if (!displayPrefsHydrated) return;
+    writeTerminalPerfDisplayMode(perfDisplayMode);
+  }, [perfDisplayMode, displayPrefsHydrated]);
 
   useEffect(() => {
     const t = setTimeout(() => setNowMs(Date.now()), 0);
@@ -849,10 +863,38 @@ export default function TerminalPage() {
     return filteredHeatItems.filter((it) => !heatmapHiddenSymbols.has(it.symbol.toUpperCase()));
   }, [filteredHeatItems, heatmapHiddenSymbols]);
 
+  const spotBySymbol = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const q of quotes) {
+      const spot = quoteDisplaySpot(q);
+      if (spot != null && Number.isFinite(spot)) m.set(q.symbol.toUpperCase(), spot);
+    }
+    return m;
+  }, [quotes]);
+
+  const displayHeatItems = useMemo(() => {
+    return visualHeatItems.map((it) => {
+      const sym = it.symbol.toUpperCase();
+      const view = resolveHeatmapPerfView({
+        mode: perfDisplayMode,
+        stockChangeFrac: it.changePercent,
+        dayPl: underlyingDayPlBySym.get(sym),
+        exposureMv: treemapMvBySym.get(sym),
+        mask: privacy.masked,
+      });
+      return {
+        ...it,
+        spotPrice: spotBySymbol.get(sym) ?? it.spotPrice ?? null,
+        perfColorFrac: view.colorFrac,
+        perfLabel: view.perfLabel,
+      };
+    });
+  }, [visualHeatItems, perfDisplayMode, underlyingDayPlBySym, treemapMvBySym, privacy.masked, spotBySymbol]);
+
   /** Symbols actually rendered in the heatmap grid (same slice as HeatmapGrid). */
   const visibleHeatmapSymbolSet = useMemo(
-    () => new Set(visualHeatItems.slice(0, 220).map((it) => it.symbol.toUpperCase())),
-    [visualHeatItems],
+    () => new Set(displayHeatItems.slice(0, 220).map((it) => it.symbol.toUpperCase())),
+    [displayHeatItems],
   );
 
   const sortedHiddenHeatmapSymbols = useMemo(
@@ -1211,13 +1253,14 @@ export default function TerminalPage() {
             Click a tile to hide it from the heatmap and treemap (saved until you restore). ⌘/Ctrl+click opens the
             symbol page.
           </p>
+          <TerminalPerfDisplayControls mode={perfDisplayMode} onModeChange={setPerfDisplayMode} />
           <div className="min-w-0">
             <HeatmapGrid
-              items={visualHeatItems.slice(0, 220)}
+              items={displayHeatItems.slice(0, 220)}
               companyNamesBySymbol={companyBySymbol}
               onHideSymbol={hideHeatmapSymbol}
             />
-            {visualHeatItems.length === 0 ? (
+            {displayHeatItems.length === 0 ? (
               <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
                 {filteredHeatItems.length === 0 ? "No heatmap data yet." : "All symbols hidden — restore from the list above."}
               </div>
@@ -1227,12 +1270,12 @@ export default function TerminalPage() {
               ),
             },
             treemap: {
-              title: "Position treemap (size = weight, color = day %)",
+              title: "Position treemap (size = weight, color = day change)",
               bodyClassName: "p-4",
               children: (
                 <PortfolioTreemapSection
                   heatView={HEAT_VIEW}
-                  heatItems={visualHeatItems}
+                  heatItems={displayHeatItems}
                   companyNamesBySymbol={companyBySymbol}
                   treemapScope={treemapScope}
                   onScopeChange={setTreemapScope}
@@ -1243,6 +1286,8 @@ export default function TerminalPage() {
                   treemapMvBySym={treemapMvBySym}
                   positionMvBySym={filteredPositionMvBySym}
                   portfolioSizeCaption={treemapSizeCaption}
+                  perfDisplayMode={perfDisplayMode}
+                  maskPrices={privacy.masked}
                 />
               ),
             },

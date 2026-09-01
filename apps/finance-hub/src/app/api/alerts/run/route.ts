@@ -4,10 +4,12 @@ import { getConsolidatedAllocation } from "@/lib/analytics/allocation";
 import { getUnderlyingExposureRollup } from "@/lib/analytics/optionsExposure";
 import { getRebalancing } from "@/lib/analytics/rebalancing";
 import { getAlertRules, insertAlertEvent } from "@/lib/alerts";
+import { resolveViewScope } from "@/lib/viewScope";
 
 export async function POST(req: Request) {
   const url = new URL(req.url);
   const includeSynthetic = url.searchParams.get("synthetic") !== "0";
+  const { flavor, dataMode: mode } = await resolveViewScope();
   const rules = getAlertRules().filter((r) => r.enabled);
 
   let created = 0;
@@ -16,7 +18,7 @@ export async function POST(req: Request) {
     if (r.type === "drift") {
       const cfg = (r.config ?? {}) as { thresholdPct?: number };
       const threshold = cfg.thresholdPct ?? 0.05;
-      const reb = getRebalancing(includeSynthetic);
+      const reb = getRebalancing(includeSynthetic, mode, undefined, flavor);
       const breached = reb.drift.filter((d) => Math.abs(d.drift) >= threshold);
       for (const b of breached) {
         created++;
@@ -32,8 +34,8 @@ export async function POST(req: Request) {
     if (r.type === "concentration") {
       const cfg = (r.config ?? {}) as { maxSingleUnderlyingPct?: number };
       const maxPct = cfg.maxSingleUnderlyingPct ?? 0.25;
-      const alloc = getConsolidatedAllocation(includeSynthetic);
-      const exposure = getUnderlyingExposureRollup();
+      const alloc = getConsolidatedAllocation(includeSynthetic, mode, undefined, flavor);
+      const exposure = getUnderlyingExposureRollup(mode, undefined, flavor);
       const total = alloc.totalMarketValue || exposure.reduce((s, e) => s + e.spotMarketValue + e.syntheticMarketValue, 0);
       for (const e of exposure) {
         const mv = e.spotMarketValue + (includeSynthetic ? e.syntheticMarketValue : 0);
@@ -53,4 +55,3 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ ok: true, created });
 }
-

@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 
 import { getDb } from "@/lib/db";
+import { FLAVOR_IDS, type FlavorId } from "@/lib/flavor";
 import { logError } from "@/lib/log";
 import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
 import { fetchGlanceAlternateCards } from "@/lib/market/fetchGlanceAlternateCards";
@@ -12,7 +13,9 @@ import { isUsEquityRegularSessionOpen, usEquitySessionStatus } from "@/lib/marke
 import { ensureUsMarketIndexBenchmarks, fetchUsMarketIndexCards } from "@/lib/market/usMarketIndices";
 import { fetchPortfolioGlanceCard } from "@/lib/terminal/portfolioGlance";
 
-export const GLANCE_CACHE_KEY = "us-markets";
+export function glanceCacheKey(flavor: FlavorId): string {
+  return `us-markets:${flavor}`;
+}
 
 /** Serve cached payloads younger than this without revalidating. */
 const FRESH_MS_OPEN = 30_000;
@@ -36,12 +39,12 @@ export type GlancePayload = {
 };
 
 /** Assemble the full quick-glance payload from upstream sources (the expensive fan-out). */
-export async function buildGlancePayload(now: Date = new Date()): Promise<GlancePayload> {
+export async function buildGlancePayload(now: Date = new Date(), flavor: FlavorId = "main"): Promise<GlancePayload> {
   await ensureUsMarketIndexBenchmarks();
   const sessionYmd = glanceSessionYmd(now);
   const grid = await fetchCanonicalGlanceGrid(sessionYmd, now);
   const [portfolio, indexItems, futuresGlanceItems, alternateGlanceItems] = await Promise.all([
-    fetchPortfolioGlanceCard(now, grid),
+    fetchPortfolioGlanceCard(now, grid, flavor),
     fetchUsMarketIndexCards(now, grid),
     fetchRegionalGlanceItems(now),
     fetchGlanceAlternateCards(now, grid),
@@ -68,14 +71,14 @@ export async function buildGlancePayload(now: Date = new Date()): Promise<Glance
 
 type CacheRow = { payload_json: string; updated_at: string };
 
-function readCacheRow(db: Database.Database, sessionYmd: string): CacheRow | null {
+function readCacheRow(db: Database.Database, cacheKey: string, sessionYmd: string): CacheRow | null {
   const row = db
     .prepare(`SELECT payload_json, updated_at FROM glance_cache WHERE cache_key = ? AND session_ymd = ?`)
-    .get(GLANCE_CACHE_KEY, sessionYmd) as CacheRow | undefined;
+    .get(cacheKey, sessionYmd) as CacheRow | undefined;
   return row ?? null;
 }
 
-function writeCacheRow(db: Database.Database, sessionYmd: string, payload: GlancePayload): void {
+function writeCacheRow(db: Database.Database, cacheKey: string, sessionYmd: string, payload: GlancePayload): void {
   db.prepare(
     `
     INSERT INTO glance_cache (cache_key, session_ymd, payload_json, updated_at)
@@ -85,12 +88,11 @@ function writeCacheRow(db: Database.Database, sessionYmd: string, payload: Glanc
       updated_at = excluded.updated_at
   `,
   ).run({
-    cache_key: GLANCE_CACHE_KEY,
+    cache_key: cacheKey,
     session_ymd: sessionYmd,
     payload_json: JSON.stringify(payload),
     updated_at: payload.updatedAt,
   });
-  // Keep only the two most recent sessions per key.
   db.prepare(
     `
     DELETE FROM glance_cache
@@ -100,7 +102,7 @@ function writeCacheRow(db: Database.Database, sessionYmd: string, payload: Glanc
         ORDER BY session_ymd DESC LIMIT 2
       )
   `,
-  ).run({ cache_key: GLANCE_CACHE_KEY });
+  ).run({ cache_key: cacheKey });
 }
 
 function parsePayload(row: CacheRow): GlancePayload | null {
@@ -111,60 +113,59 @@ function parsePayload(row: CacheRow): GlancePayload | null {
   }
 }
 
-// De-dupe concurrent rebuilds for the same session (avoid upstream stampede).
 const inflight = new Map<string, Promise<GlancePayload>>();
 
-async function rebuildAndStore(now: Date, sessionYmd: string): Promise<GlancePayload> {
-  const existing = inflight.get(sessionYmd);
+function inflightKey(flavor: FlavorId, sessionYmd: string): string {
+  return `${flavor}:${sessionYmd}`;
+}
+
+async function rebuildAndStore(now: Date, sessionYmd: string, flavor: FlavorId): Promise<GlancePayload> {
+  const key = inflightKey(flavor, sessionYmd);
+  const existing = inflight.get(key);
   if (existing) return existing;
   const p = (async () => {
-    const payload = await buildGlancePayload(now);
+    const payload = await buildGlancePayload(now, flavor);
     try {
-      writeCacheRow(getDb(), sessionYmd, payload);
+      writeCacheRow(getDb(), glanceCacheKey(flavor), sessionYmd, payload);
     } catch (e) {
       logError("glance_cache_write", e);
     }
     return payload;
-  })().finally(() => inflight.delete(sessionYmd));
-  inflight.set(sessionYmd, p);
+  })().finally(() => inflight.delete(key));
+  inflight.set(key, p);
   return p;
 }
 
-/**
- * Cache-first quick-glance payload with stale-while-revalidate:
- * - cold cache → build synchronously and store,
- * - fresh cache → return immediately,
- * - stale cache → return stale now and refresh in the background.
- */
-export async function getGlancePayloadCached(now: Date = new Date()): Promise<GlancePayload> {
+export async function getGlancePayloadCached(now: Date = new Date(), flavor: FlavorId = "main"): Promise<GlancePayload> {
   const sessionYmd = glanceSessionYmd(now);
+  const cacheKey = glanceCacheKey(flavor);
   const db = getDb();
-  const row = readCacheRow(db, sessionYmd);
+  const row = readCacheRow(db, cacheKey, sessionYmd);
   const cached = row ? parsePayload(row) : null;
 
   if (!cached) {
-    return rebuildAndStore(now, sessionYmd);
+    return rebuildAndStore(now, sessionYmd, flavor);
   }
 
   const ageMs = now.getTime() - new Date(row!.updated_at).getTime();
   const freshMs = isUsEquityRegularSessionOpen(now) ? FRESH_MS_OPEN : FRESH_MS_CLOSED;
   if (ageMs > freshMs) {
-    // Fire-and-forget background refresh; swallow errors so the stale response still wins.
-    void rebuildAndStore(now, sessionYmd).catch((e) => logError("glance_cache_revalidate", e));
+    void rebuildAndStore(now, sessionYmd, flavor).catch((e) => logError("glance_cache_revalidate", e));
   }
   return cached;
 }
 
-/** Background warmer for the scheduler: rebuild if missing or older than the open-session TTL. */
 export async function warmGlanceCache(now: Date = new Date()): Promise<void> {
-  try {
-    const sessionYmd = glanceSessionYmd(now);
-    const row = readCacheRow(getDb(), sessionYmd);
-    const ageMs = row ? now.getTime() - new Date(row.updated_at).getTime() : Infinity;
-    if (ageMs > FRESH_MS_OPEN) {
-      await rebuildAndStore(now, sessionYmd);
+  for (const flavor of FLAVOR_IDS) {
+    try {
+      const sessionYmd = glanceSessionYmd(now);
+      const row = readCacheRow(getDb(), glanceCacheKey(flavor), sessionYmd);
+      const ageMs = row ? now.getTime() - new Date(row.updated_at).getTime() : Infinity;
+      if (ageMs > FRESH_MS_OPEN) {
+        await rebuildAndStore(now, sessionYmd, flavor);
+      }
+    } catch (e) {
+      logError("glance_cache_warm", e);
     }
-  } catch (e) {
-    logError("glance_cache_warm", e);
   }
 }

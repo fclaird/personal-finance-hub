@@ -4,6 +4,7 @@ import type { HeatmapItem } from "@/app/components/HeatmapGrid";
 import { TerminalPositionTreemap } from "@/app/components/terminal/TerminalPositionTreemap";
 import { TerminalTreemapWeightControls } from "@/app/components/terminal/TerminalTreemapWeightControls";
 import type { ExposurePieMetric, ExposureScope, SyntheticChartBasis } from "@/lib/analytics/exposureWeighting";
+import { perfDisplayCaption, type TerminalPerfDisplayMode } from "@/lib/terminal/terminalPerfDisplay";
 
 type Props = {
   heatView: "spy" | "qqq" | "portfolio";
@@ -18,6 +19,8 @@ type Props = {
   treemapMvBySym: Map<string, number>;
   positionMvBySym: Map<string, number>;
   portfolioSizeCaption: string | null;
+  perfDisplayMode: TerminalPerfDisplayMode;
+  maskPrices?: boolean;
 };
 
 export function PortfolioTreemapSection({
@@ -33,11 +36,13 @@ export function PortfolioTreemapSection({
   treemapMvBySym,
   positionMvBySym,
   portfolioSizeCaption,
+  perfDisplayMode,
+  maskPrices = false,
 }: Props) {
   return (
     <>
       <p className="text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
-        Same daily % scale as the heatmap; mid-range moves are stretched so small differences read more clearly.
+        {perfDisplayCaption(perfDisplayMode)} Mid-range moves are stretched so small differences read more clearly.
       </p>
       {heatView === "portfolio" ? (
         <TerminalTreemapWeightControls
@@ -56,6 +61,8 @@ export function PortfolioTreemapSection({
           heatView={heatView}
           companyNamesBySymbol={companyNamesBySymbol}
           portfolioSizeCaption={heatView === "portfolio" ? portfolioSizeCaption : null}
+          perfDisplayMode={perfDisplayMode}
+          maskPrices={maskPrices}
         />
       </div>
     </>

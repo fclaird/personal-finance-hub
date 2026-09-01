@@ -4,6 +4,20 @@ import { runSchwabRefresh } from "@/lib/schwab/refreshOrchestrator";
 
 declare global {
   var __fhColdStartupPullScheduled: boolean | undefined;
+  var __fhScheduler:
+    | {
+        lastSlowRunAt: number;
+        lastAccountValueRunAt: number;
+      }
+    | undefined;
+}
+
+function seedSchedulerAfterColdPull(): void {
+  const s = globalThis.__fhScheduler;
+  if (!s) return;
+  const now = Date.now();
+  s.lastSlowRunAt = now;
+  s.lastAccountValueRunAt = now;
 }
 
 /**
@@ -16,6 +30,7 @@ export async function runColdStartupDataPullOrchestration(): Promise<void> {
   logLine("cold_startup_pull_begin");
   try {
     await runSchwabRefresh("closed", { reason: "cold_startup" });
+    seedSchedulerAfterColdPull();
     logLine("cold_startup_pull_schwab_ok");
   } catch (e) {
     logError("cold_startup_pull_schwab_failed", e);
@@ -51,6 +66,12 @@ export async function runColdStartupDataPullOrchestration(): Promise<void> {
     } catch (e) {
       logError("cold_startup_pull_allocation_daily_failed", e);
     }
+    try {
+      await postJson(base, "/api/internal/dividends/forward-snap/daily");
+      logLine("cold_startup_pull_dividend_forward_snap_ok");
+    } catch (e) {
+      logError("cold_startup_pull_dividend_forward_snap_failed", e);
+    }
   }
 
   logLine("cold_startup_pull_complete");
@@ -63,8 +84,11 @@ function internalBaseUrl(): string {
 
 function cronHeaders(): HeadersInit {
   const secret = process.env.CRON_SECRET?.trim();
-  if (!secret) return {};
-  return { Authorization: `Bearer ${secret}` };
+  const headers: Record<string, string> = {};
+  if (secret) headers.Authorization = `Bearer ${secret}`;
+  const apiKey = process.env.FINANCE_HUB_API_KEY?.trim();
+  if (apiKey) headers["x-finance-hub-key"] = apiKey;
+  return headers;
 }
 
 async function postJson(base: string, path: string, body?: unknown, extraHeaders?: HeadersInit): Promise<void> {

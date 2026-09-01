@@ -7,9 +7,15 @@ import { heatmapCellStyle, perfCellForegroundStyle } from "@/lib/terminal/dailyP
 
 export type HeatmapItem = {
   symbol: string;
-  changePercent: number | null; // fraction (0.01 = 1%)
+  changePercent: number | null; // fraction (0.01 = 1%) — underlying stock quote
   marketCap: number | null; // USD
   companyName?: string | null;
+  /** Reconciled spot (last/mark); shown on terminal treemap when set. */
+  spotPrice?: number | null;
+  /** Color scale (fraction); defaults to changePercent when omitted. */
+  perfColorFrac?: number | null;
+  /** Tile label for day change; defaults to formatted changePercent when omitted. */
+  perfLabel?: string;
 };
 
 function spanForCap(marketCap: number | null, caps: number[]) {
@@ -24,6 +30,11 @@ function spanForCap(marketCap: number | null, caps: number[]) {
 function changeSortKey(frac: number | null): number {
   if (frac == null || !Number.isFinite(frac)) return Number.NEGATIVE_INFINITY;
   return frac;
+}
+
+function colorFracForItem(it: HeatmapItem): number | null {
+  const v = it.perfColorFrac ?? it.changePercent;
+  return v == null || !Number.isFinite(v) ? null : v;
 }
 
 export function HeatmapGrid({
@@ -51,8 +62,8 @@ export function HeatmapGrid({
   /** Highest % change (signed) first → lowest on the right; missing % last. */
   const sortedItems = useMemo(() => {
     return [...items].sort((a, b) => {
-      const da = changeSortKey(a.changePercent);
-      const db = changeSortKey(b.changePercent);
+      const da = changeSortKey(colorFracForItem(a));
+      const db = changeSortKey(colorFracForItem(b));
       if (db !== da) return db - da;
       const capA = a.marketCap != null && Number.isFinite(a.marketCap) && a.marketCap > 0 ? a.marketCap : 0;
       const capB = b.marketCap != null && Number.isFinite(b.marketCap) && b.marketCap > 0 ? b.marketCap : 0;
@@ -80,9 +91,12 @@ export function HeatmapGrid({
       >
         {sortedItems.map((it) => {
           const spans = spanForCap(it.marketCap, caps);
-          const style = heatmapCellStyle(it.changePercent);
+          const colorFrac = colorFracForItem(it);
+          const style = heatmapCellStyle(colorFrac);
           const labelStyle = perfCellForegroundStyle();
-          const pct = it.changePercent == null ? null : it.changePercent * 100;
+          const perfLabel =
+            it.perfLabel ??
+            (colorFrac == null ? "—" : `${colorFrac * 100 >= 0 ? "+" : ""}${(colorFrac * 100).toFixed(1)}%`);
           const companyName =
             it.companyName?.trim() || companyNamesBySymbol?.get(it.symbol.toUpperCase())?.trim() || undefined;
           const tip = companyName
@@ -103,9 +117,7 @@ export function HeatmapGrid({
               title={tip}
             >
               <div className="truncate">{it.symbol}</div>
-              <div className="truncate text-[12px] font-semibold tabular-nums">
-                {pct == null ? "—" : `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`}
-              </div>
+              <div className="truncate text-[12px] font-semibold tabular-nums">{perfLabel}</div>
             </button>
           );
         })}

@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { buildBookForwardTimeline } from "@/lib/dividends/buildBookForwardTimeline";
-import { captureBookForwardSnap, ensureBookLiveStartedAt } from "@/lib/dividends/bookForwardSnap";
+import {
+  ensureBookLiveStartedAt,
+  hasBookForwardSnapGaps,
+  needsBookForwardSnapCapture,
+  syncBookForwardSnaps,
+} from "@/lib/dividends/bookForwardSnap";
+import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -10,14 +16,17 @@ export async function GET(req: Request) {
   const includeQqq = url.searchParams.get("includeQqq") === "1" || url.searchParams.get("includeQqq") === "true";
 
   const db = getDb();
+  const now = new Date();
   ensureBookLiveStartedAt(db);
 
-  let { points, liveStartedAt, totalDividendsReceived } = await buildBookForwardTimeline(db, includeSpy, includeQqq);
-
-  if (points.length === 0) {
-    await captureBookForwardSnap(db, new Date(), { fetchLiveQuotes: false });
-    ({ points, liveStartedAt, totalDividendsReceived } = await buildBookForwardTimeline(db, includeSpy, includeQqq));
+  if (needsBookForwardSnapCapture(db, now) || hasBookForwardSnapGaps(db, now)) {
+    await syncBookForwardSnaps(db, now, {
+      fetchLiveQuotes: isUsEquityRegularSessionOpen(now),
+      backfill: true,
+    });
   }
+
+  let { points, liveStartedAt, totalDividendsReceived } = await buildBookForwardTimeline(db, includeSpy, includeQqq);
 
   const mapped = points.map((p) => ({
     month_end: p.as_of,
@@ -36,7 +45,7 @@ export async function GET(req: Request) {
 
   return NextResponse.json({
     ok: true,
-    mode: "forward_weekly",
+    mode: "forward_daily",
     trackingMode: "live",
     liveStartedAt,
     monthsReturned,
@@ -45,6 +54,6 @@ export async function GET(req: Request) {
     totalDividendsReceived,
     points: mapped,
     footnote:
-      "Live tracking across all Schwab accounts: weekly NAV from current quotes × aggregated dividend-paying holdings. For backtest and modeling tools, use Sim Dividend Portfolio.",
+      "Live tracking across all Schwab accounts: daily NAV from quotes (today) or stored closes (history) × aggregated dividend-paying holdings. For backtest and modeling tools, use Sim Dividend Portfolio.",
   });
 }

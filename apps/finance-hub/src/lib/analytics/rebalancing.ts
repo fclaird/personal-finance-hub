@@ -12,12 +12,15 @@ export type DriftRow = {
   suggestedDeltaMarketValue: number; // target - current (positive means buy/add)
 };
 
+import type { FlavorId } from "@/lib/flavor";
+
 export function getRebalancing(
   includeSynthetic: boolean,
   mode: DataMode = "auto",
   equityMarkMap?: Map<string, number>,
+  flavor: FlavorId = "main",
 ) {
-  const alloc = getConsolidatedAllocation(includeSynthetic, mode, equityMarkMap);
+  const alloc = getConsolidatedAllocation(includeSynthetic, mode, equityMarkMap, flavor);
   const targets = getGlobalTargets();
 
   const targetByClass = new Map<string, number>();

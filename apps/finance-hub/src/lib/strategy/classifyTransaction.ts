@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 
 import type { SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
-import { itemsOf, normalizeSchwabTransaction, tradeDateIso } from "@/lib/schwab/transactionNormalize";
+import { normalizeSchwabTransaction, securityLegsOf, tradeDateIso } from "@/lib/schwab/transactionNormalize";
 import type { StrategySlug } from "@/lib/strategy/strategyCategories";
 
 const LEAP_MIN_DTE = 365;
@@ -85,7 +85,7 @@ export function classifySchwabTradeRaw(db: Database.Database, raw: SchwabTxnRaw)
   const type = (raw.type ?? "").toUpperCase();
   if (type && type !== "TRADE") return "uncategorized";
 
-  const items = itemsOf(raw);
+  const items = securityLegsOf(raw);
   if (items.length === 0) return "uncategorized";
   if (items.length > 1) return "spreads";
 

@@ -33,11 +33,18 @@ describe("apiAuth", () => {
     /* each test restores its own snapshot */
   });
 
-  it("isApiAuthExemptPath allows OAuth callbacks and auth config", () => {
+  it("isApiAuthExemptPath allows OAuth start/callback and auth config", () => {
+    assert.equal(isApiAuthExemptPath("/api/schwab/start"), true);
     assert.equal(isApiAuthExemptPath("/api/schwab/callback"), true);
+    assert.equal(isApiAuthExemptPath("/api/x/oauth/start"), true);
     assert.equal(isApiAuthExemptPath("/api/x/oauth/callback"), true);
     assert.equal(isApiAuthExemptPath("/api/auth/config"), true);
     assert.equal(isApiAuthExemptPath("/api/positions"), false);
+  });
+
+  it("isApiAuthExemptPath does not exempt plaid or flavor routes", () => {
+    assert.equal(isApiAuthExemptPath("/api/plaid/sync"), false);
+    assert.equal(isApiAuthExemptPath("/api/flavor"), false);
   });
 
   it("isCronProtectedApiPath covers internal routes and news ingest", () => {
@@ -70,6 +77,16 @@ describe("apiAuth", () => {
         authorizeApiRequest(req("http://localhost/api/positions", { "x-finance-hub-key": "lan-key" })),
         true,
       );
+    } finally {
+      restoreEnv(saved);
+    }
+  });
+
+  it("authorizeApiRequest rejects wrong-length API key without throwing", () => {
+    const saved = saveEnv();
+    process.env.FINANCE_HUB_API_KEY = "lan-key";
+    try {
+      assert.equal(authorizeApiRequest(req("http://localhost/api/positions", { authorization: "Bearer lan-ke" })), false);
     } finally {
       restoreEnv(saved);
     }

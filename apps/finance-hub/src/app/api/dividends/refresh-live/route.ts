@@ -7,7 +7,7 @@ import {
   buildSchwabDividendBook,
   loadLatestSchwabPositionRows,
 } from "@/lib/dividends/schwabDividendBook";
-import { captureBookForwardSnap, ensureBookLiveStartedAt } from "@/lib/dividends/bookForwardSnap";
+import { ensureBookLiveStartedAt, syncBookForwardSnaps } from "@/lib/dividends/bookForwardSnap";
 
 export async function POST() {
   const db = getDb();
@@ -22,7 +22,7 @@ export async function POST() {
     });
 
     ensureBookLiveStartedAt(db);
-    const snap = await captureBookForwardSnap(db, new Date(), { fetchLiveQuotes: true });
+    const snap = await syncBookForwardSnaps(db, new Date(), { fetchLiveQuotes: true, backfill: true });
 
     return NextResponse.json({
       ok: true,
@@ -31,6 +31,7 @@ export async function POST() {
       fundamentalsCaptured: symbols.length,
       forwardSnap: snap.ok,
       asOf: snap.asOf || null,
+      backfilled: snap.backfilled,
     });
   } catch (e) {
     return NextResponse.json(

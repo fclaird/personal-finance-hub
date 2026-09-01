@@ -28,6 +28,29 @@ export function monthEndForDate(d: Date): string {
   return monthEndIso(d.getUTCFullYear(), d.getUTCMonth());
 }
 
+/** UTC calendar date YYYY-MM-DD for `d`. */
+export function isoDateUtc(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+export function addUtcDays(isoDate: string, days: number): string {
+  const d = parseIsoDate(isoDate);
+  d.setUTCDate(d.getUTCDate() + days);
+  return isoDateUtc(d);
+}
+
+/** Inclusive range of UTC ISO dates from `startIso` through `endIso`. */
+export function iterateUtcDatesInclusive(startIso: string, endIso: string): string[] {
+  if (startIso > endIso) return [];
+  const out: string[] = [];
+  let cur = startIso;
+  while (cur <= endIso) {
+    out.push(cur);
+    cur = addUtcDays(cur, 1);
+  }
+  return out;
+}
+
 /**
  * Friday (UTC calendar) of the week containing `d`.
  * Used as stable `as_of` week key for forward_snap rows (final + partial).

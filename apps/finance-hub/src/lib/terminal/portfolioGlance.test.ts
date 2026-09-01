@@ -12,6 +12,7 @@ import {
   optionValueAt,
   type OptionLeg,
   PORTFOLIO_INDEX_BASE,
+  bridgePortfolioSeriesGaps,
   buildPortfolioIndexSeries,
 } from "@/lib/terminal/portfolioGlance";
 
@@ -136,4 +137,16 @@ test("buildPortfolioIndexSeries anchors at 100 when no intraday points exist", (
   assert.equal(series.length, 2);
   assert.equal(series[0]!.close, 100);
   assert.ok(Math.abs(series[1]!.close - 100.11) < 1e-9);
+});
+
+test("bridgePortfolioSeriesGaps fills sparse Schwab snapshots within RTH", () => {
+  const t0 = Date.parse("2026-05-22T14:00:00.000Z");
+  const t1 = Date.parse("2026-05-22T18:00:00.000Z");
+  const bridged = bridgePortfolioSeriesGaps([
+    { idx: 0, close: 100, tsMs: t0 },
+    { idx: 1, close: 100.4, tsMs: t1 },
+  ]);
+  assert.ok(bridged.length > 2);
+  assert.equal(bridged[0]!.close, 100);
+  assert.equal(bridged[bridged.length - 1]!.close, 100.4);
 });

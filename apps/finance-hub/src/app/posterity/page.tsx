@@ -11,9 +11,11 @@ import { SymbolLink } from "@/app/components/SymbolLink";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { formatInt, formatNum, formatUsd2 } from "@/lib/format";
 import { formatDisplayDate } from "@/lib/formatDate";
+import { optionPositionTheta } from "@/lib/options/optionPositionTheta";
 import { POSTERITY_ACCOUNT_IDS } from "@/lib/posterity";
 import { symbolPageTargetFromInstrument } from "@/lib/symbolPage";
 import { normalizeSectorLabel } from "@/lib/sectorLabel";
+import { posNegClass } from "@/lib/terminal/colors";
 
 type TaxonomyCategory = "sector" | "marketCap" | "revenueGeo";
 
@@ -129,6 +131,7 @@ type PosterityPosition = {
   quantity: number | null;
   averagePrice: number | null;
   marketValue: number | null;
+  theta: number | null;
 };
 
 function symKey(p: PosterityPosition) {
@@ -435,6 +438,7 @@ export default function PosterityPage() {
                 <th className="whitespace-nowrap px-3 py-2 font-semibold">Instrument</th>
                 <th className="whitespace-nowrap px-3 py-2 text-right font-semibold">Qty</th>
                 <th className="whitespace-nowrap px-3 py-2 text-right font-semibold">Market&nbsp;value</th>
+                <th className="whitespace-nowrap px-3 py-2 text-right font-semibold">Pos theta</th>
               </tr>
             </thead>
             <tbody>
@@ -455,8 +459,13 @@ export default function PosterityPage() {
                       <td className="whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums">
                         {usd2Masked(netMv, privacy.masked)}
                       </td>
+                      <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-500 dark:text-zinc-400">
+                        —
+                      </td>
                     </tr>
-                    {g.rows.map((p) => (
+                    {g.rows.map((p) => {
+                      const posTheta = optionPositionTheta(p);
+                      return (
                       <tr key={p.positionId} className="border-t border-zinc-200 dark:border-white/10">
                         <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">
                           <SymbolLink symbol={g.underlying}>{g.underlying}</SymbolLink>
@@ -472,14 +481,23 @@ export default function PosterityPage() {
                         <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
                           {usd2Masked(p.marketValue ?? 0, privacy.masked)}
                         </td>
+                        <td
+                          className={
+                            "whitespace-nowrap px-3 py-2 text-right tabular-nums " +
+                            (posTheta == null ? "" : posNegClass(posTheta))
+                          }
+                        >
+                          {posTheta == null ? "—" : usd2Masked(posTheta, privacy.masked)}
+                        </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </Fragment>
                 );
               })}
               {posGroups.length === 0 ? (
                 <tr className="border-t border-zinc-200 dark:border-white/10">
-                  <td className="px-3 py-3 text-sm text-zinc-600 dark:text-zinc-400" colSpan={4}>
+                  <td className="px-3 py-3 text-sm text-zinc-600 dark:text-zinc-400" colSpan={5}>
                     No positions for this account.
                   </td>
                 </tr>

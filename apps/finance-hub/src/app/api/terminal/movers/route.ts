@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 
 import { logError } from "@/lib/log";
 import { parseSchwabNormalizedQuote } from "@/lib/market/parseSchwabNormalizedQuote";
@@ -8,7 +7,7 @@ import { schwabQuoteObjectFromEntry } from "@/lib/schwab/quoteEntry";
 import { BASKETS, type TerminalBasketKey } from "@/lib/terminal/baskets";
 import { computeMovers } from "@/lib/terminal/movers";
 import { SP500_SYMBOLS } from "@/lib/terminal/universes/sp500";
-import { DATA_MODE_COOKIE, parseDataMode } from "@/lib/dataMode";
+import { resolveViewScope } from "@/lib/viewScope";
 import { getTerminalUniverseSymbols } from "@/lib/terminal/universe";
 
 function normSym(s: string) {
@@ -35,9 +34,8 @@ export async function GET(req: Request) {
     if (scope === "sp500") {
       symbols = SP500_SYMBOLS.map(normSym).filter(Boolean);
     } else if (scope === "myUniverse" || scope === "combined") {
-      const jar = await cookies();
-      const mode = parseDataMode(jar.get(DATA_MODE_COOKIE)?.value);
-      const mine = getTerminalUniverseSymbols({ mode, includeWatchlistId: watchlistId });
+      const { flavor, dataMode: mode } = await resolveViewScope();
+      const mine = getTerminalUniverseSymbols({ mode, flavor, includeWatchlistId: watchlistId });
       if (scope === "combined") {
         symbols = Array.from(new Set([...SP500_SYMBOLS.map(normSym), ...mine.map(normSym)].filter(Boolean)));
       } else {

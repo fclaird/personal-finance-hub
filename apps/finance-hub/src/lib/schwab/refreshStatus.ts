@@ -2,6 +2,9 @@ import type Database from "better-sqlite3";
 
 import { getDb } from "@/lib/db";
 import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
+import { schwabStaleThresholdMs as staleThresholdForRth } from "@/lib/schwab/schwabStaleThreshold";
+
+export { schwabStaleThresholdMs } from "@/lib/schwab/schwabStaleThreshold";
 
 export type SchwabRefreshStatus = {
   isRunning: boolean;
@@ -15,15 +18,10 @@ export type SchwabRefreshStatus = {
   nextRecommendedAt: string | null;
 };
 
-export function schwabStaleThresholdMs(rthOpen?: boolean): number {
-  const open = rthOpen ?? isUsEquityRegularSessionOpen(new Date());
-  return open ? 60_000 : 600_000;
-}
-
 export function readSchwabRefreshStatus(db?: Database.Database): SchwabRefreshStatus {
   const database = db ?? getDb();
   const rthOpen = isUsEquityRegularSessionOpen(new Date());
-  const staleThresholdMs = schwabStaleThresholdMs(rthOpen);
+  const staleThresholdMs = staleThresholdForRth(rthOpen);
 
   const last = database
     .prepare(

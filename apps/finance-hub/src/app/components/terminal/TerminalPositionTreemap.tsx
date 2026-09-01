@@ -4,14 +4,35 @@ import { useMemo, type CSSProperties } from "react";
 import { ResponsiveContainer, Treemap } from "recharts";
 
 import type { HeatmapItem } from "@/app/components/HeatmapGrid";
+import { formatUsd2 } from "@/lib/format";
 import { symbolPageHref } from "@/lib/symbolPage";
+import { perfDisplayCaption, type TerminalPerfDisplayMode } from "@/lib/terminal/terminalPerfDisplay";
 import { treemapFillForChange } from "@/lib/terminal/dailyPerfColor";
+
+function colorFracForItem(it: HeatmapItem): number | null {
+  const v = it.perfColorFrac ?? it.changePercent;
+  return v == null || !Number.isFinite(v) ? null : v;
+}
+
+function perfLabelForItem(it: HeatmapItem): string {
+  if (it.perfLabel) return it.perfLabel;
+  const frac = colorFracForItem(it);
+  if (frac == null) return "—";
+  return `${frac * 100 >= 0 ? "+" : ""}${(frac * 100).toFixed(1)}%`;
+}
+
+function spotLabel(price: number | null | undefined, mask: boolean): string {
+  if (price == null || !Number.isFinite(price)) return "—";
+  return formatUsd2(price, { mask });
+}
 
 type TreemapRow = {
   name: string;
   size: number;
   symbol: string;
   pctFrac: number | null;
+  spotLabel: string;
+  perfLabel: string;
   fill: string;
   companyName: string | null;
 };
@@ -38,36 +59,36 @@ function TreemapCell(props: Record<string, unknown>) {
   const clipId = `tm-${sym}-${Math.round(x0 * 10)}-${Math.round(y0 * 10)}-${Math.round(w)}-${Math.round(h)}`.replace(/[^a-zA-Z0-9_-]/g, "_");
   const href = symbolPageHref(sym) ?? "#";
   const fill = typeof p.fill === "string" ? p.fill : treemapFillForChange(p.pctFrac ?? null);
-  const pctF = p.pctFrac;
-  const pctStr =
-    pctF == null || !Number.isFinite(pctF) ? "—" : `${pctF * 100 >= 0 ? "+" : ""}${(pctF * 100).toFixed(1)}%`;
-  const tip = (p.companyName ?? "").trim() || undefined;
+  const spotStr = typeof p.spotLabel === "string" ? p.spotLabel : "—";
+  const pctStr = typeof p.perfLabel === "string" ? p.perfLabel : "—";
+  const tipParts = [(p.companyName ?? "").trim(), spotStr !== "—" ? spotStr : null, pctStr !== "—" ? pctStr : null].filter(
+    Boolean,
+  );
+  const tip = tipParts.length > 0 ? tipParts.join(" · ") : undefined;
   const tc = "#ffffff";
 
   const minDim = Math.min(w, h);
   const area = w * h;
   /** Scale type with tile — big tiles get much larger labels. */
   const fsSym = Math.round(Math.max(10, Math.min(24, minDim * 0.15 + Math.sqrt(area) * 0.018)));
-  const fsPct = Math.max(9, Math.round(fsSym * 0.8));
-  const lineGap = Math.max(3, Math.round(fsSym * 0.15));
-  const blockH = fsSym * 1.05 + lineGap + fsPct * 1.05;
+  const fsSpot = Math.max(8, Math.round(fsSym * 0.76));
+  const fsPct = Math.max(8, Math.round(fsSym * 0.72));
+  const gap1 = Math.max(2, Math.round(fsSym * 0.12));
+  const gap2 = Math.max(3, Math.round(fsSym * 0.18));
+  const blockH = fsSym * 1.05 + gap1 + fsSpot * 1.05 + gap2 + fsPct * 1.05;
   const cx = x0 + w / 2;
   const cy = y0 + h / 2;
 
   const textStroke = "rgba(0,0,0,0.72)";
   const symStrokeW = Math.max(2, fsSym * 0.14);
+  const spotStrokeW = Math.max(1.5, fsSpot * 0.12);
   const pctStrokeW = Math.max(1.5, fsPct * 0.12);
 
-  const textStyleSym: CSSProperties = {
+  const textStyle = (strokeW: number): CSSProperties => ({
     paintOrder: "stroke fill",
     stroke: textStroke,
-    strokeWidth: symStrokeW,
-  };
-  const textStylePct: CSSProperties = {
-    paintOrder: "stroke fill",
-    stroke: textStroke,
-    strokeWidth: pctStrokeW,
-  };
+    strokeWidth: strokeW,
+  });
 
   /** Micro tiles: tile + tooltip only (avoids unreadable overlap). */
   if (minDim < 22 || h < 20) {
@@ -118,7 +139,8 @@ function TreemapCell(props: Record<string, unknown>) {
   }
 
   const ySym = cy - blockH / 2 + fsSym * 0.88;
-  const yPct = ySym + lineGap + fsPct * 0.85;
+  const ySpot = ySym + gap1 + fsSpot * 0.85;
+  const yPct = ySpot + gap2 + fsPct * 0.85;
 
   return (
     <g>
@@ -131,10 +153,13 @@ function TreemapCell(props: Record<string, unknown>) {
         {tip ? <title>{tip}</title> : null}
         <rect x={x0} y={y0} width={w} height={h} style={{ fill }} stroke="#09090b" strokeWidth={1} />
         <g clipPath={`url(#${clipId})`}>
-          <text x={cx} y={ySym} textAnchor="middle" fill={tc} fontSize={fsSym} fontWeight={800} style={textStyleSym}>
+          <text x={cx} y={ySym} textAnchor="middle" fill={tc} fontSize={fsSym} fontWeight={800} style={textStyle(symStrokeW)}>
             {sym}
           </text>
-          <text x={cx} y={yPct} textAnchor="middle" fill={tc} fontSize={fsPct} fontWeight={600} opacity={0.98} style={textStylePct}>
+          <text x={cx} y={ySpot} textAnchor="middle" fill={tc} fontSize={fsSpot} fontWeight={600} opacity={0.98} style={textStyle(spotStrokeW)}>
+            {spotStr}
+          </text>
+          <text x={cx} y={yPct} textAnchor="middle" fill={tc} fontSize={fsPct} fontWeight={600} opacity={0.95} style={textStyle(pctStrokeW)}>
             {pctStr}
           </text>
         </g>
@@ -149,6 +174,8 @@ export function TerminalPositionTreemap({
   heatView,
   companyNamesBySymbol,
   portfolioSizeCaption,
+  perfDisplayMode = "stock_pct",
+  maskPrices = false,
 }: {
   items: HeatmapItem[];
   mvBySymbol: Map<string, number>;
@@ -156,6 +183,8 @@ export function TerminalPositionTreemap({
   companyNamesBySymbol?: Map<string, string>;
   /** Overrides default portfolio caption when scope / weight controls are active. */
   portfolioSizeCaption?: string | null;
+  perfDisplayMode?: TerminalPerfDisplayMode;
+  maskPrices?: boolean;
 }) {
   const { rows, caption } = useMemo(() => {
     function companyNameFor(it: HeatmapItem): string | null {
@@ -180,12 +209,15 @@ export function TerminalPositionTreemap({
         size = capWeight(it);
       }
       if (size <= 0) continue;
-      const pctFrac = it.changePercent;
+      const pctFrac = colorFracForItem(it);
+      const perfLabel = perfLabelForItem(it);
       firstPass.push({
         name: sym,
         size,
         symbol: sym,
         pctFrac,
+        spotLabel: spotLabel(it.spotPrice, maskPrices),
+        perfLabel,
         fill: treemapFillForChange(pctFrac),
         companyName: companyNameFor(it),
       });
@@ -195,8 +227,8 @@ export function TerminalPositionTreemap({
       const cap =
         heatView === "portfolio"
           ? (portfolioSizeCaption?.trim() ||
-            "Tile area = portfolio market value (synced positions). Color = today’s % change (same scale as heatmap).")
-          : "Tile area ∝ √(market cap). Color = today’s % change.";
+            `Tile area = portfolio market value (synced positions). ${perfDisplayCaption(perfDisplayMode)}`)
+          : `Tile area ∝ √(market cap). ${perfDisplayCaption("stock_pct")}`;
       return { rows: sortTreemapRowsDesc(firstPass), caption: cap };
     }
 
@@ -206,12 +238,15 @@ export function TerminalPositionTreemap({
         const sym = it.symbol.toUpperCase();
         const size = capWeight(it);
         if (size <= 0) continue;
-        const pctFrac = it.changePercent;
+        const pctFrac = colorFracForItem(it);
+        const perfLabel = perfLabelForItem(it);
         second.push({
           name: sym,
           size,
           symbol: sym,
           pctFrac,
+          spotLabel: spotLabel(it.spotPrice, maskPrices),
+          perfLabel,
           fill: treemapFillForChange(pctFrac),
           companyName: companyNameFor(it),
         });
@@ -226,7 +261,7 @@ export function TerminalPositionTreemap({
     }
 
     return { rows: [], caption: "" };
-  }, [items, mvBySymbol, heatView, companyNamesBySymbol, portfolioSizeCaption]);
+  }, [items, mvBySymbol, heatView, companyNamesBySymbol, portfolioSizeCaption, perfDisplayMode, maskPrices]);
 
   if (rows.length === 0) {
     return (

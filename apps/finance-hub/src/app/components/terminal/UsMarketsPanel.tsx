@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   MarketGlanceCard,
+  sharedSparklineYDomain,
   type UsMarketGlanceItem,
 } from "@/app/components/terminal/MarketGlanceCard";
 import { MarketGlanceCombinedChart } from "@/app/components/terminal/MarketGlanceCombinedChart";
@@ -18,6 +19,7 @@ import {
   type GlanceTileInstrumentId,
 } from "@/lib/market/glanceTileInstruments";
 import type { GlanceTileChartWindowCtx } from "@/lib/market/glanceTileChartWindow";
+import { PortfolioGlanceUnlockProvider } from "@/app/components/terminal/portfolioGlanceUnlocked";
 import {
   readGlanceAlternativeSlots,
   readGlanceMarketsSlots,
@@ -175,6 +177,11 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
     ],
   );
 
+  const sharedChartYDomain = useMemo(() => {
+    if (sourceMode === "futures") return undefined;
+    return sharedSparklineYDomain(displayItems, tileChartWindowCtx);
+  }, [displayItems, tileChartWindowCtx, sourceMode]);
+
   const setMarketsSlot = useCallback((slotIndex: 2 | 3 | 4, id: GlanceTileInstrumentId) => {
     setMarketsSlots((prev) => {
       const next: [GlanceTileInstrumentId, GlanceTileInstrumentId, GlanceTileInstrumentId] = [...prev];
@@ -223,8 +230,11 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
     [setAlternativeSlot, setMarketsSlot, sourceMode],
   );
 
+  const portfolioItem = usMarkets?.items[0];
+  const portfolioAvSync = portfolioItem?.lastAccountValueSyncAt;
+
   return (
-    <>
+    <PortfolioGlanceUnlockProvider>
       <div className="flex flex-wrap items-center justify-between gap-3">
         {usMarkets ? (
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
@@ -317,7 +327,12 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
             </button>
           </div>
           <div className="text-xs text-zinc-600 dark:text-zinc-400">
-            {usMarkets?.updatedAt ? `Updated ${new Date(usMarkets.updatedAt).toLocaleTimeString()}` : "—"}
+            {usMarkets?.updatedAt ? `Glance ${new Date(usMarkets.updatedAt).toLocaleTimeString()}` : "—"}
+            {portfolioAvSync ? (
+              <span className="ml-2" title="Latest Schwab account value snapshot for portfolio tile">
+                · AV {new Date(portfolioAvSync).toLocaleTimeString()}
+              </span>
+            ) : null}
           </div>
         </div>
       </div>
@@ -340,6 +355,7 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
                     chartYmd={usMarkets.session.chartYmd}
                     showingPriorSession={usMarkets.session.showingPriorSession}
                     updatedAt={usMarkets.updatedAt}
+                    chartYDomain={sharedChartYDomain}
                     alternateTitleSelector={titleSelectorForSpec(spec)}
                   />
                 );
@@ -358,7 +374,7 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
                 : "Combined view indexes each line to 100 at prior close so portfolio and index day moves are comparable. Extended pre/after-hours segments are included when available (8pm–4am ET excluded)."
               : sourceMode === "futures"
                 ? "Each tile title opens a menu. ES/NQ are CME Globex futures; Nikkei 225 is the Tokyo cash index. Amber header = that market is closed."
-                : "Portfolio uses Schwab liquidation values plus external holdings. Nasdaq and S&P tiles auto-switch to NQ/ES e-mini outside US RTH unless you pick a specific instrument. Slots 2–4 have title menus. Tile charts zoom to the last RTH hour after the close or the live session after the open. 8pm–4am ET is omitted from extended segments."}
+                : "Portfolio tile: indexed day % (100 = prior close), not a tradable price — use Index/$ toggle or unlock balance for dollars. Schwab liquidation + external holdings; AV sync every ~3 min in RTH. Nasdaq/S&P auto-switch to NQ/ES outside US RTH. Slots 2–4 have title menus. 8pm–4am ET omitted from extended segments."}
           </div>
         </>
       ) : (
@@ -366,6 +382,6 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
           {sourceMode === "futures" ? "Loading alternative glance…" : "Loading today&apos;s glance…"}
         </div>
       )}
-    </>
+    </PortfolioGlanceUnlockProvider>
   );
 }

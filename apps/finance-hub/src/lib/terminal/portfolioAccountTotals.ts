@@ -3,8 +3,10 @@ import type Database from "better-sqlite3";
 import { getDb } from "@/lib/db";
 import { allSyncedAccountsWhereSql, latestSnapshotPerAccountJoinSql } from "@/lib/holdings/latestSnapshots";
 import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
-import { isAuroraExclusiveAccountId } from "@/lib/auroraExclusive";
+import type { FlavorId } from "@/lib/flavor";
+import { isAccountInFlavor } from "@/lib/flavors/accounts";
 import { isoDateInUsEastern } from "@/lib/market/glanceSession";
+import { schwabAccountValuesFresh } from "@/lib/schwab/accountValuePoints";
 import { pickEquityUsd, pickSchwabPriorDayEquityUsd } from "@/lib/schwab/accountBalances";
 import { schwabFetch } from "@/lib/schwab/client";
 import { fetchSchwabSessionNetCashFlow } from "@/lib/terminal/portfolioCashFlows";
@@ -31,18 +33,18 @@ export type PortfolioAccountTotals = {
   source: "schwab_live" | "schwab_db";
 };
 
-function schwabAccountId(sa: SchwabAccountPayload["securitiesAccount"]): string | null {
+function schwabAccountId(sa: SchwabAccountPayload["securitiesAccount"], flavor: FlavorId): string | null {
   const acctIdPart =
     (sa.accountId != null && String(sa.accountId).trim() !== "" ? String(sa.accountId) : null) ??
     (sa.accountNumber != null && String(sa.accountNumber).trim() !== "" ? String(sa.accountNumber) : null);
   if (!acctIdPart) return null;
   const accountId = `schwab_${acctIdPart}`;
-  if (isAuroraExclusiveAccountId(accountId)) return null;
+  if (!isAccountInFlavor(flavor, accountId)) return null;
   return accountId;
 }
 
 /** Sum latest Schwab liquidation values stored from sync. */
-export function schwabLiquidationFromDb(db: Database.Database): { current: number; byAccount: Map<string, number> } {
+export function schwabLiquidationFromDb(db: Database.Database, flavor: FlavorId = "main"): { current: number; byAccount: Map<string, number> } {
   const rows = db
     .prepare(
       `
@@ -54,7 +56,7 @@ export function schwabLiquidationFromDb(db: Database.Database): { current: numbe
         FROM account_value_points
         GROUP BY account_id
       ) latest ON latest.account_id = av.account_id AND latest.max_as_of = av.as_of
-      WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql("a")}
+      WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql(flavor, "a")}
     `,
     )
     .all() as Array<{ account_id: string; equity_value: number }>;
@@ -74,6 +76,7 @@ export function schwabLiquidationFromDb(db: Database.Database): { current: numbe
 export function schwabPriorLiquidationFromDb(
   db: Database.Database,
   sessionYmd: string,
+  flavor: FlavorId = "main",
 ): { prior: number; byAccount: Map<string, number> } {
   const rows = db
     .prepare(
@@ -87,7 +90,7 @@ export function schwabPriorLiquidationFromDb(
         WHERE date(as_of) <= @session_ymd
         GROUP BY account_id
       ) prior ON prior.account_id = av.account_id AND prior.max_as_of = av.as_of
-      WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql("a")}
+      WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql(flavor, "a")}
     `,
     )
     .all({ session_ymd: sessionYmd }) as Array<{ account_id: string; equity_value: number }>;
@@ -104,7 +107,7 @@ export function schwabPriorLiquidationFromDb(
 }
 
 /** Manual, Plaid, and other non-Schwab accounts from latest holding snapshots. */
-export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd: string): {
+export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd: string, flavor: FlavorId = "main"): {
   current: number;
   prior: number;
 } {
@@ -117,7 +120,7 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
       ${latestSnapshotPerAccountJoinSql("hs")}
       JOIN positions p ON p.snapshot_id = hs.id
       WHERE a.id NOT LIKE 'schwab_%'
-        AND ${allSyncedAccountsWhereSql("a")}
+        AND ${allSyncedAccountsWhereSql(flavor, "a")}
     `,
     )
     .get() as { mv: number } | undefined;
@@ -136,7 +139,7 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
       ) _prior_snap ON _prior_snap.account_id = hs.account_id AND _prior_snap.max_as_of = hs.as_of
       JOIN positions p ON p.snapshot_id = hs.id
       WHERE a.id NOT LIKE 'schwab_%'
-        AND ${allSyncedAccountsWhereSql("a")}
+        AND ${allSyncedAccountsWhereSql(flavor, "a")}
     `,
     )
     .get({ session_ymd: priorSessionYmd }) as { mv: number } | undefined;
@@ -152,7 +155,7 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
   };
 }
 
-export async function fetchSchwabLiquidationLive(): Promise<{
+export async function fetchSchwabLiquidationLive(flavor: FlavorId = "main"): Promise<{
   byAccount: Map<string, { current: number; prior: number | null }>;
   current: number;
   prior: number | null;
@@ -164,7 +167,7 @@ export async function fetchSchwabLiquidationLive(): Promise<{
     let prior = 0;
     let accountsWithPrior = 0;
     for (const a of accounts) {
-      const accountId = schwabAccountId(a.securitiesAccount);
+      const accountId = schwabAccountId(a.securitiesAccount, flavor);
       if (!accountId) continue;
       const equity = pickEquityUsd(a.securitiesAccount.currentBalances);
       if (equity == null || !Number.isFinite(equity) || equity <= 0) continue;
@@ -188,7 +191,7 @@ export async function fetchSchwabLiquidationLive(): Promise<{
 }
 
 /** Latest stored Schwab prior-day equity per account (from the most recent sync). */
-export function schwabPriorEquityFromLatestSync(db: Database.Database): {
+export function schwabPriorEquityFromLatestSync(db: Database.Database, flavor: FlavorId = "main"): {
   prior: number;
   byAccount: Map<string, number>;
 } {
@@ -204,7 +207,7 @@ export function schwabPriorEquityFromLatestSync(db: Database.Database): {
         GROUP BY account_id
       ) latest ON latest.account_id = av.account_id AND latest.max_as_of = av.as_of
       WHERE a.id LIKE 'schwab_%'
-        AND ${allSyncedAccountsWhereSql("a")}
+        AND ${allSyncedAccountsWhereSql(flavor, "a")}
         AND av.prior_equity_value IS NOT NULL
         AND av.prior_equity_value > 0
     `,
@@ -260,6 +263,7 @@ function resolveSchwabAccountTotals(
 export function schwabIntradayTotalsFromDb(
   db: Database.Database,
   sessionYmd: string,
+  flavor: FlavorId = "main",
 ): Array<{ asOf: string; tsMs: number; total: number }> {
   const rows = db
     .prepare(
@@ -267,7 +271,7 @@ export function schwabIntradayTotalsFromDb(
       SELECT av.as_of AS as_of, SUM(av.equity_value) AS total
       FROM account_value_points av
       JOIN accounts a ON a.id = av.account_id
-      WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql("a")}
+      WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql(flavor, "a")}
       GROUP BY av.as_of
       ORDER BY av.as_of ASC
     `,
@@ -293,12 +297,14 @@ export async function resolvePortfolioAccountTotals(
   sessionYmd: string,
   priorSessionYmd: string,
   db: Database.Database = getDb(),
+  flavor: FlavorId = "main",
 ): Promise<PortfolioAccountTotals | null> {
-  const live = await fetchSchwabLiquidationLive();
-  const dbSchwab = schwabLiquidationFromDb(db);
-  const dbPriorSchwab = schwabPriorLiquidationFromDb(db, priorSessionYmd);
-  const dbPriorEquity = schwabPriorEquityFromLatestSync(db);
-  const external = externalMarketValueFromDb(db, priorSessionYmd);
+  const live =
+    schwabAccountValuesFresh(db) ? null : await fetchSchwabLiquidationLive(flavor);
+  const dbSchwab = schwabLiquidationFromDb(db, flavor);
+  const dbPriorSchwab = schwabPriorLiquidationFromDb(db, priorSessionYmd, flavor);
+  const dbPriorEquity = schwabPriorEquityFromLatestSync(db, flavor);
+  const external = externalMarketValueFromDb(db, priorSessionYmd, flavor);
   const schwabTotals = resolveSchwabAccountTotals(live, dbSchwab, dbPriorSchwab, dbPriorEquity);
 
   const schwabCurrent = schwabTotals.current;
@@ -313,7 +319,7 @@ export async function resolvePortfolioAccountTotals(
   let netCashFlow = 0;
   if (live != null) {
     try {
-      netCashFlow = await fetchSchwabSessionNetCashFlow(sessionYmd, db);
+      netCashFlow = await fetchSchwabSessionNetCashFlow(sessionYmd, db, flavor);
     } catch {
       netCashFlow = 0;
     }

@@ -16,6 +16,7 @@ export type SchwabTxnItem = {
   amount?: number;
   cost?: number;
   quantity?: number;
+  feeType?: string;
   instrument?: SchwabTxnInstrument;
 };
 
@@ -44,6 +45,18 @@ export function itemsOf(tx: SchwabTxnRaw): SchwabTxnItem[] {
   const b = tx.transferItems;
   if (Array.isArray(b) && b.length) return b;
   return [];
+}
+
+function isFeeOrCurrencyLeg(leg: SchwabTxnItem): boolean {
+  if (leg.feeType) return true;
+  const asset = (leg.instrument?.assetType ?? "").toUpperCase();
+  const sym = (leg.instrument?.symbol ?? "").toUpperCase();
+  return asset === "CURRENCY" || sym === "CURRENCY_USD";
+}
+
+/** Security legs only — skips commission/fee/currency rows that precede the trade in transferItems. */
+export function securityLegsOf(tx: SchwabTxnRaw): SchwabTxnItem[] {
+  return itemsOf(tx).filter((leg) => !isFeeOrCurrencyLeg(leg));
 }
 
 export function externalActivityId(tx: SchwabTxnRaw): string | null {
@@ -87,7 +100,7 @@ export function normalizeSchwabTransaction(tx: SchwabTxnRaw): NormalizedBrokerTr
   const date = tradeDateIso(tx);
   if (!ext || !date) return null;
 
-  const items = itemsOf(tx);
+  const items = securityLegsOf(tx);
   const first = items[0];
   const inst = first?.instrument;
   const assetType = (inst?.assetType ?? "").toUpperCase() || null;

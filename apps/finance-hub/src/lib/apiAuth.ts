@@ -2,6 +2,16 @@
 
 import { authorizeCronRequest } from "@/lib/internalCronAuth";
 
+/** Constant-time compare (Edge-safe — middleware cannot import node:crypto). */
+function safeEqual(a: string, b: string): boolean {
+  const aa = new TextEncoder().encode(a);
+  const bb = new TextEncoder().encode(b);
+  if (aa.length !== bb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < aa.length; i++) diff |= aa[i]! ^ bb[i]!;
+  return diff === 0;
+}
+
 export function apiAuthRequired(): boolean {
   return Boolean(process.env.FINANCE_HUB_API_KEY?.trim());
 }
@@ -11,7 +21,13 @@ export function getConfiguredApiKey(): string | null {
 }
 
 export function isApiAuthExemptPath(pathname: string): boolean {
-  const exempt = ["/api/schwab/callback", "/api/x/oauth/callback", "/api/auth/config"];
+  const exempt = [
+    "/api/schwab/start",
+    "/api/schwab/callback",
+    "/api/x/oauth/start",
+    "/api/x/oauth/callback",
+    "/api/auth/config",
+  ];
   return exempt.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
@@ -38,5 +54,7 @@ export function authorizeApiRequest(req: Request): boolean {
   if (isCronProtectedApiPath(pathname) && authorizeCronRequest(req)) return true;
   const expected = getConfiguredApiKey();
   if (!expected) return true;
-  return getApiKeyFromRequest(req) === expected;
+  const provided = getApiKeyFromRequest(req);
+  if (!provided) return false;
+  return safeEqual(provided, expected);
 }

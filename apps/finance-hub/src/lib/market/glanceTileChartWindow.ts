@@ -184,6 +184,9 @@ export function glanceItemForTileChart(
   item: UsMarketGlanceItem,
   ctx: GlanceTileChartWindowCtx,
 ): { item: UsMarketGlanceItem; omitPriorAnchor: boolean } {
+  if (item.id === "portfolio") {
+    return { item, omitPriorAnchor: true };
+  }
   const window = resolveGlanceTileChartWindow(item, ctx);
   if (!window) return { item, omitPriorAnchor: false };
   return {
@@ -271,6 +274,38 @@ export function lastGlanceChartDataTsMs(rows: Array<{ tsMs?: number | null }>): 
  * RTH live: 09:30–16:00. Overnight bridge: prior 15:00 through today's 09:30 open.
  * Post-close: 15:00–20:00. Otherwise last RTH hour through the 16:00 close.
  */
+/** Portfolio sparkline axis from first/last liquidation timestamps (not equity trim windows). */
+export function resolvePortfolioGlanceChartAxisDomain(
+  ctx: GlanceTileChartWindowCtx,
+  rows: Array<{ tsMs?: number | null }>,
+): { startMs: number; endMs: number; mode: GlanceChartWindowMode } | null {
+  const sessionYmd = (ctx.sessionYmd ?? nyYmd(new Date(ctxNowMs(ctx)))).trim();
+  if (!sessionYmd) return null;
+
+  let firstTs: number | null = null;
+  let lastTs: number | null = null;
+  for (const row of rows) {
+    const ts = row.tsMs;
+    if (ts == null || !Number.isFinite(ts)) continue;
+    if (firstTs == null || ts < firstTs) firstTs = ts;
+    if (lastTs == null || ts > lastTs) lastTs = ts;
+  }
+
+  const rthOpen = nyWallTimeMs(sessionYmd, GLANCE_RTH_OPEN_MIN);
+  const rthClose = nyWallTimeMs(sessionYmd, GLANCE_RTH_CLOSE_MIN);
+  const nowMs = ctxNowMs(ctx);
+  const startMs = firstTs != null ? Math.min(firstTs, rthOpen) : rthOpen;
+  const endMs =
+    lastTs != null
+      ? Math.max(lastTs, ctx.marketOpen ? Math.min(nowMs, rthClose) : rthClose)
+      : ctx.marketOpen
+        ? Math.min(nowMs, rthClose)
+        : rthClose;
+
+  if (endMs <= startMs) return null;
+  return { startMs, endMs, mode: ctx.marketOpen ? "rth_live" : "closed_session" };
+}
+
 export function resolveGlanceTileChartAxisDomain(
   ctx: GlanceTileChartWindowCtx,
   item?: GlanceTileChartItemRef | GlanceTileChartItemRef[],

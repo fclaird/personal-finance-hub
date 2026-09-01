@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/db";
 import type { DataMode } from "@/lib/dataMode";
+import type { FlavorId } from "@/lib/flavor";
 import type { AnalyticsBucketKey } from "@/lib/accountBuckets";
 import { bucketFromAccount } from "@/lib/accountBuckets";
 import { latestSnapshotIds, latestSnapshotScopeForMode, accountsInDataModeWhereSql } from "@/lib/holdings/latestSnapshots";
@@ -15,13 +16,18 @@ export function portfolioImpliedEquityPrice(
   db: ReturnType<typeof getDb>,
   mode: DataMode,
   underlying: string,
+  flavor: FlavorId = "main",
 ): number | null {
-  return portfolioImpliedEquityPriceMap(db, mode).get((underlying ?? "").trim().toUpperCase()) ?? null;
+  return portfolioImpliedEquityPriceMap(db, mode, flavor).get((underlying ?? "").trim().toUpperCase()) ?? null;
 }
 
-export function portfolioImpliedEquityPriceMap(db: ReturnType<typeof getDb>, mode: DataMode): Map<string, number> {
+export function portfolioImpliedEquityPriceMap(
+  db: ReturnType<typeof getDb>,
+  mode: DataMode,
+  flavor: FlavorId = "main",
+): Map<string, number> {
   const scope = latestSnapshotScopeForMode(mode);
-  const snapshotIds = latestSnapshotIds(db, scope);
+  const snapshotIds = latestSnapshotIds(db, scope, flavor);
   if (snapshotIds.length === 0) return new Map();
 
   const rows = db
@@ -52,10 +58,11 @@ export function portfolioImpliedEquityPriceMap(db: ReturnType<typeof getDb>, mod
 export async function fetchPortfolioEquityMarkPriceMap(
   db: ReturnType<typeof getDb>,
   mode: DataMode = "auto",
+  flavor: FlavorId = "main",
 ): Promise<Map<string, number>> {
-  const implied = portfolioImpliedEquityPriceMap(db, mode);
+  const implied = portfolioImpliedEquityPriceMap(db, mode, flavor);
   const scope = latestSnapshotScopeForMode(mode);
-  const snapshotIds = latestSnapshotIds(db, scope);
+  const snapshotIds = latestSnapshotIds(db, scope, flavor);
   const symbols = new Set(implied.keys());
 
   if (snapshotIds.length > 0) {
@@ -93,10 +100,11 @@ export async function portfolioEquityMarkPrice(
   db: ReturnType<typeof getDb>,
   mode: DataMode,
   underlying: string,
+  flavor: FlavorId = "main",
 ): Promise<number | null> {
   const key = (underlying ?? "").trim().toUpperCase();
   if (key === "CASH") return 1;
-  const map = await fetchPortfolioEquityMarkPriceMap(db, mode);
+  const map = await fetchPortfolioEquityMarkPriceMap(db, mode, flavor);
   return map.get(key) ?? null;
 }
 
@@ -183,8 +191,10 @@ export function syntheticEquityMvForSnapshot(
   db: ReturnType<typeof getDb>,
   snapshotId: string,
   mode: DataMode = "auto",
-  priceByUnderlying = portfolioImpliedEquityPriceMap(db, mode),
+  priceByUnderlying?: Map<string, number>,
+  flavor: FlavorId = "main",
 ): number {
+  const pxMap = priceByUnderlying ?? portfolioImpliedEquityPriceMap(db, mode, flavor);
   const rows = db
     .prepare(
       `
@@ -212,7 +222,7 @@ export function syntheticEquityMvForSnapshot(
     const key = normalizeOptionUnderlying(row.us_symbol, row.option_symbol);
     if (key === "CASH") continue;
     const sh = row.synthetic_shares ?? 0;
-    const px = priceByUnderlying.get(key);
+    const px = pxMap.get(key);
     sum += sh * (px ?? 0);
   }
   return sum;
@@ -249,17 +259,19 @@ export function rollupExposureBuckets(buckets: BucketExposure[]): ExposureRow[] 
 export function getUnderlyingExposureRollup(
   mode: DataMode = "auto",
   equityMarkMap?: Map<string, number>,
+  flavor: FlavorId = "main",
 ): ExposureRow[] {
-  return rollupExposureBuckets(getUnderlyingExposureByBucket(mode, equityMarkMap));
+  return rollupExposureBuckets(getUnderlyingExposureByBucket(mode, equityMarkMap, flavor));
 }
 
 export function getUnderlyingExposureByBucket(
   mode: DataMode = "auto",
   equityMarkMap?: Map<string, number>,
+  flavor: FlavorId = "main",
 ): BucketExposure[] {
   const db = getDb();
   const scope = latestSnapshotScopeForMode(mode);
-  const snapshotIds = latestSnapshotIds(db, scope);
+  const snapshotIds = latestSnapshotIds(db, scope, flavor);
   if (snapshotIds.length === 0) return [];
 
   const snapshotIdSet = new Set(snapshotIds);
@@ -272,7 +284,7 @@ export function getUnderlyingExposureByBucket(
       FROM holding_snapshots hs
       JOIN accounts a ON a.id = hs.account_id
       WHERE hs.id IN (SELECT value FROM json_each(@snaps))
-        AND ${accountsInDataModeWhereSql(mode, "a")}
+        AND ${accountsInDataModeWhereSql(mode, flavor, "a")}
     `,
     )
     .all({ snaps: snapsJson }) as Array<{ account_name: string; account_nickname: string | null; account_bucket: string | null; snapshot_id: string }>;
@@ -419,7 +431,7 @@ export function getUnderlyingExposureByBucket(
     commit(bucket, sym, prev);
   }
 
-  const priceByUnderlying = equityMarkMap ?? portfolioImpliedEquityPriceMap(db, mode);
+  const priceByUnderlying = equityMarkMap ?? portfolioImpliedEquityPriceMap(db, mode, flavor);
   for (const m of byBucket.values()) {
     for (const row of m.values()) {
       const px = priceByUnderlying.get(row.underlyingSymbol);

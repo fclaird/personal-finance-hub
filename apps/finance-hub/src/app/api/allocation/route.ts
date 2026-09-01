@@ -1,20 +1,19 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 
 import { getConsolidatedAllocation } from "@/lib/analytics/allocation";
 import { fetchPortfolioEquityMarkPriceMap } from "@/lib/analytics/optionsExposure";
 import { getDb } from "@/lib/db";
-import { DATA_MODE_COOKIE, parseDataMode } from "@/lib/dataMode";
+import { ensureFreshOptionData } from "@/lib/schwab/ensureOptionGreeks";
+import { resolveViewScope } from "@/lib/viewScope";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const includeSynthetic = url.searchParams.get("synthetic") !== "0";
-  const jar = await cookies();
-  const mode = parseDataMode(jar.get(DATA_MODE_COOKIE)?.value);
+  const { flavor, dataMode: mode } = await resolveViewScope();
+  if (includeSynthetic) await ensureFreshOptionData();
   const equityMarks = includeSynthetic
-    ? await fetchPortfolioEquityMarkPriceMap(getDb(), mode)
+    ? await fetchPortfolioEquityMarkPriceMap(getDb(), mode, flavor)
     : undefined;
-  const data = getConsolidatedAllocation(includeSynthetic, mode, equityMarks);
+  const data = getConsolidatedAllocation(includeSynthetic, mode, equityMarks, flavor);
   return NextResponse.json({ ok: true, mode, includeSynthetic, ...data });
 }
-

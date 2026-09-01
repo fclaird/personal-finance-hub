@@ -80,6 +80,29 @@ test("buildTileChartRows inserts break before pre-market after overnight gap", (
   assert.ok(extRows.length >= 2);
 });
 
+test("buildTileChartRows does not insert trading-gap breaks for portfolio", () => {
+  const t0 = new Date("2026-05-22T10:00:00-04:00").getTime();
+  const t1 = new Date("2026-05-22T14:00:00-04:00").getTime();
+  const item: UsMarketGlanceItem = {
+    id: "portfolio",
+    label: "Portfolio",
+    symbol: "PORT",
+    last: 100.2,
+    change: 0.2,
+    changePct: 0.2,
+    previousClose: 100,
+    series: [
+      { idx: 0, close: 100, tsMs: t0 },
+      { idx: 1, close: 100.2, tsMs: t1 },
+    ],
+    valueMode: "percent",
+  };
+  const rows = buildTileChartRows(item, { omitPriorAnchor: true });
+  const breakRow = rows.find((r) => r.regular == null && r.extended == null);
+  assert.equal(breakRow, undefined);
+  assert.equal(rows.filter((r) => r.regular != null).length, 2);
+});
+
 test("formatGlancePointTime includes ET session label", () => {
   const label = formatGlancePointTime(new Date("2026-05-22T16:30:00-04:00").getTime(), "extended");
   assert.match(label, /ET$/);
@@ -246,19 +269,18 @@ test("sharedSparklineYDomain unions equity tile ranges with minimal padding", ()
   assert.ok(domain![1]! - domain![0]! < 3.5, "equity shared domain should stay tight");
 });
 
-test("yDomainFromChartRange includes nearby reference lines and minimal padding", () => {
+test("yDomainFromChartRange includes reference lines in domain", () => {
   const domain = yDomainFromChartRange(100.55, 102.45, [100, 102.5]);
-  assert.ok(domain[0]! > 100.4, "distant prior close should not flatten the scale");
+  assert.ok(domain[0]! <= 100, "prior close reference should be included");
   assert.ok(domain[1]! >= 102.5);
-  assert.ok(domain[1]! - domain[0]! < 2.5);
 });
 
-test("yDomainFromChartRange ignores prior close when it is far off the trimmed window", () => {
+test("yDomainFromChartRange always includes prior close even when far from trimmed window", () => {
   const domain = yDomainFromChartRange(100.55, 102.45, [100]);
-  assert.ok(domain[0]! > 100.4, "prior close off-window should not flatten the scale");
+  assert.ok(domain[0]! <= 100, "prior close reference should stay visible as dashed baseline");
 });
 
-test("sparklineYDomainFromChartData fits enriched tile rows", () => {
+test("sparklineYDomainFromChartData includes prior close reference in domain", () => {
   const domain = sparklineYDomainFromChartData(
     [
       { idx: 0, regular: 100.62, extended: null, segment: "regular", gainFill: 100.62, lossFill: null },
@@ -266,7 +288,8 @@ test("sparklineYDomainFromChartData fits enriched tile rows", () => {
     ],
     { priorReferenceY: 100, sessionCloseReferenceY: 100.65, splitRowIdx: 0 },
   );
-  assert.ok(domain[1]! - domain[0]! < 0.2);
+  assert.ok(domain[0]! <= 100);
+  assert.ok(domain[1]! >= 100.65);
 });
 
 test("yDomainFromIndexedRange keeps visible lows/highs with minimal padding", () => {

@@ -23,6 +23,9 @@ const OPTION_FLOW_MODE_KEY = "terminal_option_flow_mode_v1";
 const TABLE_COLUMN_ORDER_KEY = "terminal_table_column_order_v2";
 const LEGACY_TABLE_COLUMN_ORDER_KEY = "terminal_table_column_order_v1";
 const HEATMAP_HIDDEN_SYMBOLS_KEY = "terminal_heatmap_hidden_symbols_v1";
+const PORTFOLIO_GLANCE_DISPLAY_KEY = "terminal_portfolio_glance_display_v1";
+
+export type PortfolioGlanceDisplayMode = "indexed" | "dollar";
 
 export type GlanceSourceMode = "markets" | "futures";
 export type GlanceViewMode = "tiles" | "combined";
@@ -316,6 +319,22 @@ export function readHeatmapHiddenSymbols(): Set<string> {
     return new Set(normalizeSymbolList(JSON.parse(raw) as unknown));
   } catch {
     return new Set();
+  }
+}
+
+export function readPortfolioGlanceDisplayMode(): PortfolioGlanceDisplayMode {
+  try {
+    return localStorage.getItem(PORTFOLIO_GLANCE_DISPLAY_KEY) === "dollar" ? "dollar" : "indexed";
+  } catch {
+    return "indexed";
+  }
+}
+
+export function writePortfolioGlanceDisplayMode(mode: PortfolioGlanceDisplayMode): void {
+  try {
+    localStorage.setItem(PORTFOLIO_GLANCE_DISPLAY_KEY, mode);
+  } catch {
+    // ignore
   }
 }
 

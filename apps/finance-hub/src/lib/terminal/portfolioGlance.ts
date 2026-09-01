@@ -6,17 +6,28 @@ import { extendedPhaseForGrid, type GlanceTimedGrid } from "@/lib/market/glanceS
 import { GLANCE_PREMARKET_START_MIN, GLANCE_RTH_OPEN_MIN } from "@/lib/market/glanceTileChartWindow";
 import type { UsMarketIndexCard } from "@/lib/market/usMarketIndices";
 import { normalizeSeriesForChart } from "@/lib/market/usMarketIndices";
+import type { FlavorId } from "@/lib/flavor";
 import {
   priorNySessionYmd,
   resolvePortfolioAccountTotals,
   schwabIntradayTotalsFromDb,
 } from "@/lib/terminal/portfolioAccountTotals";
 import { portfolioDailyReturnPct } from "@/lib/terminal/portfolioCashFlows";
+import { PORTFOLIO_INDEX_BASE } from "@/lib/terminal/portfolioGlanceConstants";
 
-export const PORTFOLIO_INDEX_BASE = 100;
+export { PORTFOLIO_INDEX_BASE } from "@/lib/terminal/portfolioGlanceConstants";
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-export type PortfolioGlanceCard = Omit<UsMarketIndexCard, "id"> & { id: "portfolio" };
+export type PortfolioGlanceCard = Omit<UsMarketIndexCard, "id"> & {
+  id: "portfolio";
+  /** ISO timestamp of latest Schwab account_value_points row for this session. */
+  lastAccountValueSyncAt?: string | null;
+  /** DB liquidation tail disagrees with live totals (chart may use shape-preserving path). */
+  intradayStale?: boolean;
+  /** Withdrawal cash flow adjusted intraday path. */
+  cashFlowAdjusted?: boolean;
+  netCashFlow?: number | null;
+};
 
 export type OptionLeg = {
   quantity: number;
@@ -91,7 +102,8 @@ export function optionValueAt(
 }
 
 /** Schwab-only sync points disagreeing with live totals by more than this → simple open→now line. */
-const STALE_INTRADAY_INDEX_GAP = 0.001;
+export const PORTFOLIO_INTRADAY_STALE_GAP = 0.001;
+const STALE_INTRADAY_INDEX_GAP = PORTFOLIO_INTRADAY_STALE_GAP;
 
 /** Skip flat synthetic extended path when live index barely moved vs session close. */
 export function hasMaterialPortfolioExtendedMove(sessionClose: number, lastIndex: number): boolean {
@@ -210,6 +222,67 @@ export function buildPortfolioIndexSeries(
   return portfolioTwoPointSeries(sessionYmd, nowMs, lastIndex);
 }
 
+export function detectPortfolioIntradayStale(
+  sessionTotals: Array<{ total: number }>,
+  priorNetValue: number,
+  lastIndex: number,
+  externalCurrent: number,
+): boolean {
+  if (sessionTotals.length < 2) return false;
+  const tailMv = sessionTotals[sessionTotals.length - 1]!.total + externalCurrent;
+  const tailIndex = toIndex(tailMv, priorNetValue);
+  const ref = Math.max(Math.abs(lastIndex), 1e-9);
+  return Math.abs(tailIndex - lastIndex) / ref > STALE_INTRADAY_INDEX_GAP;
+}
+
+export function detectPortfolioCashFlowAdjusted(
+  sessionTotals: Array<{ tsMs: number; total: number }>,
+  netCashFlow: number,
+): boolean {
+  if (netCashFlow >= 0 || sessionTotals.length < 2) return false;
+  const adjusted = adjustRthTotalsForWithdrawal(sessionTotals, netCashFlow);
+  return adjusted.some((pt, i) => pt.total !== sessionTotals[i]!.total);
+}
+
+/** Linear bridge between sparse Schwab liquidation snapshots (avoids chart gaps). */
+export function bridgePortfolioSeriesGaps(
+  points: Array<{ idx: number; close: number; tsMs?: number }>,
+  maxGapMs = 4 * 60 * 60 * 1000,
+  stepMs = 20 * 60 * 1000,
+): Array<{ idx: number; close: number; tsMs?: number }> {
+  if (points.length < 2) return points;
+  const out: Array<{ idx: number; close: number; tsMs?: number }> = [{ ...points[0]!, idx: 0 }];
+  for (let i = 1; i < points.length; i++) {
+    const prev = out[out.length - 1]!;
+    const curr = points[i]!;
+    const t0 = prev.tsMs;
+    const t1 = curr.tsMs;
+    if (
+      t0 != null &&
+      t1 != null &&
+      Number.isFinite(t0) &&
+      Number.isFinite(t1) &&
+      t1 > t0
+    ) {
+      const gap = t1 - t0;
+      if (gap > 45 * 60 * 1000 && gap <= maxGapMs) {
+        const steps = Math.min(Math.floor(gap / stepMs), 12);
+        for (let s = 1; s < steps; s++) {
+          const t = t0 + s * stepMs;
+          const f = (t - t0) / gap;
+          out.push({
+            idx: out.length,
+            close: prev.close + (curr.close - prev.close) * f,
+            tsMs: t,
+          });
+        }
+      }
+    }
+    out.push({ ...curr, idx: out.length });
+  }
+  return out;
+}
+
 function emptyPortfolioCard(): PortfolioGlanceCard {
   return {
     id: "portfolio",
@@ -234,6 +307,7 @@ function emptyPortfolioCard(): PortfolioGlanceCard {
 export async function fetchPortfolioGlanceCard(
   now: Date = new Date(),
   gridOverride?: GlanceTimedGrid,
+  flavor: FlavorId = "main",
 ): Promise<PortfolioGlanceCard> {
   try {
     const ctx = glanceChartContext(now);
@@ -244,7 +318,7 @@ export async function fetchPortfolioGlanceCard(
       : null;
     const nowMs = now.getTime();
 
-    const totals = await resolvePortfolioAccountTotals(sessionYmd, priorNySessionYmd(sessionYmd));
+    const totals = await resolvePortfolioAccountTotals(sessionYmd, priorNySessionYmd(sessionYmd), getDb(), flavor);
     if (!totals) return emptyPortfolioCard();
 
     const { netValue, priorNetValue, netCashFlow, adjustedNetValue } = totals;
@@ -254,7 +328,19 @@ export async function fetchPortfolioGlanceCard(
     const changePct = portfolioDailyReturnPct(netValue, priorNetValue, netCashFlow) ?? change;
 
     const db = getDb();
-    const intradayTotals = schwabIntradayTotalsFromDb(db, sessionYmd);
+    const intradayTotals = schwabIntradayTotalsFromDb(db, sessionYmd, flavor);
+    const chartStartMs = nyWallTimeMs(sessionYmd, GLANCE_PREMARKET_START_MIN);
+    const sessionTotals = intradayTotals.filter((pt) => pt.tsMs >= chartStartMs && pt.tsMs <= nowMs);
+    const lastAccountValueSyncAt =
+      sessionTotals.length > 0 ? sessionTotals[sessionTotals.length - 1]!.asOf : null;
+    const intradayStale = detectPortfolioIntradayStale(
+      sessionTotals,
+      priorNetValue,
+      lastIndex,
+      totals.externalCurrent,
+    );
+    const cashFlowAdjusted = detectPortfolioCashFlowAdjusted(sessionTotals, netCashFlow);
+
     const series = buildPortfolioIndexSeries(
       intradayTotals,
       priorNetValue,
@@ -264,7 +350,8 @@ export async function fetchPortfolioGlanceCard(
       totals.externalCurrent,
       netCashFlow,
     );
-    const normalizedSeries = normalizeSeriesForChart(series, previousClose, lastIndex);
+    const bridgedSeries = bridgePortfolioSeriesGaps(series);
+    const normalizedSeries = normalizeSeriesForChart(bridgedSeries, previousClose, lastIndex);
 
     const sessionClose =
       normalizedSeries.length > 0 ? normalizedSeries[normalizedSeries.length - 1]!.close : lastIndex;
@@ -329,6 +416,10 @@ export async function fetchPortfolioGlanceCard(
       extendedChange,
       extendedChangePct,
       extendedPhase: extendedSeries ? extendedPhase : null,
+      lastAccountValueSyncAt,
+      intradayStale,
+      cashFlowAdjusted,
+      netCashFlow,
     };
 
     return portfolioCard;

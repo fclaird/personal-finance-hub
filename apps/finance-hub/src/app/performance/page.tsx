@@ -223,8 +223,8 @@ export default function PerformancePage() {
               {trackingResetForward ? (
                 <>
                   Performance tracking reset on <span className="font-semibold">{trackingStartLabel}</span> using Schwab
-                  liquidation data. Earlier calculated history was dropped because fewer than two trading days of aligned
-                  data were available in the last 19 days.
+                  liquidation data. Earlier calculated history was dropped because fewer than two recent trading days of
+                  aligned data were available.
                 </>
               ) : (
                 <>

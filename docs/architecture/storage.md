@@ -36,12 +36,28 @@ This document defines where **Personal Finance Hub** code, configuration, and ru
 └── logs/                                        # Optional local logs
 
 ~/Projects/SimulatedDividendPortfolio/           # Related repo (standalone)
-~/Projects/aurora-personal-finance-hub/        # Aurora's dashboard (Schwab account schwab_94558855 only)
 ```
 
-## Aurora account split
+## Flavors (main + rorie)
 
-Schwab account **`schwab_94558855`** is owned by [Aurora Finance Hub](../../../aurora-personal-finance-hub). The parent Finance Hub excludes it from sync and analytics via `src/lib/auroraExclusive.ts`. Aurora's runtime data lives at `~/.local/share/aurora-finance-hub/`.
+Finance Hub runs as **one app** on one dev server with runtime **flavors** selected on the Connections page (`fh_flavor` cookie):
+
+| Flavor | Scope | Nav |
+|--------|--------|-----|
+| **main** | All synced accounts except `schwab_94558855` (rorie) and posterity | Full sidebar (Terminal, Positions, Strategies, …) |
+| **rorie** | Only `schwab_94558855` | Reduced Aurora-style sidebar (no Strategies/Earnings/Posterity; Connections in nav) |
+
+All Schwab accounts sync into the shared database; flavors filter at read time in analytics, positions, and terminal views. The separate `aurora-personal-finance-hub` repo is **deprecated** — use the rorie flavor instead.
+
+Flavor registry: `apps/finance-hub/src/lib/flavors/registry.ts`
+
+## Posterity account split
+
+Schwab account **`schwab_50138076`** is isolated on the main flavor's Posterity tab via `src/lib/posterity.ts` (unchanged).
+
+## Legacy Aurora repo
+
+Schwab account **`schwab_94558855`** is scoped to the **rorie** flavor (formerly [Aurora Finance Hub](../../../aurora-personal-finance-hub)). Runtime data from `~/.local/share/aurora-finance-hub/` can be abandoned after a Schwab sync repopulates that account in the shared DB.
 
 ## Runtime data contract
 

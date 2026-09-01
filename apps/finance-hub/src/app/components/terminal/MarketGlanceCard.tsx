@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -21,6 +22,7 @@ import {
   GLANCE_RTH_CLOSE_MIN,
   lastGlanceChartDataTsMs,
   resolveGlanceTileChartAxisDomain,
+  resolvePortfolioGlanceChartAxisDomain,
   type GlanceTileChartWindowCtx,
 } from "@/lib/market/glanceTileChartWindow";
 import {
@@ -36,6 +38,20 @@ import { cashIndexSegmentLabel, formatLondonGlancePointTime, formatTokyoGlancePo
 import type { FuturesGlanceKind } from "@/lib/market/futuresGlanceSession";
 import { futuresExtendedPhaseLabel, futuresSegmentLabel } from "@/lib/market/futuresGlanceSession";
 import { PortfolioGlanceValue } from "@/app/components/terminal/PortfolioGlanceValue";
+import { usePortfolioGlanceUnlockedOptional } from "@/app/components/terminal/portfolioGlanceUnlocked";
+import {
+  readPortfolioGlanceDisplayMode,
+  writePortfolioGlanceDisplayMode,
+  type PortfolioGlanceDisplayMode,
+} from "@/app/components/terminal/terminalDisplayPrefs";
+import { formatUsd2 } from "@/lib/format";
+import {
+  indexToPortfolioDollars,
+  portfolioDayUsdPnl,
+  portfolioGlanceItemForDisplayMode,
+} from "@/lib/terminal/portfolioGlanceDisplay";
+const SCHWAB_AV_SYNC_STALE_RTH_MS = 60_000;
+const SCHWAB_AV_SYNC_STALE_CLOSED_MS = 600_000;
 import { GlanceAlternateTileTitle } from "@/app/components/terminal/GlanceAlternateTileTitle";
 import { posNegClass } from "@/lib/terminal/colors";
 import type { GlanceTileInstrumentId } from "@/lib/market/glanceTileInstruments";
@@ -79,6 +95,10 @@ export type UsMarketGlanceItem = {
   valueMode?: GlanceValueMode;
   netValue?: number | null;
   priorNetValue?: number | null;
+  lastAccountValueSyncAt?: string | null;
+  intradayStale?: boolean;
+  cashFlowAdjusted?: boolean;
+  netCashFlow?: number | null;
   futuresKind?: FuturesGlanceKind;
   instrumentKind?: GlanceInstrumentKind;
   tradableOpen?: boolean;
@@ -189,13 +209,14 @@ export function resolveChartReferenceY(
   return band.priorReferenceY;
 }
 
-/** Fixed layout zones so every quick-glance tile aligns in the grid. */
-export const GLANCE_TILE_HEADER_HEIGHT_CLASS = "h-[2rem]";
+/** Header grows with extra status lines (portfolio stale/cash-flow); chart stays in its own clipped zone. */
+export const GLANCE_TILE_HEADER_HEIGHT_CLASS = "min-h-[2rem]";
 export const GLANCE_TILE_CHART_HEIGHT_CLASS = "h-[5.5rem]";
 const TILE_HEADER_RULE = "border-b border-zinc-300 dark:border-white/15";
 const PCT2 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const CHART_MARGIN = { top: 0, right: 2, left: 0, bottom: 0 } as const;
-const REF_LINE = "#9ca3af";
+const CHART_MARGIN = { top: 4, right: 2, left: 0, bottom: 0 } as const;
+const REF_LINE = "#a1a1aa";
+const REF_LINE_WIDTH = 1.25;
 const NY_TZ = "America/New_York";
 
 function collectIndexedChartValues(rows: TileChartRow[]): number[] {
@@ -216,7 +237,7 @@ function collectIndexedChartValues(rows: TileChartRow[]): number[] {
 }
 
 /**
- * Tight Y domain for trimmed sparklines: fit visible prices + nearby reference lines,
+ * Y domain for sparklines: fit visible prices + reference lines (prior close, session close),
  * with a small pad so bands and dashes stay readable.
  */
 export function yDomainFromChartRange(
@@ -231,14 +252,10 @@ export function yDomainFromChartRange(
   }
   if (minVal > maxVal) [minVal, maxVal] = [maxVal, minVal];
 
-  const span = Math.max(maxVal - minVal, 0.004);
-  const nearMargin = span * 0.12;
   for (const ref of referenceYs) {
     if (ref == null || !Number.isFinite(ref)) continue;
-    if (ref >= minVal - nearMargin && ref <= maxVal + nearMargin) {
-      minVal = Math.min(minVal, ref);
-      maxVal = Math.max(maxVal, ref);
-    }
+    minVal = Math.min(minVal, ref);
+    maxVal = Math.max(maxVal, ref);
   }
 
   const pad = Math.max((maxVal - minVal) * 0.03, 0.004);
@@ -567,7 +584,8 @@ export function formatGlanceDayPct(pct: number | null | undefined): string {
 }
 
 function isPercentGlanceItem(item: UsMarketGlanceItem): boolean {
-  return item.valueMode === "percent" || item.id === "portfolio";
+  if (item.id === "portfolio") return item.valueMode !== "price";
+  return item.valueMode === "percent";
 }
 
 function formatGlanceMetricValue(item: UsMarketGlanceItem, indexValue: number | null): string {
@@ -581,12 +599,14 @@ function GlanceChartTooltip({
   extendedPhase,
   item,
   chartUsesIndexedScale,
+  portfolioUnlocked,
 }: {
   active?: boolean;
   payload?: Array<{ dataKey?: string; value?: number | null; payload?: TileChartRow }>;
   extendedPhase?: GlanceExtendedPhase | null;
   item: UsMarketGlanceItem;
   chartUsesIndexedScale?: boolean;
+  portfolioUnlocked?: boolean;
 }) {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload as TileChartRow | undefined;
@@ -600,6 +620,20 @@ function GlanceChartTooltip({
     row.segment === "prior" ? "prior" : useExtended ? "extended" : "regular";
 
   if (price == null || !Number.isFinite(price)) return null;
+
+  const prior = item.priorNetValue;
+  const showPortfolioUsd =
+    item.id === "portfolio" &&
+    portfolioUnlocked &&
+    prior != null &&
+    Number.isFinite(prior) &&
+    prior > 0 &&
+    chartUsesIndexedScale;
+  const usdAtPoint = showPortfolioUsd ? indexToPortfolioDollars(price, prior) : null;
+  const usdDayPnl =
+    showPortfolioUsd && item.netValue != null
+      ? portfolioDayUsdPnl(item.netValue, prior)
+      : null;
 
   return (
     <div className="rounded-lg border border-zinc-300 bg-white px-2.5 py-2 text-[11px] shadow-md dark:border-white/15 dark:bg-zinc-950">
@@ -618,6 +652,14 @@ function GlanceChartTooltip({
           ? formatGlanceDayPct(indexValueToDayPct(price))
           : formatGlanceMetricValue(item, price)}
       </div>
+      {usdAtPoint != null ? (
+        <div className="mt-0.5 tabular-nums text-zinc-600 dark:text-zinc-300">{formatUsd2(usdAtPoint)}</div>
+      ) : null}
+      {usdDayPnl != null && segment !== "prior" ? (
+        <div className="mt-0.5 tabular-nums text-[10px] text-zinc-500 dark:text-zinc-400">
+          Day {formatUsd2(usdDayPnl)}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -632,8 +674,28 @@ export function MarketGlanceCard({
   className,
   alternateTitleSelector,
 }: MarketGlanceCardProps) {
-  const pct = item.changePct;
+  const { unlocked: portfolioUnlocked } = usePortfolioGlanceUnlockedOptional();
+  const [portfolioDisplayMode, setPortfolioDisplayMode] = useState<PortfolioGlanceDisplayMode>("indexed");
+  const [displayPrefsHydrated, setDisplayPrefsHydrated] = useState(false);
+
+  useEffect(() => {
+    setPortfolioDisplayMode(readPortfolioGlanceDisplayMode());
+    setDisplayPrefsHydrated(true);
+  }, []);
+
+  const isPortfolio = item.id === "portfolio";
+  const displayItem = useMemo(
+    () => (isPortfolio ? portfolioGlanceItemForDisplayMode(item, portfolioDisplayMode) : item),
+    [isPortfolio, item, portfolioDisplayMode],
+  );
+  const portfolioIndexedDisplay = isPortfolio && portfolioDisplayMode === "indexed";
+
+  const pct = displayItem.changePct;
   const up = pct == null ? true : pct >= 0;
+  const portfolioDayUsd =
+    portfolioUnlocked && isPortfolio
+      ? portfolioDayUsdPnl(displayItem.netValue, displayItem.priorNetValue)
+      : null;
   const gradGainId = `usmk-${item.id}-gain`;
   const gradLossId = `usmk-${item.id}-loss`;
   const gradExtGainId = `usmk-${item.id}-ext-gain`;
@@ -643,6 +705,13 @@ export function MarketGlanceCard({
     item.instrumentKind === "cash_index" || item.futuresKind != null
       ? (item.tradableOpen ?? false)
       : marketOpen;
+  const portfolioSyncStale = useMemo(() => {
+    if (!isPortfolio || !item.lastAccountValueSyncAt) return false;
+    const syncMs = Date.parse(item.lastAccountValueSyncAt);
+    if (!Number.isFinite(syncMs)) return false;
+    const staleMs = sessionOpen ? SCHWAB_AV_SYNC_STALE_RTH_MS : SCHWAB_AV_SYNC_STALE_CLOSED_MS;
+    return Date.now() - syncMs > staleMs;
+  }, [isPortfolio, item.lastAccountValueSyncAt, sessionOpen]);
   const chartWindowCtx = useMemo(
     (): GlanceTileChartWindowCtx => ({
       marketOpen: sessionOpen,
@@ -654,20 +723,20 @@ export function MarketGlanceCard({
     [sessionOpen, sessionYmd, chartYmd, showingPriorSession],
   );
   const { item: chartItem, omitPriorAnchor } = useMemo(
-    () => glanceItemForTileChart(item, chartWindowCtx),
-    [item, chartWindowCtx],
+    () => glanceItemForTileChart(displayItem, chartWindowCtx),
+    [displayItem, chartWindowCtx],
   );
   const chartData = useMemo(
     () => buildTileChartRows(chartItem, { omitPriorAnchor }),
     [chartItem, omitPriorAnchor],
   );
-  const priorSessionClose = useMemo(() => resolvePriorSessionClose(item), [item]);
+  const priorSessionClose = useMemo(() => resolvePriorSessionClose(displayItem), [displayItem]);
   const chartBaseline =
     priorSessionClose != null && Number.isFinite(priorSessionClose) ? GLANCE_CHART_BASELINE : null;
   const chartUsesIndexedScale = chartBaseline != null;
   const indexedChartData = useMemo(
-    () => (chartUsesIndexedScale ? indexTileChartRows(chartData, item) : chartData),
-    [chartData, chartUsesIndexedScale, item],
+    () => (chartUsesIndexedScale ? indexTileChartRows(chartData, displayItem) : chartData),
+    [chartData, chartUsesIndexedScale, displayItem],
   );
   const hasExtended = (chartItem.extendedSeries?.length ?? 0) >= 2;
   const showExtendedChart = glanceShowExtendedChartSegment(chartItem, {
@@ -734,10 +803,13 @@ export function MarketGlanceCard({
   }, [baselineChartData]);
   const useSharedEquityDomain = item.futuresKind == null && item.instrumentKind !== "cash_index";
   const chartAxisDomain = useMemo(() => {
+    if (isPortfolio) {
+      return resolvePortfolioGlanceChartAxisDomain(chartWindowCtx, baselineChartData);
+    }
     if (!useSharedEquityDomain) return null;
     const lastTs = lastGlanceChartDataTsMs(baselineChartData);
-    return resolveGlanceTileChartAxisDomain(chartWindowCtx, item, lastTs);
-  }, [useSharedEquityDomain, chartWindowCtx, item, baselineChartData]);
+    return resolveGlanceTileChartAxisDomain(chartWindowCtx, displayItem, lastTs);
+  }, [isPortfolio, useSharedEquityDomain, chartWindowCtx, displayItem, baselineChartData]);
   const plotAxis = useMemo(() => {
     if (!useSharedEquityDomain || !chartAxisDomain) return null;
     const lastTs = lastGlanceChartDataTsMs(baselineChartData);
@@ -792,7 +864,8 @@ export function MarketGlanceCard({
   );
   const extendedPct = item.extendedChangePct ?? indexValueToDayPct(item.extendedLast);
   const indexedFooter = chartUsesIndexedScale;
-  const showExtendedFooterCols = showExtendedChart;
+  const showExtendedFooterCols =
+    isPortfolio ? (displayItem.extendedSeries?.length ?? 0) >= 2 : showExtendedChart;
 
   const priorReferenceY = referenceBand?.priorReferenceY ?? chartBaseline;
   const sessionCloseReferenceY = referenceBand?.sessionCloseReferenceY ?? null;
@@ -877,7 +950,10 @@ export function MarketGlanceCard({
 
       <div
         className={
-          "box-border shrink-0 px-3 pt-2 " + GLANCE_TILE_HEADER_HEIGHT_CLASS + " " + TILE_HEADER_RULE
+          "relative z-10 box-border shrink-0 bg-zinc-50 px-3 pb-1.5 pt-2 dark:bg-zinc-900/80 " +
+          GLANCE_TILE_HEADER_HEIGHT_CLASS +
+          " " +
+          TILE_HEADER_RULE
         }
       >
         <div className="flex h-full min-h-0 items-start justify-between gap-2">
@@ -890,19 +966,74 @@ export function MarketGlanceCard({
                   value={alternateTitleSelector.value}
                   onChange={alternateTitleSelector.onChange}
                 />
+              ) : isPortfolio ? (
+                <Link
+                  href="/positions"
+                  className="text-xs font-medium text-zinc-700 underline-offset-2 hover:underline dark:text-zinc-200"
+                >
+                  {item.label}
+                </Link>
               ) : (
                 <div className="text-xs font-medium text-zinc-700 dark:text-zinc-200">{item.label}</div>
               )}
+              {isPortfolio && displayPrefsHydrated ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next: PortfolioGlanceDisplayMode =
+                      portfolioDisplayMode === "indexed" ? "dollar" : "indexed";
+                    setPortfolioDisplayMode(next);
+                    writePortfolioGlanceDisplayMode(next);
+                  }}
+                  className="rounded border border-zinc-300 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-600 hover:bg-zinc-100 dark:border-white/20 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  title="Toggle chart between indexed day % and dollar values"
+                >
+                  {portfolioDisplayMode === "indexed" ? "Index" : "$"}
+                </button>
+              ) : null}
               {item.instrumentKind === "cash_index" ? (
                 <span className="rounded bg-zinc-200/80 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
                   Cash index
                 </span>
               ) : null}
             </div>
+            {isPortfolio ? (
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-zinc-500 dark:text-zinc-400">
+                {item.intradayStale ? (
+                  <span
+                    className="text-amber-700 dark:text-amber-300"
+                    title="Stored liquidation points disagree with live totals; chart uses a shape-preserving path."
+                  >
+                    Stale sync
+                  </span>
+                ) : null}
+                {portfolioSyncStale ? (
+                  <span
+                    className="text-amber-700 dark:text-amber-300"
+                    title="Account value sync is older than the refresh threshold."
+                  >
+                    Sync delayed
+                  </span>
+                ) : null}
+                {item.cashFlowAdjusted ? (
+                  <span
+                    className="text-sky-700 dark:text-sky-300"
+                    title="Intraday path adjusted for withdrawal so cash flows do not look like losses."
+                  >
+                    Cash flow adj ⓘ
+                  </span>
+                ) : null}
+                {item.lastAccountValueSyncAt ? (
+                  <span className="tabular-nums" title="Latest Schwab account value snapshot">
+                    AV {new Date(item.lastAccountValueSyncAt).toLocaleTimeString()}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
           </div>
-          {item.id === "portfolio" ? (
+          {isPortfolio ? (
             <div className="shrink-0 self-start text-right">
-              <PortfolioGlanceValue netValue={item.netValue} />
+              <PortfolioGlanceValue netValue={item.netValue} changePct={item.changePct} />
             </div>
           ) : showExtendedChart ? (
             <span className="shrink-0 self-start text-[10px] font-medium leading-5 text-zinc-400 dark:text-zinc-500">
@@ -910,13 +1041,17 @@ export function MarketGlanceCard({
                 ? futuresExtendedPhaseLabel(item.extendedPhase, item.futuresKind)
                 : extendedPhaseLabel(item.extendedPhase)}
             </span>
-          ) : null}
+          ) : (
+            <span className="invisible shrink-0 self-start text-[10px] font-medium leading-5" aria-hidden>
+              —
+            </span>
+          )}
         </div>
       </div>
 
-      <div className={"shrink-0 px-3 pt-1.5 " + GLANCE_TILE_CHART_HEIGHT_CLASS}>
+      <div className={"relative z-0 shrink-0 overflow-hidden px-3 pt-1.5 " + GLANCE_TILE_CHART_HEIGHT_CLASS}>
         {chartData.length >= 2 ? (
-          <div className="h-full w-full min-w-0">
+          <div className="h-full w-full min-w-0 overflow-hidden">
             <ResponsiveContainer width="100%" height="100%" minWidth={64} minHeight={72}>
               <AreaChart data={plotData} margin={CHART_MARGIN}>
                 {useFixedTimeAxis ? (
@@ -937,6 +1072,7 @@ export function MarketGlanceCard({
                       extendedPhase={item.extendedPhase}
                       item={item}
                       chartUsesIndexedScale={chartUsesIndexedScale}
+                      portfolioUnlocked={portfolioUnlocked}
                     />
                   }
                   cursor={{ stroke: REF_LINE, strokeWidth: 1, strokeDasharray: "3 3" }}
@@ -967,8 +1103,9 @@ export function MarketGlanceCard({
                       { x: priorRefEndX, y: priorReferenceY },
                     ]}
                     stroke={REF_LINE}
+                    strokeWidth={REF_LINE_WIDTH}
                     strokeDasharray="4 4"
-                    strokeOpacity={0.75}
+                    strokeOpacity={0.95}
                     ifOverflow="extendDomain"
                   />
                 ) : null}
@@ -981,8 +1118,9 @@ export function MarketGlanceCard({
                       { x: lastChartX, y: sessionCloseReferenceY },
                     ]}
                     stroke={REF_LINE}
+                    strokeWidth={REF_LINE_WIDTH}
                     strokeDasharray="4 4"
-                    strokeOpacity={0.75}
+                    strokeOpacity={0.95}
                     ifOverflow="extendDomain"
                   />
                 ) : null}
@@ -1038,7 +1176,7 @@ export function MarketGlanceCard({
                       dot={(props) => renderLastDot("gainStroke", props)}
                       fill="none"
                       isAnimationActive={false}
-                      connectNulls={false}
+                      connectNulls
                       legendType="none"
                     />
                     <Line
@@ -1049,7 +1187,7 @@ export function MarketGlanceCard({
                       dot={(props) => renderLastDot("lossStroke", props)}
                       fill="none"
                       isAnimationActive={false}
-                      connectNulls={false}
+                      connectNulls
                       legendType="none"
                     />
                     {sessionCloseReferenceY != null && showExtendedChart ? (
@@ -1109,7 +1247,7 @@ export function MarketGlanceCard({
                     fill="none"
                     strokeWidth={2}
                     isAnimationActive={false}
-                    connectNulls={false}
+                    connectNulls
                   />
                 )}
               </AreaChart>
@@ -1127,9 +1265,7 @@ export function MarketGlanceCard({
             (indexedFooter
               ? showExtendedFooterCols
                 ? "grid-cols-2 sm:grid-cols-4"
-                : percentMode
-                  ? "grid-cols-2"
-                  : "grid-cols-2 sm:grid-cols-4"
+                : "grid-cols-2"
               : hasExtended
                 ? "grid-cols-2 sm:grid-cols-4"
                 : "grid-cols-3")
@@ -1138,19 +1274,14 @@ export function MarketGlanceCard({
           {indexedFooter ? (
             <>
               <div>
-                {item.id === "portfolio" ? (
-                  <>
-                    <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Day start</div>
-                    <div className="text-xs font-medium tabular-nums text-zinc-800 dark:text-zinc-100">0.00%</div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Current</div>
-                    <div className="text-xs font-medium tabular-nums text-zinc-800 dark:text-zinc-100">
-                      {formatGlancePrice(item.last)}
-                    </div>
-                  </>
-                )}
+                <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                  {portfolioIndexedDisplay ? "Index" : "Current"}
+                </div>
+                <div className="text-xs font-medium tabular-nums text-zinc-800 dark:text-zinc-100">
+                  {portfolioIndexedDisplay
+                    ? formatGlanceDayPct(indexValueToDayPct(displayItem.last))
+                    : formatGlancePrice(displayItem.last)}
+                </div>
               </div>
               {showExtendedFooterCols ? (
                 <div>
@@ -1159,12 +1290,7 @@ export function MarketGlanceCard({
                     {formatGlanceDayPct(atClosePct)}
                   </div>
                 </div>
-              ) : (
-                <div>
-                  <div className="text-[10px] text-zinc-500 dark:text-zinc-400">At close</div>
-                  <div className="text-xs font-medium tabular-nums text-zinc-500 dark:text-zinc-400">—</div>
-                </div>
-              )}
+              ) : null}
               {showExtendedFooterCols ? (
                 <div>
                   <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Extended</div>
@@ -1172,17 +1298,17 @@ export function MarketGlanceCard({
                     {formatGlanceDayPct(extendedPct)}
                   </div>
                 </div>
-              ) : (
-                <div>
-                  <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Extended</div>
-                  <div className="text-xs font-medium tabular-nums text-zinc-500 dark:text-zinc-400">—</div>
-                </div>
-              )}
+              ) : null}
               <div>
                 <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Day</div>
                 <div className={"text-xs font-medium tabular-nums " + posNegClass(pct)}>
                   {formatGlanceDayPct(pct)}
                 </div>
+                {isPortfolio && portfolioUnlocked && portfolioDayUsd != null ? (
+                  <div className={"text-[10px] font-medium tabular-nums " + posNegClass(portfolioDayUsd)}>
+                    {formatUsd2(portfolioDayUsd)}
+                  </div>
+                ) : null}
               </div>
             </>
           ) : (

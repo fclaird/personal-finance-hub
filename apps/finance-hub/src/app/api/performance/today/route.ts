@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
-import { latestSnapshotIds } from "@/lib/holdings/latestSnapshots";
+import { latestSnapshotIds, latestSnapshotScopeForMode } from "@/lib/holdings/latestSnapshots";
 import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
 import { schwabMarketFetch } from "@/lib/schwab/client";
 import { schwabQuoteObjectFromEntry } from "@/lib/schwab/quoteEntry";
+import { resolveViewScope } from "@/lib/viewScope";
 
 function normSym(s: string) {
   return (s ?? "").trim().toUpperCase();
@@ -31,8 +32,9 @@ function quoteChangePctFromResp(resp: Record<string, unknown>, sym: string): num
 }
 
 export async function GET() {
+  const { flavor, dataMode: mode } = await resolveViewScope();
   const db = getDb();
-  const snapshotIds = latestSnapshotIds(db, "all_synced");
+  const snapshotIds = latestSnapshotIds(db, latestSnapshotScopeForMode(mode), flavor);
   if (snapshotIds.length === 0) {
     return NextResponse.json({ ok: true, snapshotId: null, portfolioPct: null, SPY: null, QQQ: null });
   }

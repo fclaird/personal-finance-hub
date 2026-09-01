@@ -30,6 +30,9 @@ export const SCHWAB_TRANSACTION_CHUNK_DAYS = 59;
  */
 export const DEFAULT_TRANSACTION_LOOKBACK_DAYS = 5000;
 
+/** TRADE lookback for automatic sync during Schwab slow/closed refresh and Reports API. */
+export const SCHWAB_REFRESH_TRANSACTION_LOOKBACK_DAYS = 14;
+
 /** Hard cap for optional `lookbackDays` on POST /api/schwab/transactions/sync. */
 export const MAX_TRANSACTION_LOOKBACK_DAYS = 10_000;
 

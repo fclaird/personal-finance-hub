@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 
+import type { DataMode } from "@/lib/dataMode";
+import type { FlavorId } from "@/lib/flavor";
 import { logError } from "@/lib/log";
-import { DATA_MODE_COOKIE, parseDataMode } from "@/lib/dataMode";
 import { getDb } from "@/lib/db";
 import { BASKETS } from "@/lib/terminal/baskets";
 import { buildTerminalMarketBundle } from "@/lib/terminal/terminalMarketBundle";
 import { getTerminalUniverseSymbols } from "@/lib/terminal/universe";
 import { SP500_SYMBOLS } from "@/lib/terminal/universes/sp500";
 import { syncTaxonomyFromSchwab } from "@/lib/taxonomy";
+import { resolveViewScope } from "@/lib/viewScope";
 
 function normSym(s: string) {
   return (s ?? "").trim().toUpperCase();
@@ -16,12 +17,13 @@ function normSym(s: string) {
 
 function resolveHeatmapSymbols(
   view: "spy" | "qqq" | "portfolio",
-  mode: ReturnType<typeof parseDataMode>,
+  mode: DataMode,
+  flavor: FlavorId,
   watchlistId: string | null,
 ): string[] {
   if (view === "spy") return SP500_SYMBOLS.map(normSym).filter(Boolean);
   if (view === "qqq") return (BASKETS.big50 ?? []).map(normSym).filter(Boolean);
-  return getTerminalUniverseSymbols({ mode, includeWatchlistId: watchlistId });
+  return getTerminalUniverseSymbols({ mode, flavor, includeWatchlistId: watchlistId });
 }
 
 type BootstrapPayload = {
@@ -42,9 +44,8 @@ async function buildBootstrapPayload(
   watchlistId: string | null,
   indices: string[],
 ): Promise<BootstrapPayload> {
-  const jar = await cookies();
-  const mode = parseDataMode(jar.get(DATA_MODE_COOKIE)?.value);
-  const heatSymbols = resolveHeatmapSymbols(view, mode, watchlistId);
+  const { flavor, dataMode: mode } = await resolveViewScope();
+  const heatSymbols = resolveHeatmapSymbols(view, mode, flavor, watchlistId);
   const symbols = [...new Set([...heatSymbols, ...indices])];
 
   const db = getDb();
@@ -83,7 +84,8 @@ export async function POST(req: Request) {
     const view = (body?.view ?? "portfolio").trim() as "spy" | "qqq" | "portfolio";
     const watchlistId = body?.watchlistId ?? null;
     const indices = (body?.indexSymbols ?? ["SPY", "QQQ"]).map(normSym).filter(Boolean);
-    const key = `${view}:${watchlistId ?? ""}`;
+    const { flavor, dataMode: mode } = await resolveViewScope();
+    const key = `${view}:${watchlistId ?? ""}:${mode}:${flavor}`;
     const now = Date.now();
     if (
       bootstrapResultCache &&

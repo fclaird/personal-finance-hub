@@ -2,12 +2,13 @@ import type Database from "better-sqlite3";
 
 import type { AnalyticsBucketKey } from "@/lib/accountBuckets";
 import type { DataMode } from "@/lib/dataMode";
+import type { FlavorId } from "@/lib/flavor";
 import { getUnderlyingExposureByBucket } from "@/lib/analytics/optionsExposure";
 
 export type AllocationDailyScope = "net" | AnalyticsBucketKey;
 
-function mergeNetFromBuckets(mode: DataMode): Map<string, { spot: number; synthetic: number }> {
-  const buckets = getUnderlyingExposureByBucket(mode);
+function mergeNetFromBuckets(mode: DataMode, flavor: FlavorId = "main"): Map<string, { spot: number; synthetic: number }> {
+  const buckets = getUnderlyingExposureByBucket(mode, undefined, flavor);
   const net = new Map<string, { spot: number; synthetic: number }>();
   for (const b of buckets) {
     for (const r of b.exposure) {
@@ -22,8 +23,12 @@ function mergeNetFromBuckets(mode: DataMode): Map<string, { spot: number; synthe
   return net;
 }
 
-function mapFromBucket(mode: DataMode, scope: AnalyticsBucketKey): Map<string, { spot: number; synthetic: number }> {
-  const buckets = getUnderlyingExposureByBucket(mode);
+function mapFromBucket(
+  mode: DataMode,
+  scope: AnalyticsBucketKey,
+  flavor: FlavorId = "main",
+): Map<string, { spot: number; synthetic: number }> {
+  const buckets = getUnderlyingExposureByBucket(mode, undefined, flavor);
   const b = buckets.find((x) => x.bucketKey === scope);
   const m = new Map<string, { spot: number; synthetic: number }>();
   if (!b) return m;
@@ -44,6 +49,7 @@ export function recordAllocationDailyClose(
   db: Database.Database,
   tradeDateEt: string,
   mode: DataMode,
+  flavor: FlavorId = "main",
 ): { rowsWritten: number } {
   const scopes: AllocationDailyScope[] = ["net", "brokerage", "retirement", "529"];
   const upsert = db.prepare(`
@@ -58,7 +64,7 @@ export function recordAllocationDailyClose(
   let rowsWritten = 0;
   for (const scope of scopes) {
     const map =
-      scope === "net" ? mergeNetFromBuckets(mode) : mapFromBucket(mode, scope);
+      scope === "net" ? mergeNetFromBuckets(mode, flavor) : mapFromBucket(mode, scope, flavor);
     for (const [symbol, v] of map.entries()) {
       if (Math.abs(v.spot) < 1e-9 && Math.abs(v.synthetic) < 1e-9) continue;
       upsert.run({
@@ -79,10 +85,11 @@ export function recordAllocationDailyCloseModes(
   db: Database.Database,
   tradeDateEt: string,
   modes: readonly DataMode[],
+  flavor: FlavorId = "main",
 ): { rowsWritten: number } {
   let n = 0;
   for (const mode of modes) {
-    n += recordAllocationDailyClose(db, tradeDateEt, mode).rowsWritten;
+    n += recordAllocationDailyClose(db, tradeDateEt, mode, flavor).rowsWritten;
   }
   return { rowsWritten: n };
 }

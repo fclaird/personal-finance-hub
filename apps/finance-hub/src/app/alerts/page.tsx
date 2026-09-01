@@ -13,6 +13,7 @@ import { formatInt, formatNum, formatOptionIntExtPerShare, formatUsd2 } from "@/
 import { formatDisplayDateTime } from "@/lib/formatDate";
 import { formatOptionSymbolDisplay } from "@/lib/formatOptionDisplay";
 import { optionMarginRoiForRow } from "@/lib/options/optionMarginRoiDisplay";
+import { optionPositionTheta } from "@/lib/options/optionPositionTheta";
 import {
   optionMarkPerShare,
   optionPnlDollarsFromAvgPrice,
@@ -44,6 +45,7 @@ type OptionContractRow = {
   dte: number | null;
   intrinsic: number | null;
   extrinsic: number | null;
+  theta: number | null;
 };
 
 const DTE_THRESHOLD = 30;
@@ -66,6 +68,7 @@ const OPTION_COLUMN_IDS = [
   "extrinsic",
   "extrinsicPctIntrinsic",
   "dte",
+  "positionTheta",
 ] as const;
 type OptionColumnId = (typeof OPTION_COLUMN_IDS)[number];
 
@@ -91,6 +94,7 @@ const OPTION_COLUMN_LABEL: Record<OptionColumnId, string> = {
   extrinsic: "Extrinsic",
   extrinsicPctIntrinsic: "% extrinsic",
   dte: "DTE",
+  positionTheta: "Pos theta",
 };
 
 const EVENT_COLUMN_LABEL: Record<EventColumnId, string> = {
@@ -136,6 +140,82 @@ function formatExtrinsicPctOfIntrinsic(intrinsic: number | null, extrinsic: numb
   return `${formatNum(pct, 1)}%`;
 }
 
+type OptionContractTotals = {
+  quantity: number;
+  marketValue: number | null;
+  marginSecured: number | null;
+  pnlDollars: number | null;
+  intrinsic: number | null;
+  extrinsic: number | null;
+  positionTheta: number | null;
+};
+
+function nFinite(v: number | null | undefined): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function computeOptionContractTotals(rows: OptionContractRow[]): OptionContractTotals {
+  let quantity = 0;
+  let marketValue = 0;
+  let marketValueAny = false;
+  let marginSecured = 0;
+  let marginAny = false;
+  let pnlDollars = 0;
+  let pnlAny = false;
+  let intrinsic = 0;
+  let intrinsicAny = false;
+  let extrinsic = 0;
+  let extrinsicAny = false;
+  let positionTheta = 0;
+  let positionThetaAny = false;
+
+  for (const r of rows) {
+    quantity += r.quantity;
+    const mv = nFinite(r.marketValue);
+    if (mv != null) {
+      marketValue += mv;
+      marketValueAny = true;
+    }
+    if (!isSoldCallRow(r)) {
+      const m = optionMarginRoiForRow(r);
+      if (m != null) {
+        marginSecured += m.marginSecured;
+        marginAny = true;
+      }
+    }
+    const pnl = optionPnlDollarsFromAvgPrice(optionPnlInputs(r));
+    if (pnl != null) {
+      pnlDollars += pnl;
+      pnlAny = true;
+    }
+    const intVal = nFinite(r.intrinsic);
+    if (intVal != null) {
+      intrinsic += intVal;
+      intrinsicAny = true;
+    }
+    const extVal = nFinite(r.extrinsic);
+    if (extVal != null) {
+      extrinsic += extVal;
+      extrinsicAny = true;
+    }
+    const theta = optionPositionTheta(r);
+    if (theta != null) {
+      positionTheta += theta;
+      positionThetaAny = true;
+    }
+  }
+
+  return {
+    quantity,
+    marketValue: marketValueAny ? marketValue : null,
+    marginSecured: marginAny ? marginSecured : null,
+    pnlDollars: pnlAny ? pnlDollars : null,
+    intrinsic: intrinsicAny ? intrinsic : null,
+    extrinsic: extrinsicAny ? extrinsic : null,
+    positionTheta: positionThetaAny ? positionTheta : null,
+  };
+}
+
 function AccountHeaderContent() {
   return (
     <>
@@ -176,6 +256,7 @@ function OptionContractsRedTile({
   emptyMessage,
   optionColumnOrder,
   moveOptionColumn,
+  showTotalsRow = false,
 }: {
   title: string;
   description: ReactNode;
@@ -186,8 +267,10 @@ function OptionContractsRedTile({
   emptyMessage: string;
   optionColumnOrder: OptionColumnId[];
   moveOptionColumn: (from: number, to: number) => void;
+  showTotalsRow?: boolean;
 }) {
   const nCols = optionColumnOrder.length;
+  const totals = showTotalsRow && rows.length > 0 ? computeOptionContractTotals(rows) : null;
 
   function optionHeader(col: OptionColumnId) {
     const grab = `whitespace-nowrap py-2 pr-6 font-medium ${DRAGGABLE_COLUMN_HEADER_GRAB_CLASS}`;
@@ -396,6 +479,118 @@ function OptionContractsRedTile({
             {r.dte == null ? "—" : formatInt(r.dte)}
           </td>
         );
+      case "positionTheta": {
+        const posTheta = optionPositionTheta(r);
+        return (
+          <td
+            key={col}
+            className={
+              "whitespace-nowrap py-2 pr-6 text-right tabular-nums " +
+              (posTheta == null ? "text-zinc-600 dark:text-zinc-400" : posNegClass(posTheta))
+            }
+          >
+            {posTheta == null ? "—" : formatUsd2(posTheta, { mask: privacy.masked })}
+          </td>
+        );
+      }
+      default: {
+        const _exhaustive: never = col;
+        return _exhaustive;
+      }
+    }
+  }
+
+  function optionTotalCell(col: OptionColumnId, t: OptionContractTotals) {
+    switch (col) {
+      case "account":
+        return (
+          <td key={col} className="whitespace-nowrap py-2 pr-6 align-top font-semibold text-zinc-900 dark:text-zinc-100">
+            Total
+          </td>
+        );
+      case "symbol":
+        return (
+          <td key={col} className="whitespace-nowrap py-2 pr-6 text-zinc-600 dark:text-zinc-400">
+            {rows.length} contract{rows.length === 1 ? "" : "s"}
+          </td>
+        );
+      case "qty":
+        return (
+          <td key={col} className={"whitespace-nowrap py-2 pr-6 text-right tabular-nums font-semibold " + posNegClass(t.quantity)}>
+            {formatInt(t.quantity)}
+          </td>
+        );
+      case "marketValue":
+        return (
+          <td
+            key={col}
+            className={
+              "whitespace-nowrap py-2 pr-6 text-right tabular-nums font-semibold " +
+              (t.marketValue == null ? "" : posNegClass(t.marketValue))
+            }
+          >
+            {t.marketValue == null ? "—" : formatUsd2(t.marketValue, { mask: privacy.masked })}
+          </td>
+        );
+      case "marginSecured":
+        return (
+          <td key={col} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums font-semibold text-zinc-800 dark:text-zinc-200">
+            {t.marginSecured == null ? "—" : formatUsd2(t.marginSecured, { mask: privacy.masked })}
+          </td>
+        );
+      case "pnlPct":
+        return (
+          <td
+            key={col}
+            className={
+              "whitespace-nowrap py-2 pr-6 text-right tabular-nums font-semibold " +
+              (t.pnlDollars == null ? "text-zinc-600 dark:text-zinc-400" : posNegClass(t.pnlDollars))
+            }
+          >
+            {t.pnlDollars == null ? "—" : formatUsd2(t.pnlDollars, { mask: privacy.masked })}
+          </td>
+        );
+      case "intrinsic":
+        return (
+          <td key={col} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums font-semibold text-zinc-800 dark:text-zinc-200">
+            {t.intrinsic == null ? "—" : formatUsd2(t.intrinsic, { mask: privacy.masked })}
+          </td>
+        );
+      case "extrinsic":
+        return (
+          <td key={col} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums font-semibold text-zinc-800 dark:text-zinc-200">
+            {t.extrinsic == null ? "—" : formatUsd2(t.extrinsic, { mask: privacy.masked })}
+          </td>
+        );
+      case "extrinsicPctIntrinsic":
+        return (
+          <td key={col} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums font-semibold text-zinc-800 dark:text-zinc-200">
+            {formatExtrinsicPctOfIntrinsic(t.intrinsic, t.extrinsic)}
+          </td>
+        );
+      case "positionTheta":
+        return (
+          <td
+            key={col}
+            className={
+              "whitespace-nowrap py-2 pr-6 text-right tabular-nums font-semibold " +
+              (t.positionTheta == null ? "text-zinc-600 dark:text-zinc-400" : posNegClass(t.positionTheta))
+            }
+          >
+            {t.positionTheta == null ? "—" : formatUsd2(t.positionTheta, { mask: privacy.masked })}
+          </td>
+        );
+      case "price":
+      case "tradePrice":
+      case "roi":
+      case "annualizedRoi":
+      case "pnlPctPct":
+      case "dte":
+        return (
+          <td key={col} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums text-zinc-500 dark:text-zinc-400">
+            —
+          </td>
+        );
       default: {
         const _exhaustive: never = col;
         return _exhaustive;
@@ -445,6 +640,11 @@ function OptionContractsRedTile({
                   <td colSpan={nCols} className="py-8 text-center text-zinc-600 dark:text-zinc-400">
                     {emptyMessage}
                   </td>
+                </tr>
+              ) : null}
+              {totals ? (
+                <tr className="border-t-2 border-amber-300/90 bg-amber-50/80 dark:border-amber-500/40 dark:bg-amber-950/30">
+                  {optionColumnOrder.map((col) => optionTotalCell(col, totals))}
                 </tr>
               ) : null}
             </tbody>
@@ -625,6 +825,7 @@ export default function AlertsPage() {
                 emptyMessage={`No option positions under ${DTE_THRESHOLD} DTE in the latest snapshots.`}
                 optionColumnOrder={optionColumnOrder}
                 moveOptionColumn={moveOptionColumn}
+                showTotalsRow
               />
             ),
           },

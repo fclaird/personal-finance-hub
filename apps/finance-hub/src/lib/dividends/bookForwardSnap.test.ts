@@ -5,7 +5,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import Database from "better-sqlite3";
 
-import { captureBookForwardSnap, ensureBookLiveStartedAt } from "./bookForwardSnap";
+import { isoDateUtc } from "./dates";
+import {
+  captureBookForwardSnap,
+  ensureBookLiveStartedAt,
+  hasBookForwardSnapGaps,
+  latestBookSnapAsOf,
+  needsBookForwardSnapCapture,
+} from "./bookForwardSnap";
 import { dividendBookHoldingQuantities } from "./schwabDividendBook";
 import type { SchwabDividendBookRow } from "./schwabDividendBook";
 
@@ -59,5 +66,31 @@ describe("bookForwardSnap", () => {
     const db = createTestDb();
     const res = await captureBookForwardSnap(db);
     assert.equal(res.ok, false);
+  });
+
+  it("needsBookForwardSnapCapture when no rows exist", () => {
+    const db = createTestDb();
+    assert.equal(needsBookForwardSnapCapture(db, new Date("2026-05-22T15:00:00Z")), true);
+  });
+
+  it("needsBookForwardSnapCapture is false when today already captured", () => {
+    const db = createTestDb();
+    const now = new Date("2026-05-22T15:00:00Z");
+    const today = isoDateUtc(now);
+    db.prepare(
+      `INSERT INTO dividend_book_forward_snap (as_of, nav_total, dividends_period, status, computed_at) VALUES (?, 1000, 0, 'partial', ?)`,
+    ).run(today, now.toISOString());
+    assert.equal(needsBookForwardSnapCapture(db, now), false);
+    assert.equal(latestBookSnapAsOf(db), today);
+  });
+
+  it("hasBookForwardSnapGaps when live start predates stored snaps", () => {
+    const db = createTestDb();
+    const now = new Date("2026-05-22T15:00:00Z");
+    ensureBookLiveStartedAt(db, now);
+    db.prepare(
+      `INSERT INTO dividend_book_forward_snap (as_of, nav_total, dividends_period, status, computed_at) VALUES ('2026-05-22', 1000, 0, 'partial', ?)`,
+    ).run(now.toISOString());
+    assert.equal(hasBookForwardSnapGaps(db, now), true);
   });
 });

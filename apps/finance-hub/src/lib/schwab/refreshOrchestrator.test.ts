@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { schwabRefreshPlan } from "./refreshOrchestrator";
-import { schwabStaleThresholdMs } from "./refreshStatus";
+import { schwabStaleThresholdMs } from "./schwabStaleThreshold";
 
 describe("schwabRefreshPlan", () => {
   it("rth bundle includes quotes and greeks but not slow by default", () => {

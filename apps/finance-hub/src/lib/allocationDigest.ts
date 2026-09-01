@@ -1,5 +1,6 @@
 import { getAllocationByAccount, getConsolidatedAllocation } from "@/lib/analytics/allocation";
 import type { DataMode } from "@/lib/dataMode";
+import type { FlavorId } from "@/lib/flavor";
 
 export type AllocationDigestBucket = {
   key: string;
@@ -32,8 +33,10 @@ export type AllocationDigestPayload = {
 
 const PCT0 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 
-function buildBuckets(includeSynthetic: boolean, mode: DataMode): { totalMarketValue: number; byAssetClass: AllocationDigestBucket[] } {
-  const r = getConsolidatedAllocation(includeSynthetic, mode);
+import type { FlavorId } from "@/lib/flavor";
+
+function buildBuckets(includeSynthetic: boolean, mode: DataMode, flavor: FlavorId): { totalMarketValue: number; byAssetClass: AllocationDigestBucket[] } {
+  const r = getConsolidatedAllocation(includeSynthetic, mode, undefined, flavor);
   return {
     totalMarketValue: r.totalMarketValue,
     byAssetClass: r.byAssetClass.map((x) => ({
@@ -44,12 +47,12 @@ function buildBuckets(includeSynthetic: boolean, mode: DataMode): { totalMarketV
   };
 }
 
-export function buildAllocationDigest(mode: DataMode = "auto"): AllocationDigestPayload {
-  const net = buildBuckets(true, mode);
-  const spot = buildBuckets(false, mode);
+export function buildAllocationDigest(mode: DataMode = "auto", flavor: FlavorId = "main"): AllocationDigestPayload {
+  const net = buildBuckets(true, mode, flavor);
+  const spot = buildBuckets(false, mode, flavor);
 
-  const acctRows = getAllocationByAccount(true, mode);
-  const acctRowsSpot = getAllocationByAccount(false, mode);
+  const acctRows = getAllocationByAccount(true, mode, undefined, flavor);
+  const acctRowsSpot = getAllocationByAccount(false, mode, undefined, flavor);
   const spotById = new Map(acctRowsSpot.map((a) => [a.accountId, a]));
 
   const accounts: AllocationDigestAccount[] = acctRows.map((a) => {

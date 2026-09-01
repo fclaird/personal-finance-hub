@@ -70,29 +70,6 @@ export async function GET(req: Request) {
     const loadedFromMs = candles.length > 0 ? candles[0]!.tsMs : readSinceMs;
     const loadedToMs = candles.length > 0 ? candles[candles.length - 1]!.tsMs : Date.now();
 
-    // #region agent log
-    fetch("http://127.0.0.1:7246/ingest/2ceda99a-8078-4e27-9f3d-2d8ce02fa8d7", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b0a6ec" },
-      body: JSON.stringify({
-        sessionId: "b0a6ec",
-        runId: "post-fix-needsEarlier",
-        location: "candles/route.ts:GET",
-        message: "candles timing",
-        hypothesisId: "C6",
-        timestamp: Date.now(),
-        data: {
-          symbol,
-          window,
-          explicitStartMs: explicitStartMs ?? null,
-          ensureMs,
-          candleCount: candles.length,
-          includeBenchmarks,
-        },
-      }),
-    }).catch(() => {});
-    // #endregion
-
     return NextResponse.json({
       ok: true,
       symbol,

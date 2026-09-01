@@ -12,6 +12,7 @@ export type PositionsColumnId =
   | "delta"
   | "gamma"
   | "theta"
+  | "positionTheta"
   | "dte"
   | "intrinsic"
   | "extrinsic"
@@ -30,6 +31,7 @@ export const POSITIONS_COLUMN_DEFAULT_ORDER: readonly PositionsColumnId[] = [
   "delta",
   "gamma",
   "theta",
+  "positionTheta",
   "dte",
   "intrinsic",
   "extrinsic",
@@ -56,6 +58,7 @@ export const POSITIONS_COLUMN_LABEL: Record<PositionsColumnId, string> = {
   delta: "Delta",
   gamma: "Gamma",
   theta: "Theta",
+  positionTheta: "Pos theta",
   dte: "DTE",
   intrinsic: "Intrinsic",
   extrinsic: "Extrinsic",

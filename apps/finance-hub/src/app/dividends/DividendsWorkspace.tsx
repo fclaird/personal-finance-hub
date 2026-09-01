@@ -27,6 +27,7 @@ import {
   formatPeriodEndingLabel,
 } from "@/lib/formatDate";
 import { symbolPageHref } from "@/lib/symbolPage";
+import { holdingYieldPct as rowYieldPct } from "@/lib/dividends/holdingYieldPct";
 import type { PortfolioDashboard } from "@/lib/dividends/portfolioDashboard";
 import type { DividendBookBanner } from "@/lib/dividends/schwabDividendBook";
 
@@ -75,23 +76,6 @@ function positionAnnualDiv(r: { annualDivEst: number | null; shares: number | nu
   if (r.shares <= 0) return null;
   const v = r.annualDivEst * r.shares;
   return Number.isFinite(v) ? v : null;
-}
-
-function rowYieldPct(r: {
-  divYield: number | null;
-  annualDivEst: number | null;
-  last: number | null;
-  shares: number | null;
-  marketValue: number | null;
-}): number | null {
-  const px =
-    r.last ??
-    (r.shares != null && r.shares > 0 && r.marketValue != null && r.marketValue > 0 ? r.marketValue / r.shares : null);
-  if (r.divYield != null && Number.isFinite(r.divYield) && r.divYield >= 0) return r.divYield * 100;
-  if (px != null && px > 0 && r.annualDivEst != null && Number.isFinite(r.annualDivEst) && r.annualDivEst >= 0) {
-    return (r.annualDivEst / px) * 100;
-  }
-  return null;
 }
 
 function SortTh({
@@ -179,7 +163,7 @@ export function DividendsWorkspace() {
   const [timelineSpanSummary, setTimelineSpanSummary] = useState<string | null>(null);
   const [liveStartedAt, setLiveStartedAt] = useState<string | null>(null);
 
-  const [showSpy, setShowSpy] = useState(false);
+  const [showSpy, setShowSpy] = useState(true);
   const [showQqq, setShowQqq] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
@@ -260,7 +244,7 @@ export function DividendsWorkspace() {
         const b = json.lastMonthEnd ?? "";
         const start = formatDisplayDate(json.liveStartedAt, { fallback: "live start" });
         setTimelineSpanSummary(
-          `Live tracking: ${n} weekly snapshot${n === 1 ? "" : "s"} (${formatDisplayDateRange(a, b)}) since ${start}.`,
+          `Live tracking: ${n} daily snapshot${n === 1 ? "" : "s"} (${formatDisplayDateRange(a, b)}) since ${start}.`,
         );
       }
     } else {
@@ -633,7 +617,7 @@ export function DividendsWorkspace() {
             children: (
               <>
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Weekly NAV % for the aggregated dividend book across all Schwab accounts.
+          Daily NAV % for the aggregated dividend book across all Schwab accounts (one point per calendar day).
         </p>
 
         <div className="mt-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700 dark:border-white/10 dark:bg-white/5 dark:text-zinc-300">
@@ -654,7 +638,7 @@ export function DividendsWorkspace() {
             <input type="checkbox" checked={showQqq} onChange={(e) => setShowQqq(e.target.checked)} />
             QQQ
           </label>
-          <span className="text-xs text-zinc-500 dark:text-zinc-400">Weekly snapshots since live start</span>
+          <span className="text-xs text-zinc-500 dark:text-zinc-400">Daily snapshots since live start</span>
         </div>
 
         {timelineFootnote ? <div className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">{timelineFootnote}</div> : null}
@@ -666,7 +650,7 @@ export function DividendsWorkspace() {
               <p className="font-medium text-zinc-800 dark:text-zinc-200">No live tracking snapshots yet.</p>
               <p className="mt-2 max-w-md">
                 Sync Schwab holdings, then use <span className="font-semibold">Refresh live data</span> to capture the first
-                weekly NAV snapshot.
+                daily NAV snapshot.
               </p>
             </div>
           ) : (

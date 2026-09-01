@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 
 import { getDb } from "@/lib/db";
-import { DATA_MODE_COOKIE, parseDataMode } from "@/lib/dataMode";
 import { portfolioEquityMarkPrice } from "@/lib/analytics/optionsExposure";
 import { accountsInDataModeWhereSql } from "@/lib/holdings/latestSnapshots";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
+import { ensureFreshOptionData } from "@/lib/schwab/ensureOptionGreeks";
+import { resolveViewScope } from "@/lib/viewScope";
 
 function normSym(s: string) {
   return (s ?? "").trim().toUpperCase();
@@ -16,14 +16,14 @@ export async function GET(req: Request) {
   const underlying = normSym(url.searchParams.get("underlying") ?? "");
   if (!underlying) return NextResponse.json({ ok: false, error: "Missing underlying" }, { status: 400 });
 
-  const jar = await cookies();
-  const mode = parseDataMode(jar.get(DATA_MODE_COOKIE)?.value);
+  const { flavor, dataMode: mode } = await resolveViewScope();
+  await ensureFreshOptionData();
 
   const db = getDb();
   const impliedPrice =
-    underlying === "CASH" ? 1 : await portfolioEquityMarkPrice(db, mode, underlying);
+    underlying === "CASH" ? 1 : await portfolioEquityMarkPrice(db, mode, underlying, flavor);
 
-  const where = accountsInDataModeWhereSql(mode, "a");
+  const where = accountsInDataModeWhereSql(mode, flavor, "a");
 
   const snaps = db
     .prepare(

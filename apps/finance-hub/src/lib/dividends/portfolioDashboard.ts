@@ -24,7 +24,13 @@ export type DashboardGrowth = {
 };
 
 export type SectorSlice = { sector: string; value: number; pct: number };
-export type TreemapLeaf = { name: string; symbol: string; value: number };
+export type TreemapLeaf = {
+  name: string;
+  symbol: string;
+  value: number;
+  yieldPct?: number | null;
+  annualDivUsd?: number | null;
+};
 export type CumulativeMonth = { month: string; amount: number; cumulative: number };
 
 export type PositionRow = {

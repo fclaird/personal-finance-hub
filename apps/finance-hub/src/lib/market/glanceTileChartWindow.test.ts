@@ -12,7 +12,9 @@ import {
   resolveGlanceExtendedShadeX,
   resolveGlanceTileChartAxisDomain,
   resolveGlanceTileChartWindow,
+  glanceItemForTileChart,
   resolveGlanceTrimAnchorMs,
+  resolvePortfolioGlanceChartAxisDomain,
 } from "@/lib/market/glanceTileChartWindow";
 import { nyWallTimeMs } from "@/lib/market/futuresGlanceSession";
 import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
@@ -212,4 +214,46 @@ test("resolveGlanceExtendedShadeX returns null during RTH for US equity", () => 
   })!;
   const shade = resolveGlanceExtendedShadeX({ marketOpen: true, sessionYmd: SESSION }, axis, tsAt(SESSION, 12 * 60));
   assert.equal(shade, null);
+});
+
+test("glanceItemForTileChart leaves portfolio series untrimmed", () => {
+  const early = tsAt(SESSION, GLANCE_RTH_OPEN_MIN);
+  const late = tsAt(SESSION, 15 * 60 + 30);
+  const item: UsMarketGlanceItem = {
+    id: "portfolio",
+    label: "Portfolio",
+    symbol: "PORT",
+    last: 100.1,
+    change: 0.1,
+    changePct: 0.1,
+    previousClose: 100,
+    series: [
+      { idx: 0, close: 100, tsMs: early },
+      { idx: 1, close: 100.1, tsMs: late },
+    ],
+    valueMode: "percent",
+  };
+  const { item: chartItem, omitPriorAnchor } = glanceItemForTileChart(item, {
+    marketOpen: true,
+    sessionYmd: SESSION,
+    nowMs: late,
+  });
+  assert.equal(omitPriorAnchor, true);
+  assert.equal(chartItem.series.length, 2);
+  assert.equal(chartItem.series[0]!.tsMs, early);
+});
+
+test("resolvePortfolioGlanceChartAxisDomain spans RTH open through last portfolio point", () => {
+  const early = tsAt(SESSION, 10 * 60);
+  const late = tsAt(SESSION, 14 * 60);
+  const axis = resolvePortfolioGlanceChartAxisDomain(
+    { marketOpen: true, sessionYmd: SESSION, nowMs: late },
+    [
+      { tsMs: early },
+      { tsMs: late },
+    ],
+  );
+  assert.ok(axis);
+  assert.equal(axis!.startMs, tsAt(SESSION, GLANCE_RTH_OPEN_MIN));
+  assert.ok(axis!.endMs >= late);
 });

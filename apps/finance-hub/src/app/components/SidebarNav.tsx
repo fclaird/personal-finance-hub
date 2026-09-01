@@ -1,14 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import {
-  DEFAULT_SIDEBAR_NAV_ORDER,
+  defaultSidebarNavOrder,
   orderSidebarNavItems,
-  SIDEBAR_NAV_ORDER_STORAGE_KEY,
+  sidebarNavOrderLegacyKeys,
+  sidebarNavOrderStorageKeyForFlavor,
 } from "@/app/lib/sidebarNav";
+import type { FlavorId } from "@/lib/flavor";
+import { readFlavorCookieClient } from "@/lib/flavorClient";
 import { usePersistedOrder } from "@/lib/usePersistedOrder";
 
 type DataMode = "auto" | "schwab";
@@ -24,11 +27,17 @@ export function SidebarNav({
   onToggleCollapse?: () => void;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [mode, setMode] = useState<DataMode>("auto");
   const [avail, setAvail] = useState<{ hasSchwab: boolean }>({ hasSchwab: false });
+  const [flavor, setFlavor] = useState<FlavorId>(() => readFlavorCookieClient() ?? "main");
+  const [flavorLabel, setFlavorLabel] = useState("Main");
   const privacy = usePrivacy();
-  const { order, reorderById } = usePersistedOrder(SIDEBAR_NAV_ORDER_STORAGE_KEY, DEFAULT_SIDEBAR_NAV_ORDER);
-  const orderedItems = useMemo(() => orderSidebarNavItems(order), [order]);
+  const defaultOrder = useMemo(() => defaultSidebarNavOrder(flavor), [flavor]);
+  const storageKey = useMemo(() => sidebarNavOrderStorageKeyForFlavor(flavor), [flavor]);
+  const legacyKeys = useMemo(() => sidebarNavOrderLegacyKeys(flavor), [flavor]);
+  const { order, reorderById } = usePersistedOrder(storageKey, defaultOrder, legacyKeys);
+  const orderedItems = useMemo(() => orderSidebarNavItems(order, flavor), [order, flavor]);
 
   const onDragStart = useCallback((e: React.DragEvent, href: string) => {
     e.dataTransfer.setData("text/plain", href);
@@ -58,15 +67,28 @@ export function SidebarNav({
   useEffect(() => {
     void (async () => {
       try {
-        const resp = await fetch("/api/data-mode", { cache: "no-store" });
-        const json = (await resp.json()) as {
+        const [modeResp, flavorResp] = await Promise.all([
+          fetch("/api/data-mode", { cache: "no-store" }),
+          fetch("/api/flavor", { cache: "no-store" }),
+        ]);
+        const modeJson = (await modeResp.json()) as {
           ok: boolean;
           mode?: DataMode;
           availability?: { hasSchwab: boolean };
         };
-        if (json.ok) {
-          if (json.mode) setMode(json.mode);
-          if (json.availability) setAvail(json.availability);
+        if (modeJson.ok) {
+          if (modeJson.mode) setMode(modeJson.mode);
+          if (modeJson.availability) setAvail(modeJson.availability);
+        }
+        const flavorJson = (await flavorResp.json()) as {
+          ok: boolean;
+          flavor?: FlavorId | null;
+          flavors?: Array<{ id: FlavorId; label: string }>;
+        };
+        if (flavorJson.ok && flavorJson.flavor) {
+          setFlavor(flavorJson.flavor);
+          const match = flavorJson.flavors?.find((f) => f.id === flavorJson.flavor);
+          if (match) setFlavorLabel(match.label);
         }
       } catch {
         // ignore
@@ -95,6 +117,12 @@ export function SidebarNav({
         <div className="flex items-center justify-between gap-2">
           <div className="text-[15px] font-semibold tracking-tight">Finance Hub</div>
           <div className="flex shrink-0 items-center gap-1.5">
+            <div
+              className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-bold tracking-wide text-zinc-700 dark:bg-white/10 dark:text-zinc-300"
+              title="Active flavor"
+            >
+              {flavorLabel}
+            </div>
             <div
               className={
                 "rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide " +
@@ -192,6 +220,18 @@ export function SidebarNav({
       </nav>
 
       <div className="mt-6 rounded-xl border border-zinc-300 bg-white/70 p-3 dark:border-white/20 dark:bg-black/30">
+        <div className="px-0.5 text-xs font-semibold tracking-wide text-zinc-700 dark:text-zinc-300">Flavor</div>
+        <button
+          type="button"
+          onClick={() => router.push("/connections")}
+          className="mt-3 w-full rounded-lg border border-zinc-300 bg-white px-2.5 py-2 text-[13px] font-semibold text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
+          title="Switch flavor on Connections"
+        >
+          Switch flavor…
+        </button>
+      </div>
+
+      <div className="mt-6 rounded-xl border border-zinc-300 bg-white/70 p-3 dark:border-white/20 dark:bg-black/30">
         <div className="px-0.5 text-xs font-semibold tracking-wide text-zinc-700 dark:text-zinc-300">Privacy</div>
         <button
           type="button"
@@ -210,4 +250,3 @@ export function SidebarNav({
     </aside>
   );
 }
-

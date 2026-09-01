@@ -1,8 +1,7 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-import { getGlanceAlignedPortfolioValueSeriesByBucket, resolvePerformanceTrackingBaselineYmd, filterSeriesFromBaseline, PERFORMANCE_BACKFILL_LOOKBACK_DAYS } from "@/lib/analytics/glanceAlignedPerformance";
-import { DATA_MODE_COOKIE, parseDataMode } from "@/lib/dataMode";
+import { getGlanceAlignedPortfolioValueSeriesByBucket, resolvePerformanceTrackingBaselineYmd, filterSeriesFromBaseline, mergeMissingSnapshotDays, PERFORMANCE_BACKFILL_LOOKBACK_DAYS } from "@/lib/analytics/glanceAlignedPerformance";
+import { resolveViewScope } from "@/lib/viewScope";
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
 import { countBenchmarkPriceRows, ensureBenchmarkHistory } from "@/lib/market/benchmarks";
@@ -37,8 +36,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ ok: false, error: "Invalid bucket" }, { status: 400 });
     }
 
-    const jar = await cookies();
-    const mode = parseDataMode(jar.get(DATA_MODE_COOKIE)?.value);
+    const { flavor, dataMode: mode } = await resolveViewScope();
 
     if (tf === "1D") {
       return NextResponse.json({
@@ -59,7 +57,16 @@ export async function GET(req: Request) {
     const db = getDb();
     const todayIso = new Date(nowMs).toISOString().slice(0, 10);
 
-    const denseAll = getGlanceAlignedPortfolioValueSeriesByBucket(bucket as "combined" | "retirement" | "brokerage", db);
+    const denseAll = mergeMissingSnapshotDays(
+      getGlanceAlignedPortfolioValueSeriesByBucket(bucket as "combined" | "retirement" | "brokerage", db, flavor),
+      (
+        db
+          .prepare(
+            `SELECT snapshot_date, total_value FROM portfolio_snapshots WHERE bucket = ? ORDER BY snapshot_date ASC`,
+          )
+          .all(bucket) as Array<{ snapshot_date: string; total_value: number }>
+      ),
+    );
     const tradingDaySeriesAll = collapseToTradingDays(denseAll);
     const { baselineYmd, resetForward } = resolvePerformanceTrackingBaselineYmd(tradingDaySeriesAll, new Date(nowMs));
     const tradingDaySeries = filterSeriesFromBaseline(tradingDaySeriesAll, baselineYmd);

@@ -16,6 +16,7 @@ import {
   type PositionsSortColumn,
 } from "@/lib/positions/positionsColumnOrder";
 import { optionMarginRoiForRow } from "@/lib/options/optionMarginRoiDisplay";
+import { optionPositionTheta } from "@/lib/options/optionPositionTheta";
 import { posNegClass } from "@/lib/terminal/colors";
 
 export type Row = {
@@ -76,6 +77,7 @@ const SORT_COLUMN_LABEL: Record<SortColumn, string> = {
   delta: POSITIONS_COLUMN_LABEL.delta,
   gamma: POSITIONS_COLUMN_LABEL.gamma,
   theta: POSITIONS_COLUMN_LABEL.theta,
+  positionTheta: POSITIONS_COLUMN_LABEL.positionTheta,
   dte: POSITIONS_COLUMN_LABEL.dte,
   intrinsic: POSITIONS_COLUMN_LABEL.intrinsic,
   extrinsic: POSITIONS_COLUMN_LABEL.extrinsic,
@@ -120,6 +122,8 @@ function compareRows(a: Row, b: Row, col: SortColumn, asc: boolean): number {
       return compareNullableNumber(a.gamma, b.gamma, asc);
     case "theta":
       return compareNullableNumber(a.theta, b.theta, asc);
+    case "positionTheta":
+      return compareNullableNumber(optionPositionTheta(a), optionPositionTheta(b), asc);
     case "dte":
       return compareNullableNumber(a.dte, b.dte, asc);
     case "intrinsic":
@@ -278,6 +282,21 @@ export function GroupedTable({
         );
       case "purchaseDate":
         return groupEmDashTd(colId);
+      case "positionTheta": {
+        const total = g.rows.reduce((s, r) => s + (optionPositionTheta(r) ?? 0), 0);
+        const hasAny = g.rows.some((r) => optionPositionTheta(r) != null);
+        if (!hasAny) return groupEmDashTd(colId);
+        return (
+          <td
+            key={colId}
+            className={
+              "whitespace-nowrap py-2 pr-6 text-right tabular-nums font-semibold " + posNegClass(total)
+            }
+          >
+            {usd2Masked(total, privacyMasked)}
+          </td>
+        );
+      }
       case "delta":
       case "gamma":
       case "theta":
@@ -415,6 +434,20 @@ export function GroupedTable({
             {r.theta == null ? "-" : formatNum(r.theta, 3)}
           </td>
         );
+      case "positionTheta": {
+        const posTheta = optionPositionTheta(r);
+        return (
+          <td
+            key={colId}
+            className={
+              "whitespace-nowrap py-2 pr-6 text-right tabular-nums " +
+              (posTheta == null ? "" : posNegClass(posTheta))
+            }
+          >
+            {posTheta == null ? "-" : usd2Masked(posTheta, privacyMasked)}
+          </td>
+        );
+      }
       case "dte":
         return (
           <td key={colId} className="whitespace-nowrap py-2 pr-6 text-right tabular-nums">
@@ -500,6 +533,8 @@ function groupSortValue(g: UnderlyingGroup, col: SortColumn): string | number {
       return g.rows.filter((r) => r.securityType === "option").reduce((s, r) => s + n0(r.gamma) * n0(r.quantity), 0);
     case "theta":
       return g.rows.filter((r) => r.securityType === "option").reduce((s, r) => s + n0(r.theta) * n0(r.quantity), 0);
+    case "positionTheta":
+      return g.rows.reduce((s, r) => s + (optionPositionTheta(r) ?? 0), 0);
     case "dte": {
       // Prefer soonest expiry in group (min DTE).
       const ds = g.rows.map((r) => r.dte).filter((v): v is number => typeof v === "number" && Number.isFinite(v));

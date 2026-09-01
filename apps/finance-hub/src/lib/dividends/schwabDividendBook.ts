@@ -7,6 +7,7 @@ import {
 } from "@/lib/dividends/portfolioDashboard";
 import { holdingRowIsDividendProducer } from "@/lib/dividends/dividendProducingFilter";
 import { computeFooterTotals, type EnrichedHoldingRow } from "@/lib/dividends/enrichedHoldings";
+import { holdingAnnualDivUsd, holdingYieldPct } from "@/lib/dividends/holdingYieldPct";
 import { inferHoldingCategory, isSchwabFundLike } from "@/lib/dividends/holdingCategory";
 import { enrichSymbolHoldings } from "@/lib/dividends/symbolEnrichment";
 import { notPosterityWhereSql } from "@/lib/posterity";
@@ -319,7 +320,13 @@ export function buildSchwabDividendDashboard(
 ): PortfolioDashboard {
   const symbols = dividendRows.map((r) => r.symbol);
   const cashflows = fetchDividendCashflowsForSymbols(db, symbols, null);
-  return buildPortfolioDashboard(
+  const yieldBySym = new Map(
+    dividendRows.map((r) => [r.symbol.toUpperCase(), holdingYieldPct(r)] as const),
+  );
+  const annualDivBySym = new Map(
+    dividendRows.map((r) => [r.symbol.toUpperCase(), holdingAnnualDivUsd(r)] as const),
+  );
+  const dashboard = buildPortfolioDashboard(
     dividendRows.map((r) => ({
       symbol: r.symbol,
       shares: r.shares,
@@ -332,6 +339,12 @@ export function buildSchwabDividendDashboard(
     cashflows,
     inferHoldingCategory,
   );
+  dashboard.treemap = dashboard.treemap.map((leaf) => ({
+    ...leaf,
+    yieldPct: yieldBySym.get(leaf.symbol.toUpperCase()) ?? null,
+    annualDivUsd: annualDivBySym.get(leaf.symbol.toUpperCase()) ?? null,
+  }));
+  return dashboard;
 }
 
 export function bookHoldingsFooter(dividendRows: SchwabDividendBookRow[]) {
