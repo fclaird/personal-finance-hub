@@ -143,7 +143,9 @@ export function fifoRealizedForClosingLeg(
     if (lot.qty > 0) gain += (closePerUnit - lot.perUnit) * Math.abs(matched);
     else gain += (lot.perUnit - closePerUnit) * Math.abs(matched);
 
-    lot.qty -= matched;
+    // `matched` already has the closing quantity's sign (opposite the lot).
+    // Adding it reduces the lot toward zero; subtracting it doubled leftovers.
+    lot.qty += matched;
     remaining -= matched;
     if (Math.abs(lot.qty) < 1e-9) lots.shift();
   }
@@ -174,7 +176,8 @@ export function parseRealizedGainFromRaw(raw: SchwabTxnRaw): number | null {
   return null;
 }
 
-function loadRealizedTrades(
+/** Load windowed realized trades; FIFO lots include history on or before `endYmd`. Exported for tests. */
+export function loadRealizedTrades(
   db: Database.Database,
   flavor: FlavorId,
   startYmd: string,
@@ -227,22 +230,12 @@ function loadRealizedTrades(
 
     const scope = realizedGainScopeForNickname(row.account_nickname);
     const accountLabel = accountDisplayLabel(row.account_nickname, row.account_name);
-
     const topGain = pickGainLoss(raw as SchwabTxnRaw & Record<string, unknown>);
-    if (topGain != null && inWindow && Math.abs(topGain) >= 1e-9) {
-      trades.push({
-        id: row.id,
-        tradeDate: row.trade_date,
-        accountId: row.account_id,
-        accountLabel,
-        scope,
-        symbol: row.symbol,
-        description: row.description,
-        realizedDollars: topGain,
-      });
-      continue;
-    }
+    const fifoTradesForRow: RealizedTradeRow[] = [];
 
+    // Always apply OPENING/CLOSING legs to the FIFO book, including trades before
+    // the report window. Skipping out-of-window closes left stale lots in place and
+    // attributed later round-trips to the wrong cost basis.
     for (const leg of securityLegsOf(raw)) {
       const effect = (leg.positionEffect ?? "").toUpperCase();
       const sym = leg.instrument?.symbol?.trim();
@@ -259,22 +252,24 @@ function loadRealizedTrades(
         continue;
       }
 
-      if (effect !== "CLOSING" || !inWindow) continue;
+      if (effect !== "CLOSING") continue;
 
       const qty = legQty(leg);
       const perUnit = legPerUnit(leg);
       if (qty == null || perUnit == null) {
-        ledgerComplete = false;
-        trades.push({
-          id: `${row.id}:${sym}`,
-          tradeDate: row.trade_date,
-          accountId: row.account_id,
-          accountLabel,
-          scope,
-          symbol: sym,
-          description: row.description ?? leg.instrument?.description ?? null,
-          realizedDollars: null,
-        });
+        if (inWindow) {
+          ledgerComplete = false;
+          fifoTradesForRow.push({
+            id: `${row.id}:${sym}`,
+            tradeDate: row.trade_date,
+            accountId: row.account_id,
+            accountLabel,
+            scope,
+            symbol: sym,
+            description: row.description ?? leg.instrument?.description ?? null,
+            realizedDollars: null,
+          });
+        }
         continue;
       }
 
@@ -283,9 +278,11 @@ function loadRealizedTrades(
       const { gain, complete } = fifoRealizedForClosingLeg(workingLots, qty, perUnit);
       lots.set(key, workingLots);
 
+      if (!inWindow) continue;
+
       if (!complete) ledgerComplete = false;
 
-      trades.push({
+      fifoTradesForRow.push({
         id: `${row.id}:${sym}`,
         tradeDate: row.trade_date,
         accountId: row.account_id,
@@ -296,6 +293,22 @@ function loadRealizedTrades(
         realizedDollars: complete ? gain : null,
       });
     }
+
+    if (topGain != null && inWindow && Math.abs(topGain) >= 1e-9) {
+      trades.push({
+        id: row.id,
+        tradeDate: row.trade_date,
+        accountId: row.account_id,
+        accountLabel,
+        scope,
+        symbol: row.symbol,
+        description: row.description,
+        realizedDollars: topGain,
+      });
+      continue;
+    }
+
+    trades.push(...fifoTradesForRow);
   }
 
   if (!sawTradeInWindow) ledgerComplete = false;

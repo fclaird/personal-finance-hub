@@ -12,6 +12,7 @@ import {
   hasBookForwardSnapGaps,
   latestBookSnapAsOf,
   needsBookForwardSnapCapture,
+  upsertBookForwardSnapRow,
 } from "./bookForwardSnap";
 import { dividendBookHoldingQuantities } from "./schwabDividendBook";
 import type { SchwabDividendBookRow } from "./schwabDividendBook";
@@ -92,5 +93,17 @@ describe("bookForwardSnap", () => {
       `INSERT INTO dividend_book_forward_snap (as_of, nav_total, dividends_period, status, computed_at) VALUES ('2026-05-22', 1000, 0, 'partial', ?)`,
     ).run(now.toISOString());
     assert.equal(hasBookForwardSnapGaps(db, now), true);
+  });
+
+  it("upsertBookForwardSnapRow does not null-overwrite a stored NAV", () => {
+    const db = createTestDb();
+    const asOf = "2026-09-02";
+    upsertBookForwardSnapRow(db, asOf, 50_000, 12.5, "2026-09-02T14:00:00.000Z", asOf);
+    upsertBookForwardSnapRow(db, asOf, null, 12.5, "2026-09-02T20:00:00.000Z", asOf);
+    const row = db
+      .prepare(`SELECT nav_total AS nav, dividends_period AS divs FROM dividend_book_forward_snap WHERE as_of = ?`)
+      .get(asOf) as { nav: number | null; divs: number };
+    assert.equal(row.nav, 50_000);
+    assert.equal(row.divs, 12.5);
   });
 });
