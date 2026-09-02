@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { StrategyStatsPanel } from "@/app/components/strategy/StrategyStatsPanel";
 import { EditablePageHeading } from "@/app/components/EditableHeading";
+import { SituationsPanel } from "@/app/components/strategy/SituationsPanel";
 import { StrategyTradesTable } from "@/app/components/strategy/StrategyTradesTable";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import type { StrategyTabSlug } from "@/lib/strategy/strategyCategories";
@@ -35,6 +36,10 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
   const [tradeDataSource, setTradeDataSource] = useState<"ledger" | "positions_preview">("ledger");
 
   const load = useCallback(async () => {
+    if (category === "situations") {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -102,6 +107,47 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
   const meta = STRATEGY_TAB_META.find((t) => t.slug === category);
 
   const csvHref = `/api/strategy-trades?category=${encodeURIComponent(category)}&format=csv`;
+
+  if (category === "situations") {
+    return (
+      <div className="flex flex-col gap-6">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              <EditablePageHeading pageId="option-strategies" defaultTitle="Option Strategies" />
+            </h1>
+            <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+              Group related TRADE rows into short-premium situations (opens, rolls, closes) with net cash. Analytics
+              only — no orders are placed.
+            </p>
+          </div>
+          <Link
+            href="/connections"
+            className="shrink-0 rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
+          >
+            Connections
+          </Link>
+        </div>
+        <div className="flex flex-wrap gap-2 text-sm">
+          {STRATEGY_TAB_META.map((t) => (
+            <Link
+              key={t.slug}
+              href={`/strategies/${t.slug}`}
+              className={
+                "rounded-full px-3 py-1 font-medium " +
+                (t.slug === category
+                  ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
+                  : "border border-zinc-300 text-zinc-800 hover:bg-zinc-50 dark:border-white/20 dark:text-zinc-200 dark:hover:bg-white/5")
+              }
+            >
+              {t.label}
+            </Link>
+          ))}
+        </div>
+        <SituationsPanel privacyMasked={privacy.masked} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">

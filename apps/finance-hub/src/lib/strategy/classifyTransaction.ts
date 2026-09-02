@@ -1,60 +1,19 @@
 import type Database from "better-sqlite3";
 
-import type { SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
+import type { SchwabTxnItem, SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
 import { normalizeSchwabTransaction, securityLegsOf, tradeDateIso } from "@/lib/schwab/transactionNormalize";
-import type { StrategySlug } from "@/lib/strategy/strategyCategories";
-
-const LEAP_MIN_DTE = 365;
-const EARNINGS_WINDOW_DAYS = 5;
-
-function daysBetween(isoA: string, isoB: string): number | null {
-  const a = new Date(`${isoA}T12:00:00Z`).getTime();
-  const b = new Date(`${isoB}T12:00:00Z`).getTime();
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
-  return Math.abs(Math.round((a - b) / (24 * 3600 * 1000)));
-}
-
-function optionDte(tradeDateIso: string, expirationIso: string | null): number | null {
-  if (!expirationIso) return null;
-  const d = daysBetween(tradeDateIso, expirationIso);
-  if (d == null) return null;
-  return d;
-}
-
-function parseOptionFromSchwabSymbol(symbol: string | null | undefined): {
-  expiration: string;
-  right: "C" | "P";
-  strike: number;
-} | null {
-  if (!symbol) return null;
-  const s = symbol.replace(/\s+/g, " ").trim();
-  const m = s.match(/([0-9]{6})([CP])([0-9]{8})$/);
-  if (!m) return null;
-  const yy = Number(m[1]!.slice(0, 2));
-  const mm = Number(m[1]!.slice(2, 4));
-  const dd = Number(m[1]!.slice(4, 6));
-  const year = 2000 + yy;
-  const expiration = `${year.toString().padStart(4, "0")}-${mm.toString().padStart(2, "0")}-${dd.toString().padStart(2, "0")}`;
-  return { expiration, right: m[2] === "C" ? "C" : "P", strike: Number(m[3]!) / 1000 };
-}
-
-function instructionKind(inst: string | null): "buy_open" | "buy_close" | "sell_open" | "sell_close" | "unknown" {
-  if (!inst) return "unknown";
-  const u = inst.toUpperCase();
-  if (u.includes("BUY_TO_OPEN") || u === "BUY") return "buy_open";
-  if (u.includes("BUY_TO_CLOSE")) return "buy_close";
-  if (u.includes("SELL_TO_OPEN") || (u.includes("SELL") && u.includes("OPEN"))) return "sell_open";
-  if (u.includes("SELL_TO_CLOSE") || (u.includes("SELL") && u.includes("CLOSE"))) return "sell_close";
-  if (u === "SELL") return "sell_open";
-  if (u === "BUY") return "buy_open";
-  return "unknown";
-}
-
-function positionIsOpening(effect: string | null, instKind: ReturnType<typeof instructionKind>): boolean {
-  if (effect === "OPENING") return true;
-  if (effect === "CLOSING") return false;
-  return instKind === "buy_open" || instKind === "sell_open";
-}
+import { hasCoveringShares } from "@/lib/strategy/equityCoverage";
+import {
+  EARNINGS_WINDOW_DAYS,
+  LEAP_MIN_DTE,
+  instructionKind,
+  optionDte,
+  parseOptionFromSchwabSymbol,
+  positionIsOpening,
+  type InstructionKind,
+} from "@/lib/strategy/optionParse";
+import { detectOptionStructure, type OptionLegView } from "@/lib/strategy/optionStructures";
+import { isStrategySlug, type StrategySlug } from "@/lib/strategy/strategyCategories";
 
 export function earningsExpirationNearCalendar(
   db: Database.Database,
@@ -77,7 +36,56 @@ export function earningsExpirationNearCalendar(
   return Boolean(row);
 }
 
-export function classifySchwabTradeRaw(db: Database.Database, raw: SchwabTxnRaw): StrategySlug {
+function legView(leg: SchwabTxnItem): OptionLegView {
+  const inst = instructionKind(leg.instruction ?? null);
+  const opening = positionIsOpening(leg.positionEffect?.toUpperCase() ?? null, inst);
+  const parsed = parseOptionFromSchwabSymbol(leg.instrument?.symbol);
+  const putCall = (leg.instrument?.putCall ?? "").toUpperCase();
+  const right = parsed?.right ?? (putCall.startsWith("P") ? "P" : putCall.startsWith("C") ? "C" : null);
+  return {
+    right,
+    strike: parsed?.strike ?? (typeof leg.instrument?.strikePrice === "number" ? leg.instrument.strikePrice : null),
+    expiration: parsed?.expiration ?? null,
+    instruction: inst,
+    opening,
+    quantity: typeof leg.quantity === "number" ? leg.quantity : typeof leg.amount === "number" ? leg.amount : null,
+  };
+}
+
+function classifySingleOption(params: {
+  db: Database.Database;
+  accountId: string | null;
+  tradeDate: string;
+  inst: InstructionKind;
+  opening: boolean;
+  right: "C" | "P" | null;
+  expiration: string | null;
+  underlying: string;
+  quantity: number;
+}): StrategySlug {
+  const { db, accountId, tradeDate, inst, opening, right, expiration, underlying, quantity } = params;
+  const dte = expiration ? optionDte(tradeDate, expiration) : null;
+
+  if (opening && inst === "sell_open" && right === "C") {
+    if (expiration && underlying && earningsExpirationNearCalendar(db, underlying, expiration)) return "earnings";
+    const contracts = Math.abs(quantity) || 1;
+    if (hasCoveringShares(db, accountId, underlying, contracts, tradeDate)) return "covered-calls";
+    return "naked-calls";
+  }
+  if (opening && inst === "sell_open" && right === "P") return "options-sales";
+
+  if (opening && inst === "buy_open") {
+    if (dte != null && dte >= LEAP_MIN_DTE) return "leaps";
+    if (right === "P") return "long-puts";
+    return "long-calls";
+  }
+
+  return "uncategorized";
+}
+
+export type ClassifyOpts = { accountId?: string | null };
+
+export function classifySchwabTradeRaw(db: Database.Database, raw: SchwabTxnRaw, opts?: ClassifyOpts): StrategySlug {
   const norm = normalizeSchwabTransaction(raw);
   const tradeDate = norm?.trade_date ?? tradeDateIso(raw) ?? null;
   if (!tradeDate) return "uncategorized";
@@ -87,9 +95,20 @@ export function classifySchwabTradeRaw(db: Database.Database, raw: SchwabTxnRaw)
 
   const items = securityLegsOf(raw);
   if (items.length === 0) return "uncategorized";
-  if (items.length > 1) return "spreads";
 
-  const leg = items[0]!;
+  const accountId = opts?.accountId ?? null;
+  const optionItems = items.filter((leg) => (leg.instrument?.assetType ?? "").toUpperCase() === "OPTION");
+
+  if (optionItems.length > 1) {
+    const views = optionItems.map(legView);
+    const structure = detectOptionStructure(views);
+    if (structure === "butterfly") return "butterflies";
+    if (structure === "short-strangle") return "short-strangles";
+    if (structure === "long-strangle") return "spreads";
+    if (structure === "spread") return "spreads";
+  }
+
+  const leg = (optionItems[0] ?? items[0])!;
   const asset = (leg.instrument?.assetType ?? "").toUpperCase();
   const inst = instructionKind(leg.instruction ?? null);
   const opening = positionIsOpening(leg.positionEffect?.toUpperCase() ?? null, inst);
@@ -101,31 +120,80 @@ export function classifySchwabTradeRaw(db: Database.Database, raw: SchwabTxnRaw)
 
   if (asset === "OPTION") {
     const sym = leg.instrument?.symbol ?? norm?.symbol;
-    const und = (leg.instrument?.underlyingSymbol ?? norm?.underlying_symbol ?? "").trim().toUpperCase();
     const parsed = parseOptionFromSchwabSymbol(sym);
+    const und = (
+      leg.instrument?.underlyingSymbol ??
+      parsed?.underlying ??
+      norm?.underlying_symbol ??
+      ""
+    )
+      .trim()
+      .toUpperCase();
     const exp = parsed?.expiration ?? norm?.option_expiration ?? null;
     const right = parsed?.right ?? (norm?.option_right as "C" | "P" | undefined) ?? null;
-    const dte = exp ? optionDte(tradeDate, exp) : null;
+    const qty = typeof leg.quantity === "number" ? leg.quantity : (norm?.quantity ?? 1);
 
-    if (opening && inst === "sell_open" && right === "C") {
-      if (exp && und && earningsExpirationNearCalendar(db, und, exp)) return "earnings";
-      return "covered-calls";
-    }
-    if (opening && inst === "sell_open" && right === "P") return "options-sales";
-
-    if (opening && inst === "buy_open" && dte != null && dte >= LEAP_MIN_DTE) return "leaps";
-    if (opening && inst === "buy_open") return "options-sales";
-
-    return "uncategorized";
+    return classifySingleOption({
+      db,
+      accountId,
+      tradeDate,
+      inst,
+      opening,
+      right,
+      expiration: exp,
+      underlying: und,
+      quantity: qty ?? 1,
+    });
   }
 
   return "uncategorized";
 }
 
+/**
+ * Live category for a stored row. Dual-reads legacy buckets so old
+ * covered-calls / options-sales / spreads labels are not shown as-is when
+ * the new taxonomy would split them.
+ */
+export function effectiveStrategyCategory(
+  db: Database.Database,
+  params: {
+    accountId: string;
+    rawJson: string;
+    storedCategory: string | null;
+  },
+): StrategySlug {
+  let raw: SchwabTxnRaw;
+  try {
+    raw = JSON.parse(params.rawJson) as SchwabTxnRaw;
+  } catch {
+    const stored = params.storedCategory;
+    return stored && isStrategySlug(stored) ? stored : "uncategorized";
+  }
+  const live = classifySchwabTradeRaw(db, raw, { accountId: params.accountId });
+  const stored = params.storedCategory;
+  if (!stored || !isStrategySlug(stored)) return live;
+
+  if (stored === "covered-calls" && live === "naked-calls") return "naked-calls";
+  if (stored === "options-sales" && (live === "long-calls" || live === "long-puts" || live === "leaps")) return live;
+  if (stored === "spreads" && (live === "short-strangles" || live === "butterflies")) return live;
+  if (stored === live) return live;
+  // After a reclassify write, stored should already match. Prefer stored when
+  // it is a post-split slug so user-facing tabs stay stable.
+  const postSplit = [
+    "naked-calls",
+    "short-strangles",
+    "butterflies",
+    "long-calls",
+    "long-puts",
+  ] as const;
+  if ((postSplit as readonly string[]).includes(stored)) return stored;
+  return live;
+}
+
 export function reclassifyBrokerTransactionRow(db: Database.Database, id: string): StrategySlug {
   const row = db
-    .prepare(`SELECT raw_json FROM broker_transactions WHERE id = ?`)
-    .get(id) as { raw_json: string } | undefined;
+    .prepare(`SELECT raw_json, account_id, strategy_category FROM broker_transactions WHERE id = ?`)
+    .get(id) as { raw_json: string; account_id: string; strategy_category: string | null } | undefined;
   if (!row) return "uncategorized";
   let raw: SchwabTxnRaw;
   try {
@@ -133,10 +201,17 @@ export function reclassifyBrokerTransactionRow(db: Database.Database, id: string
   } catch {
     return "uncategorized";
   }
-  const cat = classifySchwabTradeRaw(db, raw);
+  const cat = classifySchwabTradeRaw(db, raw, { accountId: row.account_id });
   const now = new Date().toISOString();
   db.prepare(
-    `UPDATE broker_transactions SET strategy_category = @cat, classified_at = @now, updated_at = @now WHERE id = @id`,
+    `
+    UPDATE broker_transactions
+    SET strategy_category = @cat,
+        strategy_category_original = COALESCE(strategy_category_original, strategy_category, @cat),
+        classified_at = @now,
+        updated_at = @now
+    WHERE id = @id
+    `,
   ).run({ cat, now, id });
   return cat;
 }

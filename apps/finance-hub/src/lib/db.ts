@@ -107,6 +107,12 @@ function migrate(db: Database.Database) {
   if (hasAccountValuePoints) {
     ensureColumn(db, "account_value_points", "prior_equity_value", "prior_equity_value REAL");
   }
+  const hasBrokerTx = db
+    .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='broker_transactions' LIMIT 1`)
+    .get();
+  if (hasBrokerTx) {
+    ensureColumn(db, "broker_transactions", "strategy_category_original", "strategy_category_original TEXT");
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS symbol_notes (
       symbol TEXT PRIMARY KEY COLLATE NOCASE,
