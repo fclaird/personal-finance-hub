@@ -91,7 +91,7 @@ function periodStartExclusive(
   return addUtcDays(start, -1);
 }
 
-function upsertBookForwardSnapRow(
+export function upsertBookForwardSnapRow(
   db: Database.Database,
   asOf: string,
   nav: number | null,
@@ -105,7 +105,7 @@ function upsertBookForwardSnapRow(
     INSERT INTO dividend_book_forward_snap (as_of, nav_total, dividends_period, status, computed_at)
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(as_of) DO UPDATE SET
-      nav_total = excluded.nav_total,
+      nav_total = COALESCE(excluded.nav_total, dividend_book_forward_snap.nav_total),
       dividends_period = excluded.dividends_period,
       computed_at = excluded.computed_at,
       status = excluded.status
