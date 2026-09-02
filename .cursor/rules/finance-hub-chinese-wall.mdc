@@ -1,0 +1,40 @@
+---
+description: Finance Hub Chinese wall — analytics only; never place trades or move capital
+alwaysApply: true
+---
+
+# Finance Hub — Chinese wall (non-negotiable)
+
+This repo is Chris Laird’s **personal finance hub**. Agents (Cursor / Icarus) and the UI are **information only** until Chris **explicitly** authorizes trading in writing.
+
+## Allowed (information OUT)
+
+- Schwab **read/sync**: quotes, positions, greeks, balances, **TRADE history**
+- Research, planning, visualizations, analytics, alerts, reports
+- Local classification, situation linking, reclassify, CSV export
+- Flag **undefined-risk** shorts (naked calls / short strangles = unbounded max loss)
+
+## Forbidden (never do this)
+
+- Order placement, trade tickets, submit / cancel / replace
+- Any write path that could **move capital** or open/close positions via broker APIs
+- “Helpful” paper-trading that still calls Schwab order endpoints
+- Enabling `FINANCE_HUB_ALLOW_BROKER_ORDERS` unless Chris explicitly asked
+
+If trade-capable code is added later, it must sit behind `FINANCE_HUB_ALLOW_BROKER_ORDERS` (default **unset/false**) and must **not** be reachable from normal hub or agent flows.
+
+## Investing style (taxonomy + alerts)
+
+- Concentrated long equities (Rule Breaker)
+- Speculative **long LEAP** calls (keep separate from short-premium buckets)
+- Income: short premium (tastytrade / Sosnoff); currently favors **~15-delta short naked strangles**, also butterflies and defined-risk
+- Do **not** mislabel naked STO calls as covered calls
+- Prefer analytics over action; never place trades or commit capital
+
+## API map
+
+See `docs/icarus/HUB_API_MAP.md`. Read/analytics GETs are agent-safe. Sync/classify POSTs write **local SQLite only**. Broker order routes must not exist (or stay gated).
+
+## Sibling repo
+
+`aurora-personal-finance-hub` is **deprecated**. Use this app’s **rorie** flavor for that Schwab account.

@@ -1,6 +1,7 @@
 import { getSecretsPassphrase } from "@/lib/env";
 import { marketDataQueueForPath, withMarketDataRateLimit } from "@/lib/schwab/marketDataRateLimit";
 import { SCHWAB_MARKETDATA_API_BASE, SCHWAB_TRADER_API_BASE } from "@/lib/schwab/config";
+import { assertSchwabTraderCallAllowed } from "@/lib/schwab/tradeWall";
 import { isSchwabRefreshTokenRejectedMessage, refreshToken } from "@/lib/schwab/oauth";
 import { clearSchwabToken, getSchwabToken, setSchwabToken, type SchwabToken } from "@/lib/schwab/token";
 
@@ -90,6 +91,7 @@ export async function schwabFetch<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
+  assertSchwabTraderCallAllowed(path, init?.method);
   const token = await getValidToken();
   const url = joinBaseAndPath(SCHWAB_TRADER_API_BASE, path);
   const resp = await fetch(url, {
