@@ -12,6 +12,7 @@ import { pruneHoldingSnapshots } from "@/lib/schwab/pruneHoldingSnapshots";
 import { lastCompletedNyWeekday } from "@/lib/analytics/allocationNyDate";
 import { recordAllocationDailyCloseModes } from "@/lib/analytics/recordAllocationDailyClose";
 import { upsertWeekEndingPortfolioSnapshots } from "@/lib/portfolio/snapshots";
+import { persistSchwabAccountHashes } from "@/lib/schwab/fetchAccountTransactions";
 import { schwabFetch } from "@/lib/schwab/client";
 
 type SchwabAccountNumber = { accountNumber?: string; hashValue?: string };
@@ -277,6 +278,12 @@ export async function runSchwabHoldingsSync(
     });
 
     tx();
+
+    try {
+      await persistSchwabAccountHashes(db);
+    } catch (e) {
+      logError("schwab_account_hash_persist_after_holdings", e);
+    }
 
     try {
       const pruned = pruneHoldingSnapshots(db);

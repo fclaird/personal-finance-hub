@@ -1,3 +1,5 @@
+import type Database from "better-sqlite3";
+
 import { getSchwabTraderCalendarCapIso, schwabFetch } from "@/lib/schwab/client";
 import { SCHWAB_TRANSACTION_CHUNK_DAYS } from "@/lib/schwab/config";
 import type { SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
@@ -115,4 +117,32 @@ export async function fetchSchwabTransactionsChunked(
 
 export async function fetchSchwabAccountNumbers(): Promise<SchwabAccountNumberRow[]> {
   return schwabFetch<SchwabAccountNumberRow[]>("accounts/accountNumbers");
+}
+
+/** Persist Schwab account hash values needed for transaction / cash-flow API calls. */
+export async function persistSchwabAccountHashes(db: Database.Database): Promise<{
+  accountsUpdated: number;
+  accountHashes: Array<{ accountId: string; hash: string }>;
+}> {
+  const nums = await fetchSchwabAccountNumbers();
+  const updateHash = db.prepare(
+    `UPDATE accounts SET schwab_account_hash = @hash, updated_at = @now WHERE id = @id`,
+  );
+  const now = new Date().toISOString();
+  let accountsUpdated = 0;
+  const accountHashes: Array<{ accountId: string; hash: string }> = [];
+
+  for (const n of nums) {
+    const num = (n.accountNumber ?? "").trim();
+    const hash = (n.hashValue ?? "").trim();
+    if (!num || !hash) continue;
+    const localId = `schwab_${num}`;
+    const acc = db.prepare(`SELECT 1 AS ok FROM accounts WHERE id = ?`).get(localId) as { ok: number } | undefined;
+    if (!acc) continue;
+    updateHash.run({ hash, now, id: localId });
+    accountsUpdated++;
+    accountHashes.push({ accountId: localId, hash });
+  }
+
+  return { accountsUpdated, accountHashes };
 }
