@@ -73,7 +73,7 @@ type WatchlistRow = { id: string; name: string; createdAt: string; itemCount: nu
 
 type NormalizedQuote = ApiNormalizedQuote;
 
-type SortCol = "symbol" | "company" | "last" | "chgPct" | "chg" | "dayPl" | "volX";
+type SortCol = "symbol" | "company" | "last" | "chgPct" | "chg" | "dayPl" | "volX" | "volume";
 type VolumeInfo = { volume: number | null; avgVolume20: number | null; ratio: number | null; flagged: boolean };
 
 type TerminalCol = "symbol" | "company" | "trend" | "last" | "chg" | "chgPct" | "dayPl" | "volX";

@@ -32,5 +32,5 @@
     ".next-desktop/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "scripts"]
+  "exclude": ["node_modules", "scripts", "**/*.test.ts", "**/*.test.tsx"]
 }

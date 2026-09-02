@@ -15,7 +15,8 @@ import {
 export type SymbolPerformanceIntradayPoint = {
   tsMs: number | null;
   label: string;
-} & Record<string, number | null>;
+  [symbol: string]: number | string | null;
+};
 
 export async function fetchSymbolPerformanceIntraday(
   symbols: string[],

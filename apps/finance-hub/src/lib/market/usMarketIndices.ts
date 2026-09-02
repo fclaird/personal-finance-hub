@@ -8,6 +8,9 @@ import {
   nyBarPhase,
   resolveGlanceSplitContext,
   splitTimedPointsForGlance,
+  type GlanceExtendedFields,
+  type GlanceExtendedPhase,
+  type TimedClosePoint,
 } from "@/lib/market/glanceExtendedHours";
 import {
   buildAlignedExtendedSeries,
@@ -365,7 +368,7 @@ async function buildIndexCard(
           sym,
           extPhase === "pre" ? ctx.chartYmd : sessionYmd,
           schwabWindow,
-          extPhase,
+          extPhase ?? "post",
         );
       }
       if (regularTimed.length >= 2) dataSource = yahooGrid?.result ? "mixed" : "schwab";

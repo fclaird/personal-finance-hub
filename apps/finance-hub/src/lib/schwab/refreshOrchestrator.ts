@@ -188,7 +188,7 @@ export async function runSchwabRefresh(
             db,
             lookbackDays: SCHWAB_REFRESH_TRANSACTION_LOOKBACK_DAYS,
           });
-          return { ok: true, ...res };
+          return { ...res, ok: true };
         }),
       );
 

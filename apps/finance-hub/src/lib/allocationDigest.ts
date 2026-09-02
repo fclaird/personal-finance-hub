@@ -33,8 +33,6 @@ export type AllocationDigestPayload = {
 
 const PCT0 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 
-import type { FlavorId } from "@/lib/flavor";
-
 function buildBuckets(includeSynthetic: boolean, mode: DataMode, flavor: FlavorId): { totalMarketValue: number; byAssetClass: AllocationDigestBucket[] } {
   const r = getConsolidatedAllocation(includeSynthetic, mode, undefined, flavor);
   return {
