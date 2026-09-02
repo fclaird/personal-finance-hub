@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { glanceSessionYmd } from "@/lib/market/glanceSession";
 import { GLANCE_RTH_CLOSE_MIN, GLANCE_RTH_OPEN_MIN } from "@/lib/market/glanceTileChartWindow";
 import { nyWallTimeMs } from "@/lib/market/futuresGlanceSession";
+import type { CandleWindowKey } from "@/lib/terminal/candleChartConfig";
 import { windowSinceMs } from "@/lib/terminal/candleWindowTime";
 
 export type VisibleTimeRange = { fromMs: number; toMs: number };
@@ -138,6 +139,7 @@ export function useChartTimeRange({
       needsEarlierData:
         visibleRange.fromMs - loadedFromMs < edge && loadedFromMs > windowStartMs + edge,
       needsLaterData:
+        // eslint-disable-next-line react-hooks/purity -- "can we fetch a newer bar"
         loadedToMs - visibleRange.toMs < edge && loadedToMs < Date.now() - edge,
     };
   }, [visibleRange, loadedFromMs, loadedToMs, window]);

@@ -6,8 +6,11 @@ declare global {
   var __fhColdStartupPullScheduled: boolean | undefined;
   var __fhScheduler:
     | {
+        started: boolean;
+        metaIntervalId: NodeJS.Timeout | null;
         lastSlowRunAt: number;
         lastAccountValueRunAt: number;
+        lastTickAt: number;
       }
     | undefined;
 }

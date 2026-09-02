@@ -3,7 +3,17 @@ import { NextResponse } from "next/server";
 import { getConsolidatedAllocation } from "@/lib/analytics/allocation";
 import { getUnderlyingExposureRollup } from "@/lib/analytics/optionsExposure";
 import { getRebalancing } from "@/lib/analytics/rebalancing";
-import { getAlertRules, insertAlertEvent } from "@/lib/alerts";
+import { getAlertRules, insertAlertEvent, type AlertRuleType } from "@/lib/alerts";
+import {
+  DEFAULT_OPTION_RISK_CONFIGS,
+  OPTION_RISK_RULE_TYPES,
+  loadOptionRiskSummary,
+  optionRiskEventsFromSummary,
+  type OptionRiskConfigs,
+  type OptionRiskRuleType,
+} from "@/lib/alerts/optionRisk";
+import { getDb } from "@/lib/db";
+import { latestSnapshotScopeForMode } from "@/lib/holdings/latestSnapshots";
 import { resolveViewScope } from "@/lib/viewScope";
 
 export async function POST(req: Request) {
@@ -50,6 +60,44 @@ export async function POST(req: Request) {
           });
         }
       }
+    }
+  }
+
+  const optionEnabled = new Set(
+    rules.map((r) => r.type).filter((t): t is OptionRiskRuleType => (OPTION_RISK_RULE_TYPES as readonly string[]).includes(t)),
+  );
+  if (optionEnabled.size > 0) {
+    const merged: OptionRiskConfigs = { ...DEFAULT_OPTION_RISK_CONFIGS };
+    for (const r of rules) {
+      const cfg = (r.config ?? {}) as Partial<OptionRiskConfigs>;
+      if (r.type === "delta-band") {
+        if (typeof cfg.targetAbsDelta === "number") merged.targetAbsDelta = cfg.targetAbsDelta;
+        if (typeof cfg.deltaBand === "number") merged.deltaBand = cfg.deltaBand;
+      }
+      if (r.type === "option-dte" && typeof (cfg as { maxDte?: number }).maxDte === "number") {
+        merged.maxDte = (cfg as { maxDte: number }).maxDte;
+      }
+      if (r.type === "margin-pressure" && typeof cfg.maxMarginPct === "number") merged.maxMarginPct = cfg.maxMarginPct;
+      if (r.type === "assignment" && typeof cfg.nearStrikePct === "number") merged.nearStrikePct = cfg.nearStrikePct;
+    }
+    const db = getDb();
+    const summary = loadOptionRiskSummary(db, {
+      scope: latestSnapshotScopeForMode(mode),
+      flavor,
+      configs: merged,
+    });
+    const drafts = optionRiskEventsFromSummary(summary, optionEnabled);
+    const ruleIdByType = new Map(rules.map((r) => [r.type as AlertRuleType, r.id]));
+    for (const ev of drafts) {
+      const ruleId = ruleIdByType.get(ev.ruleType);
+      if (!ruleId) continue;
+      created++;
+      insertAlertEvent({
+        ruleId,
+        severity: ev.severity,
+        title: ev.title,
+        details: ev.details,
+      });
     }
   }
 

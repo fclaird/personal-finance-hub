@@ -21,7 +21,7 @@ export type FlavorConfig = {
 const MAIN_NAV: SidebarNavItem[] = [
   { href: "/terminal", label: "Terminal" },
   { href: "/positions", label: "Positions" },
-  { href: "/strategies/all", label: "Option Strategies", prefix: "/strategies" },
+  { href: "/strategies/situations", label: "Option Strategies", prefix: "/strategies" },
   { href: "/allocation", label: "Allocation" },
   { href: "/diversification", label: "Diversification" },
   { href: "/earnings", label: "Earnings" },

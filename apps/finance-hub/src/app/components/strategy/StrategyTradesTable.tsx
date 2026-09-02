@@ -6,7 +6,7 @@ import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatUsd2 } from "@/lib/format";
 import { symbolPageTargetFromInstrument } from "@/lib/symbolPage";
 import { posNegClass } from "@/lib/terminal/colors";
-import { STRATEGY_TAB_META } from "@/lib/strategy/strategyCategories";
+import { strategyLabel } from "@/lib/strategy/strategyCategories";
 import type { StrategyTradeApiRow } from "@/lib/strategy/strategyTradeStats";
 
 export type StrategySortCol =
@@ -20,10 +20,7 @@ export type StrategySortCol =
   | "accountName";
 
 function strategyRowLabel(slug: string | null | undefined): string {
-  if (slug == null || slug === "") return "—";
-  const meta = STRATEGY_TAB_META.find((t) => t.slug === slug);
-  if (meta) return meta.label;
-  return slug.replace(/-/g, " ");
+  return strategyLabel(slug);
 }
 
 function compareRows(a: StrategyTradeApiRow, b: StrategyTradeApiRow, col: StrategySortCol, asc: boolean): number {

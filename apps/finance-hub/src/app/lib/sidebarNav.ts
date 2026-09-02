@@ -25,6 +25,11 @@ export function sidebarNavOrderStorageKeyForFlavor(flavor: FlavorId): string {
   return sidebarNavOrderStorageKey(flavor);
 }
 
+/** Sidebar used to land on All fills; keep custom order when that href is persisted. */
+export function canonicalizeSidebarHref(href: string): string {
+  return href === "/strategies/all" ? "/strategies/situations" : href;
+}
+
 /** @deprecated Use sidebarNavOrderStorageKeyForFlavor(flavor) */
 export const SIDEBAR_NAV_ORDER_STORAGE_KEY = sidebarNavOrderStorageKey("main");
 
@@ -36,7 +41,7 @@ export function readSidebarNavOrderFromStorage(flavor: FlavorId = "main"): strin
   const key = sidebarNavOrderStorageKeyForFlavor(flavor);
   const defaults = defaultSidebarNavOrder(flavor);
   const legacy = sidebarNavOrderLegacyKeys(flavor);
-  const order = readPersistedOrder(key, defaults, legacy);
+  const order = readPersistedOrder(key, defaults, legacy, canonicalizeSidebarHref);
   if (!localStorage.getItem(key) && legacy.length > 0) {
     try {
       for (const lk of legacy) {

@@ -30,7 +30,7 @@ export type PortfolioGlanceDisplayMode = "indexed" | "dollar";
 export type GlanceSourceMode = "markets" | "futures";
 export type GlanceViewMode = "tiles" | "combined";
 export type { GlanceAlternateInstrumentId, GlanceTileInstrumentId };
-export type QuotesSortCol = "symbol" | "company" | "last" | "chgPct" | "chg" | "volume" | "volX";
+export type QuotesSortCol = "symbol" | "company" | "last" | "chgPct" | "chg" | "volume" | "volX" | "dayPl";
 export type VolumeLeadersMode = "volume" | "volX";
 export type OptionFlowMode = "volume" | "relative";
 
@@ -42,6 +42,7 @@ const QUOTES_SORT_COLS = new Set<QuotesSortCol>([
   "chg",
   "volume",
   "volX",
+  "dayPl",
 ]);
 
 export function readGlanceSourceMode(): GlanceSourceMode {

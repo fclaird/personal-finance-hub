@@ -11,7 +11,7 @@
     "dev:next": "next dev --experimental-https",
     "dev:webpack": "next dev --experimental-https --webpack",
     "build": "next build",
-    "start": "next start",
+    "start": "node scripts/start.mjs",
     "desktop:prepare": "node scripts/desktop-prepare-standalone.mjs",
     "desktop:dev": "FINANCE_HUB_ELECTRON_DEV=1 electron desktop/main.cjs",
     "desktop:dev:win": "set FINANCE_HUB_ELECTRON_DEV=1&& electron desktop/main.cjs",
@@ -22,7 +22,7 @@
     "digest:pdf": "npx tsx scripts/pdf-allocation-report.ts",
     "digest:notify": "npx tsx scripts/trigger-digest-notify.ts",
     "backfill:portfolio-snapshots": "npx tsx scripts/backfill-portfolio-snapshots.ts",
-    "test": "npx tsx --test src/lib/*.test.ts src/lib/**/*.test.ts",
+    "test": "npx tsx --test src/lib/*.test.ts src/lib/**/*.test.ts && node --test scripts/loadEnvLocal.test.mjs",
     "test:dividends": "npx tsx --test src/lib/dividends/dividendProducingFilter.test.ts src/lib/dividends/holdingCategory.test.ts src/lib/dividends/schwabDividendBook.test.ts src/lib/dividends/bookForwardSnap.test.ts"
   },
   "dependencies": {

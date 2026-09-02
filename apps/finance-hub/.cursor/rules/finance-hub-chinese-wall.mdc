@@ -1,0 +1,31 @@
+---
+description: Finance Hub Chinese wall — analytics only; never place trades or move capital
+alwaysApply: true
+---
+
+# Finance Hub — Chinese wall (non-negotiable)
+
+This app is **information only** until Chris **explicitly** authorizes trading in writing.
+
+## Allowed
+
+- Schwab read/sync (quotes, positions, greeks, balances, TRADE history)
+- Analytics, alerts, reports, situation linking, local reclassify
+- Flag undefined-risk shorts (naked calls / strangles = unbounded)
+
+## Forbidden
+
+- Broker order placement, tickets, submit/cancel/replace
+- Any path that moves capital via Schwab (or other brokers)
+- Setting `FINANCE_HUB_ALLOW_BROKER_ORDERS` unless Chris asked
+
+`src/lib/schwab/client.ts` refuses trader paths that look like `/orders` or `/previewOrder` unless that flag is `"1"`. Do not add UI that calls those paths.
+
+## Style notes
+
+LEAPs vs ~15Δ short naked strangles / premium selling. Prefer analytics over action.
+
+## Docs
+
+- `docs/icarus/HUB_API_MAP.md` (repo root)
+- `aurora-personal-finance-hub` sibling is deprecated → use **rorie** flavor

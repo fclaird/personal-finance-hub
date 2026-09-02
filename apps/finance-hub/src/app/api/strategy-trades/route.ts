@@ -3,7 +3,8 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
 import { notPosterityWhereSql } from "@/lib/posterity";
-import { isStrategyTabSlug } from "@/lib/strategy/strategyCategories";
+import { effectiveStrategyCategory } from "@/lib/strategy/classifyTransaction";
+import { dualReadSourceCategories, isStrategyTabSlug } from "@/lib/strategy/strategyCategories";
 import {
   computeStrategyStats,
   notionalForPnlPct,
@@ -101,6 +102,7 @@ type DbTx = {
   price: number | null;
   leg_count: number;
   strategy_category: string | null;
+  raw_json: string;
 };
 
 function toApiRow(r: DbTx): StrategyTradeApiRow {
@@ -130,6 +132,16 @@ function toApiRow(r: DbTx): StrategyTradeApiRow {
     transactionType: r.transaction_type,
     strategyCategory: r.strategy_category,
   };
+}
+
+function withEffectiveCategory(db: ReturnType<typeof getDb>, r: DbTx): StrategyTradeApiRow {
+  const row = toApiRow(r);
+  row.strategyCategory = effectiveStrategyCategory(db, {
+    accountId: r.account_id,
+    rawJson: r.raw_json,
+    storedCategory: r.strategy_category,
+  });
+  return row;
 }
 
 function toCsv(rows: StrategyTradeApiRow[], includeStrategyColumn: boolean): string {
@@ -182,7 +194,7 @@ export async function GET(req: Request) {
         {
           ok: false,
           error:
-            "Invalid category. Use one of: all, covered-calls, earnings, options-sales, leaps, spreads, uncategorized",
+            "Invalid category. Use one of: all, situations, covered-calls, naked-calls, earnings, options-sales, short-strangles, butterflies, leaps, long-calls, long-puts, spreads, uncategorized",
         },
         { status: 400 },
       );
@@ -196,8 +208,13 @@ export async function GET(req: Request) {
     type CountRow = { c: number };
     const storedTradeRowCount = (db.prepare(`SELECT COUNT(*) AS c FROM broker_transactions`).get() as CountRow).c;
 
+    const dualCats = dualReadSourceCategories(category);
     const categoryFilterSql =
-      category === "all" ? "" : "AND b.strategy_category = @category";
+      category === "all" || category === "situations" || dualCats == null
+        ? ""
+        : `AND b.strategy_category IN (${dualCats.map((_, i) => `@c${i}`).join(", ")})`;
+    const categoryBinds: Record<string, string> =
+      dualCats == null ? {} : Object.fromEntries(dualCats.map((c, i) => [`c${i}`, c]));
 
     const rows = db
       .prepare(
@@ -216,7 +233,8 @@ export async function GET(req: Request) {
           b.quantity AS quantity,
           b.price AS price,
           b.leg_count AS leg_count,
-          b.strategy_category AS strategy_category
+          b.strategy_category AS strategy_category,
+          b.raw_json AS raw_json
         FROM broker_transactions b
         JOIN accounts a ON a.id = b.account_id
         WHERE 1=1
@@ -225,9 +243,12 @@ export async function GET(req: Request) {
         ORDER BY b.trade_date DESC, b.id DESC
       `,
       )
-      .all(category === "all" ? {} : { category }) as DbTx[];
+      .all(categoryBinds) as DbTx[];
 
-    let trades = rows.map(toApiRow);
+    let trades = rows.map((r) => withEffectiveCategory(db, r));
+    if (category !== "all" && category !== "situations") {
+      trades = trades.filter((t) => t.strategyCategory === category);
+    }
     let tradeDataSource: "ledger" | "positions_preview" = "ledger";
     if (trades.length === 0 && category === "all") {
       const preview = openOptionPositionsAsTradeRows(db, posterity);

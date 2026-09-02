@@ -22,9 +22,11 @@ import {
 import { posNegClass } from "@/lib/terminal/colors";
 import { symbolPageTargetFromInstrument } from "@/lib/symbolPage";
 import { usePersistedColumnOrder } from "@/lib/usePersistedColumnOrder";
+import type { AlertRuleType } from "@/lib/alerts";
+import type { OptionRiskPosition, OptionRiskSummary } from "@/lib/alerts/optionRisk";
 
 type RuleConfig = Record<string, unknown>;
-type Rule = { id: string; type: "drift" | "concentration"; enabled: boolean; config: RuleConfig };
+type Rule = { id: string; type: AlertRuleType; enabled: boolean; config: RuleConfig };
 type EventRow = { id: string; occurred_at: string; severity: string; title: string; details_json: string | null; rule_type: string };
 
 type OptionContractRow = {
@@ -679,6 +681,7 @@ export default function AlertsPage() {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [expiringOptions, setExpiringOptions] = useState<OptionContractRow[]>([]);
   const [lowExtrinsicOptions, setLowExtrinsicOptions] = useState<OptionContractRow[]>([]);
+  const [optionRisk, setOptionRisk] = useState<OptionRiskSummary | null>(null);
   const [nickByAccountId, setNickByAccountId] = useState<Map<string, string | null>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -686,11 +689,12 @@ export default function AlertsPage() {
 
   async function load() {
     setError(null);
-    const [rResp, eResp, pResp, aResp] = await Promise.all([
+    const [rResp, eResp, pResp, aResp, riskResp] = await Promise.all([
       fetch("/api/alerts/rules"),
       fetch("/api/alerts/events?limit=50"),
       fetch("/api/positions", { cache: "no-store" }),
       fetch("/api/accounts", { cache: "no-store" }),
+      fetch("/api/option-risk", { cache: "no-store" }),
     ]);
     const rJson = (await rResp.json()) as { ok: boolean; rules?: Rule[]; error?: string };
     if (!rJson.ok) throw new Error(rJson.error ?? "Failed to load rules");
@@ -709,6 +713,13 @@ export default function AlertsPage() {
       for (const a of aJson.accounts ?? []) nickMap.set(a.id, a.nickname ?? null);
     }
     setNickByAccountId(nickMap);
+
+    const riskJson = (await riskResp.json()) as (OptionRiskSummary & { ok?: boolean }) | { ok: false };
+    if (riskJson && "ok" in riskJson && riskJson.ok) {
+      setOptionRisk(riskJson as OptionRiskSummary);
+    } else {
+      setOptionRisk(null);
+    }
 
     const pJson = (await pResp.json()) as { ok: boolean; positions?: OptionContractRow[]; error?: string };
     if (pJson.ok) {
@@ -767,6 +778,15 @@ export default function AlertsPage() {
 
   const drift = rules.find((r) => r.type === "drift");
   const conc = rules.find((r) => r.type === "concentration");
+  const undefinedRisk = rules.find((r) => r.type === "undefined-risk");
+  const nakedShort = rules.find((r) => r.type === "naked-short");
+  const deltaBand = rules.find((r) => r.type === "delta-band");
+  const optionDte = rules.find((r) => r.type === "option-dte");
+  const marginPressure = rules.find((r) => r.type === "margin-pressure");
+  const assignment = rules.find((r) => r.type === "assignment");
+  const riskPositions: OptionRiskPosition[] = (optionRisk?.positions ?? []).filter(
+    (p) => p.flags.undefinedRisk || p.flags.nakedShort,
+  );
   const driftThresholdPct = (() => {
     const raw = drift?.config?.thresholdPct;
     return typeof raw === "number" ? raw : 0.05;
@@ -809,7 +829,7 @@ export default function AlertsPage() {
 
       <DraggableTileLayout
         storageKey="fh.alerts.tiles.v1"
-        defaultOrder={["expiring-options", "low-extrinsic", "alert-rules", "recent-events"]}
+        defaultOrder={["expiring-options", "low-extrinsic", "undefined-risk", "alert-rules", "recent-events"]}
         tiles={{
           "expiring-options": {
             title: `Options expiring within ${DTE_THRESHOLD} days`,
@@ -849,6 +869,70 @@ export default function AlertsPage() {
                 optionColumnOrder={optionColumnOrder}
                 moveOptionColumn={moveOptionColumn}
               />
+            ),
+          },
+          "undefined-risk": {
+            title: "Undefined-risk shorts",
+            bodyClassName: "relative p-4 sm:p-6",
+            children: (
+              <div>
+                <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                  Naked short calls and short strangles have <strong>unbounded</strong> max loss. Naked puts are flagged
+                  with defined max loss (strike × 100 × contracts). Live from latest snapshots +{" "}
+                  <span className="font-mono text-xs">option_greeks</span>.
+                </p>
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full border-collapse text-sm">
+                    <thead>
+                      <tr className="border-b border-zinc-300 text-left text-zinc-600 dark:border-white/20 dark:text-zinc-400">
+                        <th className="py-2 pr-4 font-medium">Underlying</th>
+                        <th className="py-2 pr-4 font-medium">Structure</th>
+                        <th className="py-2 pr-4 font-medium">Max loss</th>
+                        <th className="py-2 pr-4 font-medium">|Δ|</th>
+                        <th className="py-2 pr-4 font-medium">DTE</th>
+                        <th className="py-2 pr-4 font-medium">Flags</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {riskPositions.map((p) => (
+                        <tr key={p.positionId} className="border-b border-zinc-200 dark:border-white/20">
+                          <td className="py-2 pr-4 font-semibold">{p.underlying}</td>
+                          <td className="py-2 pr-4 capitalize">{p.flags.structure.replace(/-/g, " ")}</td>
+                          <td className="py-2 pr-4">
+                            {p.flags.maxLoss === "unbounded" ? (
+                              <span className="rounded bg-red-200 px-1.5 py-0.5 text-xs font-semibold text-red-950 dark:bg-red-900/70 dark:text-red-50">
+                                UNBOUNDED
+                              </span>
+                            ) : (
+                              <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Defined</span>
+                            )}
+                          </td>
+                          <td className="py-2 pr-4 tabular-nums">
+                            {p.flags.absDelta == null ? "—" : p.flags.absDelta.toFixed(2)}
+                          </td>
+                          <td className="py-2 pr-4 tabular-nums">{p.dte ?? "—"}</td>
+                          <td className="py-2 pr-4 text-xs text-zinc-600 dark:text-zinc-400">
+                            {[
+                              p.flags.deltaOffBand ? "Δ off 0.15" : null,
+                              p.flags.shortDte ? "short DTE" : null,
+                              p.flags.itm ? "ITM" : p.flags.assignmentNear ? "near strike" : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ") || "—"}
+                          </td>
+                        </tr>
+                      ))}
+                      {riskPositions.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="py-6 text-center text-zinc-600 dark:text-zinc-400">
+                            No naked short puts/calls/strangles in the latest snapshots.
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             ),
           },
           "alert-rules": {
@@ -928,6 +1012,100 @@ export default function AlertsPage() {
                 }
               />
             </div>
+          </div>
+
+          <div className="rounded-xl border border-zinc-300 p-4 dark:border-white/20">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold">Undefined-risk shorts</div>
+              <button
+                className="text-sm underline-offset-4 hover:underline"
+                onClick={() => saveRule("undefined-risk", !(undefinedRisk?.enabled ?? false), undefinedRisk?.config ?? {})}
+              >
+                {undefinedRisk?.enabled ? "Disable" : "Enable"}
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+              Naked short calls and strangles (unbounded max loss).
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-zinc-300 p-4 dark:border-white/20">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold">Naked short puts/calls</div>
+              <button
+                className="text-sm underline-offset-4 hover:underline"
+                onClick={() => saveRule("naked-short", !(nakedShort?.enabled ?? false), nakedShort?.config ?? {})}
+              >
+                {nakedShort?.enabled ? "Disable" : "Enable"}
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">All uncovered short options, including puts.</p>
+          </div>
+
+          <div className="rounded-xl border border-zinc-300 p-4 dark:border-white/20">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold">|Δ| ≈ 0.15 band</div>
+              <button
+                className="text-sm underline-offset-4 hover:underline"
+                onClick={() =>
+                  saveRule("delta-band", !(deltaBand?.enabled ?? false), deltaBand?.config ?? { targetAbsDelta: 0.15, deltaBand: 0.05 })
+                }
+              >
+                {deltaBand?.enabled ? "Disable" : "Enable"}
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+              Alert when short-option |delta| leaves 0.10–0.20 (from option_greeks).
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-zinc-300 p-4 dark:border-white/20">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold">Short DTE</div>
+              <button
+                className="text-sm underline-offset-4 hover:underline"
+                onClick={() => saveRule("option-dte", !(optionDte?.enabled ?? false), optionDte?.config ?? { maxDte: 21 })}
+              >
+                {optionDte?.enabled ? "Disable" : "Enable"}
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Short options at or under 21 DTE.</p>
+          </div>
+
+          <div className="rounded-xl border border-zinc-300 p-4 dark:border-white/20">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold">Margin / BP pressure</div>
+              <button
+                className="text-sm underline-offset-4 hover:underline"
+                onClick={() =>
+                  saveRule(
+                    "margin-pressure",
+                    !(marginPressure?.enabled ?? false),
+                    marginPressure?.config ?? { maxMarginPct: 0.25 },
+                  )
+                }
+              >
+                {marginPressure?.enabled ? "Disable" : "Enable"}
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+              Cash-secured-style short notional vs latest account equity (≥ 25%).
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-zinc-300 p-4 dark:border-white/20">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold">Assignment proximity</div>
+              <button
+                className="text-sm underline-offset-4 hover:underline"
+                onClick={() =>
+                  saveRule("assignment", !(assignment?.enabled ?? false), assignment?.config ?? { nearStrikePct: 0.02 })
+                }
+              >
+                {assignment?.enabled ? "Disable" : "Enable"}
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Short options ITM or within 2% of strike.</p>
           </div>
         </div>
               </>

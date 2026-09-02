@@ -5,6 +5,9 @@ import { useCallback, useEffect, useState } from "react";
 
 import { StrategyStatsPanel } from "@/app/components/strategy/StrategyStatsPanel";
 import { EditablePageHeading } from "@/app/components/EditableHeading";
+import { SituationsPanel } from "@/app/components/strategy/SituationsPanel";
+import { StrategyTabBar } from "@/app/components/strategy/StrategyTabBar";
+import { StructureBookPanel } from "@/app/components/strategy/StructureBookPanel";
 import { StrategyTradesTable } from "@/app/components/strategy/StrategyTradesTable";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import type { StrategyTabSlug } from "@/lib/strategy/strategyCategories";
@@ -35,6 +38,10 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
   const [tradeDataSource, setTradeDataSource] = useState<"ledger" | "positions_preview">("ledger");
 
   const load = useCallback(async () => {
+    if (category === "situations") {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -103,31 +110,41 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
 
   const csvHref = `/api/strategy-trades?category=${encodeURIComponent(category)}&format=csv`;
 
+  const isStructure = category === "short-strangles" || category === "butterflies";
+
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-5">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
             <EditablePageHeading pageId="option-strategies" defaultTitle="Option Strategies" />
           </h1>
-          <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Option-focused trade activity by classification bucket. Pull history from Connections (sync transactions).
+          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+            Short-premium book first (situations, strangles, butterflies). Analytics only — no orders.
           </p>
         </div>
         <Link
           href="/connections"
-          className="shrink-0 rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
+          className="shrink-0 rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
         >
           Connections
         </Link>
       </div>
 
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <StrategyTabBar category={category} />
+
+      {category === "situations" ? <SituationsPanel privacyMasked={privacy.masked} /> : null}
+
+      {category === "situations" ? null : (
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{meta?.label ?? category}</h2>
-          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-            All stored Schwab TRADE activity for this tab (excludes posterity accounts). P&amp;L uses broker net amount per
-            activity; % is approximate when price/qty allow.
+          {isStructure ? null : (
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{meta?.label ?? category}</h2>
+          )}
+          <p className={"text-sm text-zinc-600 dark:text-zinc-400 " + (isStructure ? "" : "mt-1")}>
+            {isStructure
+              ? "Live snapshot books, then linked situations (open → adjust → close). Fills is the raw TRADE list."
+              : "Schwab TRADE fills for this bucket. P&L is broker net amount."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -155,29 +172,13 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
           </button>
         </div>
       </div>
-
-      <div className="flex flex-wrap gap-2 text-sm">
-        {STRATEGY_TAB_META.map((t) => (
-          <Link
-            key={t.slug}
-            href={`/strategies/${t.slug}`}
-            className={
-              "rounded-full px-3 py-1 font-medium " +
-              (t.slug === category
-                ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
-                : "border border-zinc-300 text-zinc-800 hover:bg-zinc-50 dark:border-white/20 dark:text-zinc-200 dark:hover:bg-white/5")
-            }
-          >
-            {t.label}
-          </Link>
-        ))}
-      </div>
+      )}
 
       {error ? (
         <div className="rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">{error}</div>
       ) : null}
 
-      {!loading && tradeDataSource === "positions_preview" ? (
+      {category !== "situations" && !loading && tradeDataSource === "positions_preview" ? (
         <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950 dark:border-sky-900/50 dark:bg-sky-950/30 dark:text-sky-100">
           <p className="font-medium">Preview: open option positions</p>
           <p className="mt-2 text-sky-900/90 dark:text-sky-100/85">
@@ -188,7 +189,7 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
         </div>
       ) : null}
 
-      {!loading && trades.length === 0 && storedTradeRowCount === 0 ? (
+      {category !== "situations" && !loading && trades.length === 0 && storedTradeRowCount === 0 ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/25 dark:text-amber-100">
           <p className="font-medium">No trade history in your local database yet</p>
           <p className="mt-2 text-amber-900/90 dark:text-amber-100/85">
@@ -214,19 +215,30 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
         </div>
       ) : null}
 
-      {!loading && trades.length === 0 && storedTradeRowCount !== null && storedTradeRowCount > 0 ? (
+      {category !== "situations" && !isStructure && !loading && trades.length === 0 && storedTradeRowCount !== null && storedTradeRowCount > 0 ? (
         <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-800 dark:border-white/15 dark:bg-white/5 dark:text-zinc-200">
           No trades match this classification tab. Try the <strong>All</strong> tab to see every stored row.
         </div>
       ) : null}
 
-      <StrategyStatsPanel stats={stats} privacyMasked={privacy.masked} />
-
-      <StrategyTradesTable
-        rows={trades}
-        privacyMasked={privacy.masked}
-        showStrategyColumn={category === "all" || tradeDataSource === "positions_preview"}
-      />
+      {category === "situations" ? null : isStructure ? (
+        <StructureBookPanel
+          kind={category}
+          privacyMasked={privacy.masked}
+          trades={trades}
+          stats={stats}
+          showStrategyColumn={tradeDataSource === "positions_preview"}
+        />
+      ) : (
+        <>
+          <StrategyStatsPanel stats={stats} privacyMasked={privacy.masked} />
+          <StrategyTradesTable
+            rows={trades}
+            privacyMasked={privacy.masked}
+            showStrategyColumn={category === "all" || tradeDataSource === "positions_preview"}
+          />
+        </>
+      )}
     </div>
   );
 }

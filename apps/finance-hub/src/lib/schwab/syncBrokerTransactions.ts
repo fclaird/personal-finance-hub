@@ -5,6 +5,7 @@ import { newId } from "@/lib/id";
 import { DEFAULT_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
 import { fetchSchwabAccountNumbers, fetchSchwabTransactionsChunked } from "@/lib/schwab/fetchAccountTransactions";
 import { normalizeSchwabTransaction } from "@/lib/schwab/transactionNormalize";
+import { rebuildAutoSituations } from "@/lib/situations/persistSituations";
 import { reclassifyBrokerTransactionRow } from "@/lib/strategy/classifyTransaction";
 
 export type SyncBrokerTransactionsResult = {
@@ -165,6 +166,12 @@ export async function syncSchwabBrokerTransactions(options?: {
   for (const id of touchedIds) {
     reclassifyBrokerTransactionRow(db, id);
     classified++;
+  }
+
+  try {
+    rebuildAutoSituations(db);
+  } catch {
+    // Situations are best-effort; TRADE sync should still succeed.
   }
 
   return { ok: true, lookbackDays, accountsUpdated, transactionsUpserted, classified };

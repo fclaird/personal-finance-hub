@@ -1,7 +1,14 @@
+import { OPTION_RISK_RULE_TYPES, type OptionRiskRuleType } from "@/lib/alerts/optionRisk";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 
-export type AlertRuleType = "drift" | "concentration";
+export type AlertRuleType = "drift" | "concentration" | OptionRiskRuleType;
+
+export const ALL_ALERT_RULE_TYPES: AlertRuleType[] = ["drift", "concentration", ...OPTION_RISK_RULE_TYPES];
+
+export function isAlertRuleType(s: string): s is AlertRuleType {
+  return (ALL_ALERT_RULE_TYPES as readonly string[]).includes(s);
+}
 
 export type DriftRuleConfig = { thresholdPct: number }; // e.g. 0.05 = 5%
 export type ConcentrationRuleConfig = { maxSingleUnderlyingPct: number }; // e.g. 0.25 = 25%

@@ -8,7 +8,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { loadEnvLocal } from "./loadEnvLocal.mjs";
+
 const root = path.join(fileURLToPath(new URL(".", import.meta.url)), "..");
+loadEnvLocal(root);
 const DEV_PORT = Number(process.env.PORT ?? 3000) || 3000;
 const lockPath = path.join(root, ".next", "dev", "lock");
 
@@ -140,6 +143,16 @@ const ensure = spawnSync(nodeBin, ["scripts/ensure-sqlite-native.mjs"], {
 if (ensure.status !== 0) process.exit(ensure.status ?? 1);
 
 const bindHost = (process.env.FINANCE_HUB_BIND_HOST ?? "127.0.0.1").trim() || "127.0.0.1";
+const loopback =
+  bindHost === "127.0.0.1" || bindHost === "::1" || bindHost.toLowerCase() === "localhost";
+if (!loopback && !process.env.FINANCE_HUB_API_KEY?.trim()) {
+  console.error(
+    `Refusing to bind ${bindHost} without FINANCE_HUB_API_KEY.\n` +
+      `Use 127.0.0.1 for local-only, or set a key before VPN/LAN bind.\n` +
+      `See docs/remote-desktop-vpn.md.`,
+  );
+  process.exit(1);
+}
 
 ensureSingleDevServer(bindHost);
 

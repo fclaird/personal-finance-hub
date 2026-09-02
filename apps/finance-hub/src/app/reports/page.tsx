@@ -429,10 +429,11 @@ function ReportsPageInner() {
   const footnotes = data?.footnotes ?? [];
   const realized = metrics?.realizedGains;
 
+  const plPct = metrics?.plPct;
   const plSub = useMemo(() => {
-    if (metrics?.plPct == null) return null;
-    return formatPct(metrics.plPct);
-  }, [metrics?.plPct]);
+    if (plPct == null) return null;
+    return formatPct(plPct);
+  }, [plPct]);
 
   function setPeriod(next: PeriodKind) {
     router.replace(`/reports?period=${next}`);

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
+import { rebuildAutoSituations } from "@/lib/situations/persistSituations";
 import { reclassifyAllBrokerTransactions } from "@/lib/strategy/classifyTransaction";
 
 export async function POST(req: Request) {
@@ -10,7 +11,8 @@ export async function POST(req: Request) {
     const since = typeof body.since === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.since) ? body.since : null;
     const db = getDb();
     const n = reclassifyAllBrokerTransactions(db, since);
-    return NextResponse.json({ ok: true, reclassified: n });
+    const situations = rebuildAutoSituations(db);
+    return NextResponse.json({ ok: true, reclassified: n, situations });
   } catch (e) {
     logError("strategy_reclassify_failed", e);
     return NextResponse.json(

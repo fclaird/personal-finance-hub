@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS target_allocations (
 
 CREATE TABLE IF NOT EXISTS alert_rules (
   id TEXT PRIMARY KEY,
-  type TEXT NOT NULL, -- 'drift' | 'concentration' | 'change'
+  type TEXT NOT NULL, -- 'drift' | 'concentration' | option-risk types
   config_json TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -453,6 +453,7 @@ CREATE TABLE IF NOT EXISTS broker_transactions (
   option_strike REAL,
   leg_count INTEGER NOT NULL DEFAULT 1,
   strategy_category TEXT,
+  strategy_category_original TEXT,
   classified_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -461,6 +462,40 @@ CREATE TABLE IF NOT EXISTS broker_transactions (
 
 CREATE INDEX IF NOT EXISTS idx_broker_tx_account_date ON broker_transactions(account_id, trade_date);
 CREATE INDEX IF NOT EXISTS idx_broker_tx_category ON broker_transactions(strategy_category, trade_date);
+
+-- Multi-leg / roll / short-premium "situations": N broker_transactions linked with net cash.
+CREATE TABLE IF NOT EXISTS option_situations (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  underlying_symbol TEXT NOT NULL,
+  kind TEXT NOT NULL, -- short-strangle | short-put | short-call | covered-call | butterfly | spread | leap | long-option | other
+  status TEXT NOT NULL, -- open | closed
+  link_status TEXT NOT NULL, -- auto | proposed | confirmed | rejected
+  opened_on TEXT NOT NULL,
+  closed_on TEXT,
+  net_premium REAL,
+  title TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS option_situation_members (
+  situation_id TEXT NOT NULL REFERENCES option_situations(id) ON DELETE CASCADE,
+  transaction_id TEXT NOT NULL REFERENCES broker_transactions(id) ON DELETE CASCADE,
+  role TEXT NOT NULL, -- open | roll_close | roll_open | close | leg
+  PRIMARY KEY (situation_id, transaction_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_situation_members_txn ON option_situation_members(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_situations_account ON option_situations(account_id, underlying_symbol, status);
+
+CREATE TABLE IF NOT EXISTS option_situation_rejections (
+  id TEXT PRIMARY KEY,
+  transaction_id_a TEXT NOT NULL,
+  transaction_id_b TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(transaction_id_a, transaction_id_b)
+);
 
 -- Daily allocation snapshot per underlying (NY calendar trade_date). Filled by cron / post-sync.
 CREATE TABLE IF NOT EXISTS allocation_daily_underlying (

@@ -56,6 +56,21 @@ test("persistOrder writes JSON array to localStorage", () => {
   }
 });
 
+test("readPersistedOrder rewrites persisted ids before merge", () => {
+  const ls = createLocalStorageMock();
+  ls.setItem(STORAGE_KEY, JSON.stringify(["old-c", "a"]));
+  const prev = globalThis.localStorage;
+  Object.defineProperty(globalThis, "localStorage", { value: ls, configurable: true });
+  try {
+    const order = readPersistedOrder(STORAGE_KEY, DEFAULT_ORDER, undefined, (id) =>
+      id === "old-c" ? "c" : id,
+    );
+    assert.deepEqual(order, ["c", "a", "b", "d"]);
+  } finally {
+    Object.defineProperty(globalThis, "localStorage", { value: prev, configurable: true });
+  }
+});
+
 test("readPersistedOrder restores merged order from storage", () => {
   const ls = createLocalStorageMock();
   ls.setItem(STORAGE_KEY, JSON.stringify(["d", "b"]));
