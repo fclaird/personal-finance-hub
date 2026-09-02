@@ -11,7 +11,7 @@
     "dev:next": "next dev --experimental-https",
     "dev:webpack": "next dev --experimental-https --webpack",
     "build": "next build",
-    "start": "next start",
+    "start": "node scripts/start.mjs",
     "desktop:prepare": "node scripts/desktop-prepare-standalone.mjs",
     "desktop:dev": "FINANCE_HUB_ELECTRON_DEV=1 electron desktop/main.cjs",
     "desktop:dev:win": "set FINANCE_HUB_ELECTRON_DEV=1&& electron desktop/main.cjs",

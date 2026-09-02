@@ -28,10 +28,10 @@ Optional: `INTERNAL_APP_BASE_URL=http://127.0.0.1:3049` (defaults are derived fr
 
 ## Network bind (localhost default)
 
-Dev and desktop default to **127.0.0.1** only. To intentionally expose the dev server on your LAN (requires `FINANCE_HUB_API_KEY` — see [../../../docs/security.md](../../../docs/security.md)):
+Dev, `npm run start`, and desktop default to **127.0.0.1** only. Electron stays local. To view from another desktop over Tailscale/VPN, run **Next** (`npm run start`) with `FINANCE_HUB_BIND_HOST` + `FINANCE_HUB_API_KEY` — see [remote-desktop-vpn.md](remote-desktop-vpn.md). The wrappers refuse a non-loopback bind without the key.
 
 ```bash
-FINANCE_HUB_BIND_HOST=0.0.0.0 npm run dev
+FINANCE_HUB_API_KEY=… FINANCE_HUB_BIND_HOST=0.0.0.0 npm run start
 ```
 
 Electron production builds still listen on `127.0.0.1:3049` via `desktop/main.cjs`.

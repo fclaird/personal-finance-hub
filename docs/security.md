@@ -58,8 +58,15 @@ When `FINANCE_HUB_API_KEY` is set, middleware still allows requests to cron-prot
 
 Vercel crons and local digest scripts can continue to use `CRON_SECRET` only — they do not need the LAN API key.
 
+## Desktop over VPN (Tailscale / WireGuard)
+
+To **view** the hub from another machine, run Next (`npm run start`) on the Mac that holds the DB — not Electron. Bind with `FINANCE_HUB_BIND_HOST=0.0.0.0` (or the tailnet IP) **and** `FINANCE_HUB_API_KEY`. The start/dev wrappers refuse a non-loopback bind without the key.
+
+Step-by-step: [remote-desktop-vpn.md](../apps/finance-hub/docs/remote-desktop-vpn.md).
+
 ## Related docs
 
-- [Mobile access and digest](mobile-access-and-digest.md) — Tailscale, SMS digest, `PUBLIC_APP_URL`
+- [Remote desktop over VPN](../apps/finance-hub/docs/remote-desktop-vpn.md) — recommended Tailscale path for another computer
+- [Mobile access and digest](mobile-access-and-digest.md) — phone + digest
 - [Desktop](DESKTOP.md) — Electron port 3049, Schwab redirect URI
 - [Storage architecture](architecture/storage.md) — SQLite and secrets paths

@@ -19,7 +19,7 @@ This doc covers **Path A** (reach your local hub from a phone) and **Path B** (s
 ### Tailscale (recommended)
 
 1. Install [Tailscale](https://tailscale.com/download) on the Mac and phone; log in to the same tailnet.
-2. On the Mac, run the hub: `npm run dev` or `npm run start` (default port **3000**; dev uses HTTPS experimental—use the URL Next prints).
+2. On the Mac, run the hub: `npm run start` (preferred) or `npm run dev` (default port **3000**; dev uses HTTPS experimental—use the URL Next prints). Non-loopback bind requires `FINANCE_HUB_API_KEY` (see [remote-desktop-vpn.md](remote-desktop-vpn.md)).
 3. Find the Mac’s Tailscale IP: `tailscale ip -4`.
 4. On the phone’s browser: `https://<tailscale-ip>:3000` **or** `http://...` if you use plain HTTP for `next start`.
 
