@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import {
+  canonicalizeSidebarHref,
   defaultSidebarNavOrder,
   orderSidebarNavItems,
   sidebarNavOrderLegacyKeys,
@@ -36,7 +37,7 @@ export function SidebarNav({
   const defaultOrder = useMemo(() => defaultSidebarNavOrder(flavor), [flavor]);
   const storageKey = useMemo(() => sidebarNavOrderStorageKeyForFlavor(flavor), [flavor]);
   const legacyKeys = useMemo(() => sidebarNavOrderLegacyKeys(flavor), [flavor]);
-  const { order, reorderById } = usePersistedOrder(storageKey, defaultOrder, legacyKeys);
+  const { order, reorderById } = usePersistedOrder(storageKey, defaultOrder, legacyKeys, canonicalizeSidebarHref);
   const orderedItems = useMemo(() => orderSidebarNavItems(order, flavor), [order, flavor]);
 
   const onDragStart = useCallback((e: React.DragEvent, href: string) => {

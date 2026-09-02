@@ -48,6 +48,23 @@ test("readSidebarNavOrderFromStorage migrates legacy main key", () => {
   }
 });
 
+test("readSidebarNavOrderFromStorage remaps legacy /strategies/all to situations", () => {
+  const ls = createLocalStorageMock();
+  const key = sidebarNavOrderStorageKeyForFlavor("main");
+  ls.setItem(key, JSON.stringify(["/terminal", "/strategies/all", "/positions"]));
+  const prev = globalThis.localStorage;
+  Object.defineProperty(globalThis, "localStorage", { value: ls, configurable: true });
+  try {
+    const order = readSidebarNavOrderFromStorage("main");
+    assert.equal(order[0], "/terminal");
+    assert.equal(order[1], "/strategies/situations");
+    assert.equal(order[2], "/positions");
+    assert.equal(order.includes("/strategies/all"), false);
+  } finally {
+    Object.defineProperty(globalThis, "localStorage", { value: prev, configurable: true });
+  }
+});
+
 test("readSidebarNavOrderFromStorage uses per-flavor key for rorie", () => {
   const ls = createLocalStorageMock();
   const rorieKey = sidebarNavOrderStorageKeyForFlavor("rorie");

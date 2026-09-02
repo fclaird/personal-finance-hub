@@ -27,13 +27,19 @@ export function readPersistedOrder<T extends string>(
   storageKey: string,
   defaultOrder: readonly T[],
   legacyStorageKeys?: readonly string[],
+  rewrite?: (id: string) => string,
 ): T[] {
   const keys = [storageKey, ...(legacyStorageKeys ?? [])];
   for (const key of keys) {
     try {
       const raw = localStorage.getItem(key);
       if (!raw) continue;
-      const merged = mergeWithDefaults(JSON.parse(raw) as unknown, defaultOrder);
+      const parsed = JSON.parse(raw) as unknown;
+      const rewritten =
+        rewrite && Array.isArray(parsed)
+          ? parsed.map((x) => (typeof x === "string" ? rewrite(x) : x))
+          : parsed;
+      const merged = mergeWithDefaults(rewritten, defaultOrder);
       if (merged.length > 0) return merged;
     } catch {
       // try next key
@@ -54,15 +60,18 @@ export function usePersistedOrder<T extends string>(
   storageKey: string,
   defaultOrder: readonly T[],
   legacyStorageKeys?: readonly string[],
+  rewrite?: (id: string) => string,
 ) {
   const [order, setOrderState] = useState<T[]>(() => [...defaultOrder]);
   const ignoreNextPersist = useRef(true);
   const defaultSignature = defaultOrder.join("|");
   const legacySignature = legacyStorageKeys?.join("|") ?? "";
+  const rewriteRef = useRef(rewrite);
+  rewriteRef.current = rewrite;
 
   useEffect(() => {
     ignoreNextPersist.current = true;
-    setOrderState(readPersistedOrder(storageKey, defaultOrder, legacyStorageKeys));
+    setOrderState(readPersistedOrder(storageKey, defaultOrder, legacyStorageKeys, rewriteRef.current));
   }, [storageKey, defaultSignature, legacySignature]);
 
   useEffect(() => {
