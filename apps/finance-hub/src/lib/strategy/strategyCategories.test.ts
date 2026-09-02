@@ -7,7 +7,7 @@ import {
   isStrategyTabSlug,
   strategyLabel,
 } from "@/lib/strategy/strategyCategories";
-import { STRATEGY_TAB_GROUPS } from "@/lib/strategy/strategyTabGroups";
+import { DEFAULT_STRATEGY_HREF, STRATEGY_TAB_GROUPS } from "@/lib/strategy/strategyTabGroups";
 
 describe("strategy tab taxonomy", () => {
   it("includes situations and the new short-premium / long-option tabs", () => {
@@ -28,6 +28,7 @@ describe("strategy tab taxonomy", () => {
 
   it("puts situations first and maps structure tabs to situation kinds", () => {
     assert.equal(STRATEGY_TAB_GROUPS[0]?.slugs[0], "situations");
+    assert.equal(DEFAULT_STRATEGY_HREF, "/strategies/situations");
     assert.equal(situationKindMatchesTab("short-strangle", "short-strangles"), true);
     assert.equal(situationKindMatchesTab("butterfly", "butterflies"), true);
     assert.equal(situationKindMatchesTab("short-put", "short-strangles"), false);

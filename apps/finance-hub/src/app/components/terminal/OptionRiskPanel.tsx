@@ -55,9 +55,14 @@ export function OptionRiskPanel() {
     <div className="mt-5">
       <div className="flex items-center justify-between gap-2">
         <div className="text-sm font-semibold">Options risk</div>
-        <Link href="/alerts" className="text-[11px] font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-400">
-          Alerts
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link href="/strategies/situations" className="text-[11px] font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-400">
+            Situations
+          </Link>
+          <Link href="/alerts" className="text-[11px] font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-400">
+            Alerts
+          </Link>
+        </div>
       </div>
       <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">
         Naked shorts, ~15Δ band, DTE, assignment, margin. Undefined risk = unbounded short call / strangle.

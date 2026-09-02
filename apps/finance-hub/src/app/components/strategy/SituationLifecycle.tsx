@@ -1,8 +1,23 @@
 "use client";
 
 import { formatUsd2 } from "@/lib/format";
+import type { SituationMemberRole } from "@/lib/situations/types";
 import { posNegClass } from "@/lib/terminal/colors";
 import { rolePhaseLabel, type SituationView } from "@/lib/situations/apiTypes";
+
+function phaseDotClass(role: SituationMemberRole): string {
+  switch (role) {
+    case "open":
+      return "bg-sky-500";
+    case "roll_close":
+    case "roll_open":
+      return "bg-amber-500";
+    case "close":
+      return "bg-emerald-500";
+    default:
+      return "bg-zinc-400 dark:bg-zinc-500";
+  }
+}
 
 export function SituationLifecycle({
   row,
@@ -37,7 +52,7 @@ export function SituationLifecycle({
         {row.members.map((m, i) => (
           <li key={`${m.transactionId}:${m.role}:${i}`} className="flex gap-3 text-xs">
             <div className="flex w-4 flex-col items-center">
-              <span className="mt-1 h-2 w-2 rounded-full bg-zinc-400 dark:bg-zinc-500" />
+              <span className={"mt-1 h-2 w-2 rounded-full " + phaseDotClass(m.role)} />
               {i < row.members.length - 1 ? <span className="mt-1 w-px flex-1 bg-zinc-200 dark:bg-white/15" /> : null}
             </div>
             <div className="min-w-0 flex-1 pb-1">

@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
+import { LiveStructureBooks } from "@/app/components/strategy/LiveStructureBooks";
 import { SituationsPanel } from "@/app/components/strategy/SituationsPanel";
 import { StrategyStatsPanel } from "@/app/components/strategy/StrategyStatsPanel";
 import { StrategyTradesTable } from "@/app/components/strategy/StrategyTradesTable";
+import type { SituationView } from "@/lib/situations/apiTypes";
 import type { StrategyStats, StrategyTradeApiRow } from "@/lib/strategy/strategyTradeStats";
 
 type BookTab = "open" | "closed" | "fills";
@@ -23,18 +25,27 @@ export function StructureBookPanel({
   showStrategyColumn: boolean;
 }) {
   const [tab, setTab] = useState<BookTab>("open");
+  const [counts, setCounts] = useState({ open: 0, closed: 0 });
+  const [situations, setSituations] = useState<SituationView[]>([]);
   const noun = kind === "short-strangles" ? "strangles" : "butterflies";
+
+  const onCounts = useCallback((next: { open: number; closed: number }) => {
+    setCounts(next);
+  }, []);
+  const onRows = useCallback((rows: SituationView[]) => {
+    setSituations(rows);
+  }, []);
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap gap-2 text-xs">
         {(
           [
-            ["open", `Open ${noun}`],
-            ["closed", `Closed ${noun}`],
-            ["fills", "Fills"],
+            ["open", `Open ${noun}`, counts.open],
+            ["closed", `Closed ${noun}`, counts.closed],
+            ["fills", "Fills", trades.length],
           ] as const
-        ).map(([id, label]) => (
+        ).map(([id, label, n]) => (
           <button
             key={id}
             type="button"
@@ -46,7 +57,7 @@ export function StructureBookPanel({
                 : "border border-zinc-300 text-zinc-700 hover:bg-zinc-50 dark:border-white/20 dark:text-zinc-200 dark:hover:bg-white/5")
             }
           >
-            {label}
+            {label} {n}
           </button>
         ))}
       </div>
@@ -56,16 +67,24 @@ export function StructureBookPanel({
           <StrategyTradesTable rows={trades} privacyMasked={privacyMasked} showStrategyColumn={showStrategyColumn} />
         </>
       ) : (
-        <SituationsPanel
-          privacyMasked={privacyMasked}
-          kindFilter={kind}
-          hideChrome
-          forcedStatus={tab}
-        />
+        <>
+          {tab === "open" ? (
+            <LiveStructureBooks kind={kind} situations={situations} privacyMasked={privacyMasked} />
+          ) : null}
+          <SituationsPanel
+            privacyMasked={privacyMasked}
+            kindFilter={kind}
+            hideChrome
+            forcedStatus={tab}
+            onCounts={onCounts}
+            onRows={onRows}
+          />
+        </>
       )}
       {tab !== "fills" ? (
         <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          Open/closed use linked situations. Use the Open/Closed pills on the book, then Fills for raw TRADE rows.
+          Open shows live snapshot {noun} plus linked situations (lifecycle expanded). Closed is past books. Fills is the
+          raw TRADE list.
         </p>
       ) : null}
     </div>

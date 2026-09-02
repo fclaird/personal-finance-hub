@@ -136,12 +136,14 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
       {category === "situations" ? <SituationsPanel privacyMasked={privacy.masked} /> : null}
 
       {category === "situations" ? null : (
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{meta?.label ?? category}</h2>
-          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+          {isStructure ? null : (
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{meta?.label ?? category}</h2>
+          )}
+          <p className={"text-sm text-zinc-600 dark:text-zinc-400 " + (isStructure ? "" : "mt-1")}>
             {isStructure
-              ? "Linked books (open/closed) plus raw fills. Net cash is the situation rollup."
+              ? "Live snapshot books, then linked situations (open → adjust → close). Fills is the raw TRADE list."
               : "Schwab TRADE fills for this bucket. P&L is broker net amount."}
           </p>
         </div>
@@ -213,7 +215,7 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
         </div>
       ) : null}
 
-      {category !== "situations" && !loading && trades.length === 0 && storedTradeRowCount !== null && storedTradeRowCount > 0 ? (
+      {category !== "situations" && !isStructure && !loading && trades.length === 0 && storedTradeRowCount !== null && storedTradeRowCount > 0 ? (
         <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-800 dark:border-white/15 dark:bg-white/5 dark:text-zinc-200">
           No trades match this classification tab. Try the <strong>All</strong> tab to see every stored row.
         </div>

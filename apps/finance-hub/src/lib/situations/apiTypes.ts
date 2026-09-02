@@ -40,6 +40,8 @@ export function rolePhaseLabel(role: SituationMemberRole): string {
       return "Roll open";
     case "close":
       return "Close";
+    case "leg":
+      return "Leg";
     default:
       return "Adjust";
   }

@@ -10,23 +10,30 @@ import { situationKindMatchesTab, type SituationView } from "@/lib/situations/ap
 type KindFilter = "all" | "short-strangles" | "butterflies";
 type StatusFilter = "all" | "open" | "closed";
 
+export type SituationCounts = { open: number; closed: number };
+
 export function SituationsPanel({
   privacyMasked,
   kindFilter = "all",
   hideChrome = false,
   forcedStatus,
+  onCounts,
+  onRows,
 }: {
   privacyMasked: boolean;
   kindFilter?: KindFilter;
   hideChrome?: boolean;
   forcedStatus?: StatusFilter;
+  onCounts?: (counts: SituationCounts) => void;
+  onRows?: (rows: SituationView[]) => void;
 }) {
   const [rows, setRows] = useState<SituationView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [proposing, setProposing] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [userCollapsed, setUserCollapsed] = useState<Set<string>>(new Set());
+  const [userExpanded, setUserExpanded] = useState<Set<string>>(new Set());
   const [statusFilterState, setStatusFilter] = useState<StatusFilter>("all");
   const statusFilter = forcedStatus ?? statusFilterState;
 
@@ -49,6 +56,22 @@ export function SituationsPanel({
   useEffect(() => {
     void load();
   }, [load]);
+
+  const eligible = useMemo(() => {
+    return rows.filter((r) => {
+      if (r.linkStatus === "rejected") return false;
+      if (kindFilter !== "all" && !situationKindMatchesTab(r.kind, kindFilter)) return false;
+      return true;
+    });
+  }, [rows, kindFilter]);
+
+  useEffect(() => {
+    onCounts?.({
+      open: eligible.filter((r) => r.status === "open").length,
+      closed: eligible.filter((r) => r.status === "closed").length,
+    });
+    onRows?.(eligible);
+  }, [eligible, onCounts, onRows]);
 
   async function propose() {
     setProposing(true);
@@ -83,27 +106,38 @@ export function SituationsPanel({
     }
   }
 
-  function toggle(id: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  function isExpanded(r: SituationView): boolean {
+    if (userCollapsed.has(r.id)) return false;
+    if (userExpanded.has(r.id)) return true;
+    return r.status === "open";
   }
 
-  const filtered = useMemo(() => {
-    return rows.filter((r) => {
-      if (r.linkStatus === "rejected") return false;
-      if (kindFilter !== "all" && !situationKindMatchesTab(r.kind, kindFilter)) return false;
-      if (statusFilter !== "all" && r.status !== statusFilter) return false;
-      return true;
-    });
-  }, [rows, kindFilter, statusFilter]);
+  function toggle(r: SituationView) {
+    const open = isExpanded(r);
+    if (open) {
+      setUserCollapsed((prev) => new Set(prev).add(r.id));
+      setUserExpanded((prev) => {
+        const next = new Set(prev);
+        next.delete(r.id);
+        return next;
+      });
+    } else {
+      setUserExpanded((prev) => new Set(prev).add(r.id));
+      setUserCollapsed((prev) => {
+        const next = new Set(prev);
+        next.delete(r.id);
+        return next;
+      });
+    }
+  }
+
+  const filtered = eligible.filter((r) => (statusFilter === "all" ? true : r.status === statusFilter));
 
   const pending = filtered.filter((r) => r.linkStatus === "auto" || r.linkStatus === "proposed").length;
   const net = filtered.reduce((s, r) => s + (r.netPremium ?? 0), 0);
   const netAny = filtered.some((r) => r.netPremium != null);
+  const openCount = eligible.filter((r) => r.status === "open").length;
+  const closedCount = eligible.filter((r) => r.status === "closed").length;
 
   return (
     <div className="flex flex-col gap-4">
@@ -112,8 +146,8 @@ export function SituationsPanel({
           <div>
             <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Situation book</h2>
             <p className="mt-1 max-w-2xl text-sm text-zinc-600 dark:text-zinc-400">
-              One row per linked book: open → rolls / adjusts → close, with running net premium. Confirm auto-links;
-              reject splits a pair so it is not re-proposed.
+              One card per linked book. Open situations expand to the lifecycle (open → rolls / adjusts → close) with
+              running net premium. Confirm auto-links; reject splits a pair so it is not re-proposed.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -139,20 +173,21 @@ export function SituationsPanel({
         {forcedStatus
           ? null
           : (["all", "open", "closed"] as const).map((s) => (
-          <button
-            key={s}
-            type="button"
-            onClick={() => setStatusFilter(s)}
-            className={
-              "rounded-full px-3 py-1 font-medium capitalize " +
-              (statusFilter === s
-                ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
-                : "border border-zinc-300 text-zinc-700 hover:bg-zinc-50 dark:border-white/20 dark:text-zinc-200 dark:hover:bg-white/5")
-            }
-          >
-            {s}
-          </button>
-        ))}
+              <button
+                key={s}
+                type="button"
+                onClick={() => setStatusFilter(s)}
+                className={
+                  "rounded-full px-3 py-1 font-medium capitalize " +
+                  (statusFilter === s
+                    ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
+                    : "border border-zinc-300 text-zinc-700 hover:bg-zinc-50 dark:border-white/20 dark:text-zinc-200 dark:hover:bg-white/5")
+                }
+              >
+                {s}
+                {s === "open" ? ` ${openCount}` : s === "closed" ? ` ${closedCount}` : ""}
+              </button>
+            ))}
         {pending > 0 ? (
           <span className="text-zinc-500 dark:text-zinc-400">{pending} unconfirmed</span>
         ) : null}
@@ -167,73 +202,77 @@ export function SituationsPanel({
         <div className="rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">{error}</div>
       ) : null}
 
-      <div className="overflow-x-auto rounded-xl border border-zinc-300 bg-white shadow-sm dark:border-white/20 dark:bg-zinc-950">
-        <table className="min-w-full text-sm">
-          <thead>
-            <tr className="bg-zinc-50 dark:bg-black/30">
-              <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-600 dark:text-zinc-400">Book</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-600 dark:text-zinc-400">Kind</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-600 dark:text-zinc-400">Status</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-600 dark:text-zinc-400">Opened</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-600 dark:text-zinc-400">Net</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-600 dark:text-zinc-400">Fills</th>
-              <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-600 dark:text-zinc-400">Link</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((r) => (
-              <tr key={r.id} className="border-t border-zinc-100 dark:border-white/10">
-                <td colSpan={7} className="p-0">
-                  <div className="flex flex-wrap items-center gap-3 px-3 py-2">
-                    <button type="button" onClick={() => toggle(r.id)} className="min-w-0 flex-1 text-left hover:underline">
-                      <div className="font-medium text-zinc-900 dark:text-zinc-100">{r.title}</div>
-                      <div className="text-xs text-zinc-500">{r.accountName}</div>
-                    </button>
-                    <span className="w-24 capitalize text-zinc-600 dark:text-zinc-300">{r.kind.replace(/-/g, " ")}</span>
-                    <span className="w-16 capitalize text-zinc-600 dark:text-zinc-300">{r.status}</span>
-                    <span className="w-24 tabular-nums text-zinc-600 dark:text-zinc-300">{r.openedOn}</span>
-                    <span
-                      className={
-                        "w-24 tabular-nums font-medium " +
-                        (r.netPremium == null ? "text-zinc-500" : posNegClass(r.netPremium) || "")
-                      }
-                    >
-                      {r.netPremium == null ? "—" : formatUsd2(r.netPremium, { mask: privacyMasked })}
-                    </span>
-                    <span className="w-10 tabular-nums text-zinc-500">{r.members.length}</span>
-                    <span className="flex w-36 flex-wrap gap-1">
-                      {r.linkStatus === "confirmed" || r.linkStatus === "rejected" ? (
-                        <span className="text-xs capitalize text-zinc-500">{r.linkStatus}</span>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            disabled={busyId === r.id}
-                            onClick={() => void setLink(r.id, "confirmed")}
-                            className="rounded-full border border-zinc-300 px-2 py-0.5 text-xs font-semibold hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20"
-                          >
-                            Confirm
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busyId === r.id}
-                            onClick={() => void setLink(r.id, "rejected")}
-                            className="rounded-full border border-zinc-300 px-2 py-0.5 text-xs font-semibold hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20"
-                          >
-                            Reject
-                          </button>
-                        </>
-                      )}
-                    </span>
+      <div className="flex flex-col gap-3">
+        {filtered.map((r) => {
+          const expanded = isExpanded(r);
+          return (
+            <article
+              key={r.id}
+              className="rounded-xl border border-zinc-300 bg-white shadow-sm dark:border-white/20 dark:bg-zinc-950"
+            >
+              <div className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                <button type="button" onClick={() => toggle(r)} className="min-w-0 flex-1 text-left">
+                  <div className="font-medium text-zinc-900 dark:text-zinc-100">{r.title}</div>
+                  <div className="text-xs text-zinc-500">
+                    {r.accountName}
+                    {" · "}
+                    {expanded ? "Hide lifecycle" : "Show lifecycle"}
                   </div>
-                  {expanded.has(r.id) ? <SituationLifecycle row={r} privacyMasked={privacyMasked} /> : null}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                </button>
+                <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] capitalize text-zinc-700 dark:bg-white/10 dark:text-zinc-200">
+                  {r.kind.replace(/-/g, " ")}
+                </span>
+                <span
+                  className={
+                    "rounded-full px-2 py-0.5 text-[11px] capitalize " +
+                    (r.status === "open"
+                      ? "bg-sky-100 text-sky-900 dark:bg-sky-950/50 dark:text-sky-100"
+                      : "bg-zinc-100 text-zinc-600 dark:bg-white/10 dark:text-zinc-300")
+                  }
+                >
+                  {r.status}
+                </span>
+                <span className="tabular-nums text-xs text-zinc-600 dark:text-zinc-300">{r.openedOn}</span>
+                <span
+                  className={
+                    "tabular-nums text-sm font-medium " +
+                    (r.netPremium == null ? "text-zinc-500" : posNegClass(r.netPremium) || "")
+                  }
+                >
+                  {r.netPremium == null ? "—" : formatUsd2(r.netPremium, { mask: privacyMasked })}
+                </span>
+                <span className="text-xs text-zinc-500">{r.members.length} fills</span>
+                <span className="flex flex-wrap gap-1">
+                  {r.linkStatus === "confirmed" || r.linkStatus === "rejected" ? (
+                    <span className="text-xs capitalize text-zinc-500">{r.linkStatus}</span>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        disabled={busyId === r.id}
+                        onClick={() => void setLink(r.id, "confirmed")}
+                        className="rounded-full border border-zinc-300 px-2 py-0.5 text-xs font-semibold hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyId === r.id}
+                        onClick={() => void setLink(r.id, "rejected")}
+                        className="rounded-full border border-zinc-300 px-2 py-0.5 text-xs font-semibold hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20"
+                      >
+                        Reject
+                      </button>
+                    </>
+                  )}
+                </span>
+              </div>
+              {expanded ? <SituationLifecycle row={r} privacyMasked={privacyMasked} /> : null}
+            </article>
+          );
+        })}
         {!loading && filtered.length === 0 ? (
-          <div className="p-6 text-center text-sm text-zinc-600 dark:text-zinc-400">
+          <div className="rounded-xl border border-dashed border-zinc-300 p-6 text-center text-sm text-zinc-600 dark:border-white/20 dark:text-zinc-400">
             No situations in this filter. Sync TRADE history, then refresh links.
           </div>
         ) : null}
