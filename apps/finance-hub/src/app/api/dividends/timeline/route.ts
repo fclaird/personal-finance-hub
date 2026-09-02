@@ -26,7 +26,7 @@ export async function GET(req: Request) {
     });
   }
 
-  let { points, liveStartedAt, totalDividendsReceived } = await buildBookForwardTimeline(db, includeSpy, includeQqq);
+  const { points, liveStartedAt, totalDividendsReceived } = await buildBookForwardTimeline(db, includeSpy, includeQqq);
 
   const mapped = points.map((p) => ({
     month_end: p.as_of,

@@ -8,7 +8,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { loadEnvLocal } from "./loadEnvLocal.mjs";
+
 const root = path.join(fileURLToPath(new URL(".", import.meta.url)), "..");
+loadEnvLocal(root);
 const DEV_PORT = Number(process.env.PORT ?? 3000) || 3000;
 const lockPath = path.join(root, ".next", "dev", "lock");
 

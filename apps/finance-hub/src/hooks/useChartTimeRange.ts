@@ -139,6 +139,7 @@ export function useChartTimeRange({
       needsEarlierData:
         visibleRange.fromMs - loadedFromMs < edge && loadedFromMs > windowStartMs + edge,
       needsLaterData:
+        // eslint-disable-next-line react-hooks/purity -- "can we fetch a newer bar"
         loadedToMs - visibleRange.toMs < edge && loadedToMs < Date.now() - edge,
     };
   }, [visibleRange, loadedFromMs, loadedToMs, window]);

@@ -67,7 +67,10 @@ export function usePersistedOrder<T extends string>(
   const defaultSignature = defaultOrder.join("|");
   const legacySignature = legacyStorageKeys?.join("|") ?? "";
   const rewriteRef = useRef(rewrite);
-  rewriteRef.current = rewrite;
+
+  useEffect(() => {
+    rewriteRef.current = rewrite;
+  }, [rewrite]);
 
   useEffect(() => {
     ignoreNextPersist.current = true;

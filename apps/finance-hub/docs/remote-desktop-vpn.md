@@ -28,7 +28,7 @@ Secrets and the DB stay on the host: `~/.local/share/finance-hub/`. The remote b
    PUBLIC_APP_URL="http://<mac-tailscale-ip>:3000"
    ```
 
-   Binding anything other than loopback **requires** `FINANCE_HUB_API_KEY`. The start/dev wrappers exit otherwise.
+   Binding anything other than loopback **requires** `FINANCE_HUB_API_KEY`. `npm run start` and `npm run dev` load `.env.local` before the bind check, so these keys do not have to be exported in the shell. The wrappers exit if the bind is remote and the key is missing.
 
 3. Build and listen (from `apps/finance-hub`):
 

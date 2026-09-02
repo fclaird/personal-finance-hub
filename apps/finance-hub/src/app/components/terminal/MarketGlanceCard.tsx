@@ -711,6 +711,8 @@ export function MarketGlanceCard({
     const syncMs = Date.parse(item.lastAccountValueSyncAt);
     if (!Number.isFinite(syncMs)) return false;
     const staleMs = sessionOpen ? SCHWAB_AV_SYNC_STALE_RTH_MS : SCHWAB_AV_SYNC_STALE_CLOSED_MS;
+    // Freshness vs wall clock; not a render-stable value.
+    // eslint-disable-next-line react-hooks/purity -- snapshot age
     return Date.now() - syncMs > staleMs;
   }, [isPortfolio, item.lastAccountValueSyncAt, sessionOpen]);
   const chartWindowCtx = useMemo(
@@ -719,6 +721,7 @@ export function MarketGlanceCard({
       sessionYmd,
       chartYmd,
       showingPriorSession,
+      // eslint-disable-next-line react-hooks/purity -- chart window vs session clock
       nowMs: Date.now(),
     }),
     [sessionOpen, sessionYmd, chartYmd, showingPriorSession],

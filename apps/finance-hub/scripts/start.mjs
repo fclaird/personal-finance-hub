@@ -7,7 +7,10 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { loadEnvLocal } from "./loadEnvLocal.mjs";
+
 const root = path.join(fileURLToPath(new URL(".", import.meta.url)), "..");
+loadEnvLocal(root);
 
 function resolveBindHost() {
   return (process.env.FINANCE_HUB_BIND_HOST ?? "127.0.0.1").trim() || "127.0.0.1";
@@ -28,6 +31,11 @@ if (!isLoopback(bindHost) && !process.env.FINANCE_HUB_API_KEY?.trim()) {
       `See docs/remote-desktop-vpn.md.`,
   );
   process.exit(1);
+}
+
+console.log(`Finance Hub (next start) http://${bindHost}:${port}/`);
+if (!isLoopback(bindHost)) {
+  console.log("Remote desktop: open http://<vpn-or-tailscale-ip>:" + port + "/ — see docs/remote-desktop-vpn.md");
 }
 
 const nextBin = path.join(root, "node_modules", "next", "dist", "bin", "next");

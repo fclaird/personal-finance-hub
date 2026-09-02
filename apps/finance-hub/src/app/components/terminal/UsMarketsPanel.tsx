@@ -167,6 +167,7 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
       sessionYmd: usMarkets?.session.sessionYmd,
       chartYmd: usMarkets?.session.chartYmd,
       showingPriorSession: usMarkets?.session.showingPriorSession,
+      // eslint-disable-next-line react-hooks/purity -- chart window vs session clock
       nowMs: Date.now(),
     }),
     [
