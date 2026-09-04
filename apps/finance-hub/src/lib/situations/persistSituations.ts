@@ -1,5 +1,7 @@
 import type Database from "better-sqlite3";
 
+import type { FlavorId } from "@/lib/flavor";
+import { accountsInFlavorWhereSql } from "@/lib/flavors/accounts";
 import { newId } from "@/lib/id";
 import { loadLinkableBrokerTransactions } from "@/lib/situations/fromBrokerTx";
 import { proposeSituations } from "@/lib/situations/linkSituations";
@@ -71,11 +73,6 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
       .get() as { c: number }
   ).c;
 
-  db.exec(`
-    DELETE FROM option_situations
-    WHERE link_status IN ('auto', 'proposed')
-  `);
-
   const allTxns = loadLinkableBrokerTransactions(db).filter((t) => !lockedIds.has(t.id));
   const proposed = proposeSituations(allTxns, {
     rejectedPairs: loadRejectedPairs(db),
@@ -102,6 +99,10 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
   );
 
   const write = db.transaction((rows: ProposedSituation[]) => {
+    db.exec(`
+      DELETE FROM option_situations
+      WHERE link_status IN ('auto', 'proposed')
+    `);
     for (const s of rows) {
       const id = newId("sit");
       insertSit.run({
@@ -126,7 +127,8 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
   return { proposed: proposed.length, kept };
 }
 
-export function listSituations(db: Database.Database): SituationListRow[] {
+export function listSituations(db: Database.Database, flavor: FlavorId = "main"): SituationListRow[] {
+  const flavorSql = accountsInFlavorWhereSql(flavor, "a");
   const sits = db
     .prepare(
       `
@@ -137,6 +139,7 @@ export function listSituations(db: Database.Database): SituationListRow[] {
         s.net_premium AS netPremium, s.title
       FROM option_situations s
       JOIN accounts a ON a.id = s.account_id
+      WHERE ${flavorSql}
       ORDER BY s.opened_on DESC, s.id DESC
     `,
     )
