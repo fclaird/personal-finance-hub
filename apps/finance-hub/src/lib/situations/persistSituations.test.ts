@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import Database from "better-sqlite3";
 
+import { RORIE_ACCOUNT_ID } from "@/lib/flavors/accounts";
 import { listSituations, rebuildAutoSituations, setSituationLinkStatus } from "@/lib/situations/persistSituations";
 
 function createTestDb(): Database.Database {
@@ -40,8 +41,10 @@ function insertTx(
     strike: number;
     exp: string;
     effect?: string;
+    accountId?: string;
   },
 ) {
+  const accountId = opts.accountId ?? "schwab_1";
   const raw = {
     activityId: Number(opts.ext),
     tradeDate: opts.date,
@@ -66,12 +69,13 @@ function insertTx(
       symbol, underlying_symbol, asset_type, instruction, position_effect, quantity,
       option_expiration, option_right, option_strike, updated_at
     ) VALUES (
-      @id, 'schwab_1', @ext, @date, 'TRADE', @net, @raw,
+      @id, @accountId, @ext, @date, 'TRADE', @net, @raw,
       @symbol, @underlying, 'OPTION', @instruction, @effect, 1,
       @exp, @right, @strike, datetime('now')
     )`,
   ).run({
     id: opts.id,
+    accountId,
     ext: opts.ext,
     date: opts.date,
     net: opts.net,
@@ -129,5 +133,76 @@ describe("persistSituations", () => {
     const again = listSituations(db);
     assert.equal(again.length, 1);
     assert.equal(again[0]!.linkStatus, "confirmed");
+  });
+
+  it("lists main situations without the rorie Schwab account", () => {
+    const db = createTestDb();
+    db.prepare(
+      `INSERT INTO accounts (id, connection_id, name, type, currency, updated_at)
+       VALUES (@id, 'c1', 'Rorie', 'MARGIN', 'USD', datetime('now'))`,
+    ).run({ id: RORIE_ACCOUNT_ID });
+
+    insertTx(db, {
+      id: "main-put",
+      ext: "11",
+      date: "2026-06-01",
+      net: 200,
+      instruction: "SELL_TO_OPEN",
+      symbol: occ("IWM", "260717", "P", 180),
+      underlying: "IWM",
+      right: "P",
+      strike: 180,
+      exp: "2026-07-17",
+      accountId: "schwab_1",
+    });
+    insertTx(db, {
+      id: "main-call",
+      ext: "12",
+      date: "2026-06-01",
+      net: 150,
+      instruction: "SELL_TO_OPEN",
+      symbol: occ("IWM", "260717", "C", 230),
+      underlying: "IWM",
+      right: "C",
+      strike: 230,
+      exp: "2026-07-17",
+      accountId: "schwab_1",
+    });
+    insertTx(db, {
+      id: "rorie-put",
+      ext: "21",
+      date: "2026-06-02",
+      net: 80,
+      instruction: "SELL_TO_OPEN",
+      symbol: occ("SPY", "260717", "P", 500),
+      underlying: "SPY",
+      right: "P",
+      strike: 500,
+      exp: "2026-07-17",
+      accountId: RORIE_ACCOUNT_ID,
+    });
+    insertTx(db, {
+      id: "rorie-call",
+      ext: "22",
+      date: "2026-06-02",
+      net: 70,
+      instruction: "SELL_TO_OPEN",
+      symbol: occ("SPY", "260717", "C", 550),
+      underlying: "SPY",
+      right: "C",
+      strike: 550,
+      exp: "2026-07-17",
+      accountId: RORIE_ACCOUNT_ID,
+    });
+
+    rebuildAutoSituations(db);
+    const main = listSituations(db, "main");
+    const rorie = listSituations(db, "rorie");
+    assert.equal(main.length, 1);
+    assert.equal(main[0]!.accountId, "schwab_1");
+    assert.equal(main[0]!.underlying, "IWM");
+    assert.equal(rorie.length, 1);
+    assert.equal(rorie[0]!.accountId, RORIE_ACCOUNT_ID);
+    assert.equal(rorie[0]!.underlying, "SPY");
   });
 });

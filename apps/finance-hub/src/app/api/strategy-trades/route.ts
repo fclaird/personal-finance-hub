@@ -2,17 +2,18 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
-import { notPosterityWhereSql } from "@/lib/posterity";
 import { effectiveStrategyCategory } from "@/lib/strategy/classifyTransaction";
 import { dualReadSourceCategories, isStrategyTabSlug } from "@/lib/strategy/strategyCategories";
+import { strategyTradesAccountWhereSql } from "@/lib/strategy/strategyTradesScope";
 import {
   computeStrategyStats,
   notionalForPnlPct,
   type StrategyTradeApiRow,
 } from "@/lib/strategy/strategyTradeStats";
+import { resolveViewScope } from "@/lib/viewScope";
 
 /** When the TRADE ledger is empty, surface latest option holdings so the page is not blank. */
-function openOptionPositionsAsTradeRows(db: ReturnType<typeof getDb>, posteritySql: string): StrategyTradeApiRow[] {
+function openOptionPositionsAsTradeRows(db: ReturnType<typeof getDb>, accountWhereSql: string): StrategyTradeApiRow[] {
   const snapRows = db
     .prepare(
       `
@@ -20,7 +21,7 @@ function openOptionPositionsAsTradeRows(db: ReturnType<typeof getDb>, posterityS
       FROM holding_snapshots hs
       JOIN accounts a ON a.id = hs.account_id
       WHERE a.id LIKE 'schwab_%'
-        AND ${posteritySql}
+        AND ${accountWhereSql}
         AND hs.as_of = (
           SELECT MAX(hs2.as_of) FROM holding_snapshots hs2 WHERE hs2.account_id = a.id
         )
@@ -203,10 +204,22 @@ export async function GET(req: Request) {
     const format = searchParams.get("format") ?? "json";
 
     const db = getDb();
-    const posterity = notPosterityWhereSql("a");
+    const { flavor } = await resolveViewScope();
+    const accountWhere = strategyTradesAccountWhereSql(flavor, "a");
 
     type CountRow = { c: number };
-    const storedTradeRowCount = (db.prepare(`SELECT COUNT(*) AS c FROM broker_transactions`).get() as CountRow).c;
+    const storedTradeRowCount = (
+      db
+        .prepare(
+          `
+          SELECT COUNT(*) AS c
+          FROM broker_transactions b
+          JOIN accounts a ON a.id = b.account_id
+          WHERE ${accountWhere}
+        `,
+        )
+        .get() as CountRow
+    ).c;
 
     const dualCats = dualReadSourceCategories(category);
     const categoryFilterSql =
@@ -239,7 +252,7 @@ export async function GET(req: Request) {
         JOIN accounts a ON a.id = b.account_id
         WHERE 1=1
           ${categoryFilterSql}
-          AND ${posterity}
+          AND ${accountWhere}
         ORDER BY b.trade_date DESC, b.id DESC
       `,
       )
@@ -251,7 +264,7 @@ export async function GET(req: Request) {
     }
     let tradeDataSource: "ledger" | "positions_preview" = "ledger";
     if (trades.length === 0 && category === "all") {
-      const preview = openOptionPositionsAsTradeRows(db, posterity);
+      const preview = openOptionPositionsAsTradeRows(db, accountWhere);
       if (preview.length > 0) {
         trades = preview;
         tradeDataSource = "positions_preview";
@@ -274,6 +287,7 @@ export async function GET(req: Request) {
     return NextResponse.json({
       ok: true,
       category,
+      flavor,
       storedTradeRowCount,
       tradeDataSource,
       trades,
