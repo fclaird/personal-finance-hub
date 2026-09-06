@@ -191,8 +191,8 @@ export function LiveStructureBooks({
                   ) : (
                     <div className="border-t border-zinc-200 px-3 py-3 text-xs text-zinc-600 dark:border-white/25 dark:text-zinc-300">
                       <p>
-                        No linked TRADE history for this live book yet. Refresh links to rebuild open → roll →
-                        close trees from Schwab fills.
+                        No linked TRADE history for this live book yet. Links rebuild automatically from Schwab fills;
+                        use Force re-link if a book still looks stale.
                       </p>
                       {onRefreshLinks ? (
                         <button
@@ -201,7 +201,7 @@ export function LiveStructureBooks({
                           disabled={refreshingLinks}
                           className="mt-2 rounded-full border border-zinc-300 px-3 py-1 text-xs font-semibold hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20 dark:hover:bg-white/5"
                         >
-                          {refreshingLinks ? "Linking…" : "Refresh links"}
+                          {refreshingLinks ? "Linking…" : "Force re-link"}
                         </button>
                       ) : null}
                     </div>

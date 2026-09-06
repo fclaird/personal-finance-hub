@@ -36,11 +36,13 @@ export function SituationsPanel({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [proposing, setProposing] = useState(false);
+  const [updatingLinks, setUpdatingLinks] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [userCollapsed, setUserCollapsed] = useState<Set<string>>(new Set());
   const [userExpanded, setUserExpanded] = useState<Set<string>>(new Set());
   const [statusFilterState, setStatusFilter] = useState<StatusFilter>("all");
   const didAutoPropose = useRef(false);
+  const lastLoadRebuilt = useRef<boolean | null>(null);
   const statusFilter = forcedStatus ?? statusFilterState;
 
   const load = useCallback(async () => {
@@ -48,12 +50,23 @@ export function SituationsPanel({
     setError(null);
     try {
       const resp = await fetch("/api/option-situations", { cache: "no-store" });
-      const json = (await resp.json()) as { ok: boolean; situations?: SituationView[]; error?: string };
+      const json = (await resp.json()) as {
+        ok: boolean;
+        situations?: SituationView[];
+        rebuilt?: boolean;
+        error?: string;
+      };
       if (!json.ok) throw new Error(json.error ?? "Failed to load situations");
+      lastLoadRebuilt.current = Boolean(json.rebuilt);
       setRows(json.situations ?? []);
+      if (json.rebuilt) {
+        setUpdatingLinks(true);
+        window.setTimeout(() => setUpdatingLinks(false), 2500);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setRows([]);
+      lastLoadRebuilt.current = null;
     } finally {
       setLoading(false);
     }
@@ -67,10 +80,11 @@ export function SituationsPanel({
     onPropose?.(() => propose());
   }, [onPropose, proposing]);
 
-  // First visit: empty book means links were never built — rebuild once from TRADE history.
+  // Backup: if GET ensure returned empty without rebuilding (edge), force POST once.
   useEffect(() => {
     if (loading || proposing || error) return;
     if (rows.length > 0 || didAutoPropose.current) return;
+    if (lastLoadRebuilt.current === true) return;
     didAutoPropose.current = true;
     void propose();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot when the book is empty after first load
@@ -185,11 +199,15 @@ export function SituationsPanel({
               disabled={proposing}
               className="rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-900 hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
             >
-              {proposing ? "Linking…" : "Refresh links"}
+              {proposing ? "Linking…" : "Force re-link"}
             </button>
           </div>
         </div>
       )}
+
+      {updatingLinks ? (
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">Updating links…</p>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-2 text-xs">
         {forcedStatus
@@ -227,7 +245,7 @@ export function SituationsPanel({
       {hideList ? (
         !loading && rows.length === 0 ? (
           <div className="rounded-xl border border-dashed border-zinc-300 p-4 text-center text-sm text-zinc-600 dark:border-white/20 dark:text-zinc-300">
-            {proposing ? "Building trade history from Schwab fills…" : "No linked situations yet."}
+            {proposing || updatingLinks ? "Building trade history from Schwab fills…" : "No linked situations yet."}
           </div>
         ) : null
       ) : (

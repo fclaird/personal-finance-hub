@@ -84,7 +84,7 @@ export function StructureBookPanel({
             disabled={refreshingLinks}
             className="rounded-full border border-zinc-300 px-3 py-1 text-xs font-semibold text-zinc-800 hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20 dark:text-zinc-100 dark:hover:bg-white/5"
           >
-            {refreshingLinks ? "Linking…" : "Refresh links"}
+            {refreshingLinks ? "Linking…" : "Force re-link"}
           </button>
         ) : null}
       </div>
