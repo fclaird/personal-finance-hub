@@ -48,7 +48,12 @@ function coveredCallTxnIds(db: Database.Database, txns: ReturnType<typeof loadLi
   return out;
 }
 
-/** Rebuild auto/proposed situations. Confirmed and rejected rows are left intact. */
+/**
+ * Rebuild auto/proposed situations. Confirmed rows stay locked.
+ * Rejected pairs are left in place for audit but their fills are not locked, so
+ * the linker can split them into singles (option_situation_rejections blocks
+ * the pair). Rejected singles stay locked so dismissals stick.
+ */
 export function rebuildAutoSituations(db: Database.Database): { proposed: number; kept: number } {
   const lockedIds = new Set(
     (
@@ -58,7 +63,14 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
           SELECT m.transaction_id AS id
           FROM option_situation_members m
           JOIN option_situations s ON s.id = m.situation_id
-          WHERE s.link_status IN ('confirmed', 'rejected')
+          WHERE s.link_status = 'confirmed'
+             OR (
+               s.link_status = 'rejected'
+               AND (
+                 SELECT COUNT(*) FROM option_situation_members m2
+                 WHERE m2.situation_id = s.id
+               ) <= 1
+             )
         `,
         )
         .all() as { id: string }[]
