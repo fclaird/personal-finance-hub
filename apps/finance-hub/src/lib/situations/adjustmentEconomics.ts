@@ -87,30 +87,3 @@ export function realizedOnClosedLegs(
 
   return matchedAny ? round2(realized) : null;
 }
-
-/** Sum of all fill nets on the book (lifecycle cash). */
-export function lifecycleCash(members: SituationMemberView[]): number | null {
-  let sum = 0;
-  let saw = false;
-  for (const m of members) {
-    if (m.netAmount != null && Number.isFinite(m.netAmount)) {
-      sum += m.netAmount;
-      saw = true;
-    }
-  }
-  return saw ? round2(sum) : null;
-}
-
-export type CashDirection = "generating" | "burning" | "flat";
-
-export function cashDirection(lifecycle: number | null): CashDirection {
-  if (lifecycle == null || !Number.isFinite(lifecycle) || lifecycle === 0) return "flat";
-  return lifecycle > 0 ? "generating" : "burning";
-}
-
-export function formatCashDirectionLabel(lifecycle: number | null): string {
-  const dir = cashDirection(lifecycle);
-  if (dir === "flat") return "Flat";
-  if (dir === "generating") return "Generating";
-  return "Burning";
-}

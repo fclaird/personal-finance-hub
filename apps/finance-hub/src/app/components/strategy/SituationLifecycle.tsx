@@ -4,11 +4,6 @@ import { formatUsd2 } from "@/lib/format";
 import type { SituationMemberView, SituationView } from "@/lib/situations/apiTypes";
 import { clumpPartialFills } from "@/lib/situations/clumpPartialFills";
 import {
-  cashDirection,
-  formatCashDirectionLabel,
-  lifecycleCash,
-} from "@/lib/situations/adjustmentEconomics";
-import {
   formatAdjustmentSummary,
   formatCurrentDteLabel,
   formatFillLine,
@@ -303,37 +298,6 @@ function TreeNodeView({
 }
 
 
-function LifecycleCashChip({
-  members,
-  masked,
-}: {
-  members: SituationMemberView[];
-  masked: boolean;
-}) {
-  const cash = lifecycleCash(members);
-  const dir = cashDirection(cash);
-  const label = formatCashDirectionLabel(cash);
-  const tone =
-    dir === "flat"
-      ? "bg-zinc-100 text-zinc-600 dark:bg-white/10 dark:text-zinc-300"
-      : dir === "generating"
-        ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-        : "bg-rose-500/15 text-rose-700 dark:text-rose-300";
-  return (
-    <span
-      className={
-        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide " +
-        tone
-      }
-      title="Sum of all fill credits and debits on this book so far"
-    >
-      {label}
-      {cash != null ? (
-        <span className="tabular-nums normal-case tracking-normal">{usd(cash, masked)}</span>
-      ) : null}
-    </span>
-  );
-}
 
 export function SituationLifecycle({
   row,
@@ -360,7 +324,6 @@ export function SituationLifecycle({
         <span className={pnlTone(row.netPremium, { realized: netRealized })}>
           Net {row.netPremium == null ? "—" : formatUsd2(row.netPremium, { mask: privacyMasked })}
         </span>
-        <LifecycleCashChip members={clumped} masked={privacyMasked} />
       </div>
       {tree.length === 0 ? (
         <p className="text-xs text-zinc-500">No fills linked on this situation yet.</p>
