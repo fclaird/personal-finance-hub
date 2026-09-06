@@ -18,6 +18,8 @@ export type SituationTreeNode =
       label: string;
       closeMembers: SituationMemberView[];
       openMembers: SituationMemberView[];
+      /** Members chronologically before this adjustment (for per-leg realized G/L). */
+      priorMembers: SituationMemberView[];
       stepNet: number | null;
       /** Realized G/L on closed legs vs original open credits. */
       realizedOnClose: number | null;
@@ -171,6 +173,7 @@ export function buildSituationTree(
         label: `Adjustment · ${[...closeMembers, ...openMembers].map(memberLabel).join(" → ")}`,
         closeMembers,
         openMembers,
+        priorMembers: [...priorForRealize],
         stepNet: step,
         realizedOnClose: realized,
         cumulativeNet: running,
@@ -198,6 +201,7 @@ export function buildSituationTree(
         label: `Adjustment · ${openMembers.map(memberLabel).join(" + ")}`,
         closeMembers: [],
         openMembers,
+        priorMembers: [...priorForRealize],
         stepNet: step,
         realizedOnClose: null,
         cumulativeNet: running,

@@ -32,28 +32,28 @@ function buildOpenLots(priorMembers: SituationMemberView[]): Lot[] {
 }
 
 /**
- * Realized G/L on closed legs vs the original credit those lots brought in.
- * Match same OCC symbol first (FIFO); leftover qty consumes FIFO across any symbol.
- * realized = matchedOpenCredit + closeNet (e.g. +$X open credit + −$Y buyback).
+ * Realized G/L per closed leg vs the original credit those lots brought in.
+ * Same FIFO matching as realizedOnClosedLegs, but one result per close member
+ * (lots are consumed in close order so totals sum to the combined figure).
  */
-export function realizedOnClosedLegs(
+export function realizedPerClosedLeg(
   closeMembers: SituationMemberView[],
   priorMembers: SituationMemberView[],
-): number | null {
-  if (!closeMembers.length) return null;
+): Array<{ transactionId: string; realized: number | null }> {
   const lots = buildOpenLots(priorMembers);
-  if (!lots.length) return null;
-
-  let realized = 0;
-  let matchedAny = false;
+  const out: Array<{ transactionId: string; realized: number | null }> = [];
 
   for (const close of closeMembers) {
     const closeQty = absQty(close.quantity);
-    if (closeQty <= 0) continue;
+    if (closeQty <= 0 || !lots.length) {
+      out.push({ transactionId: close.transactionId, realized: null });
+      continue;
+    }
     let qtyLeft = closeQty;
     const closeNet = close.netAmount != null && Number.isFinite(close.netAmount) ? close.netAmount : 0;
     const closeSym = (close.symbol ?? "").trim();
     let matchedOpenCredit = 0;
+    let matchedAny = false;
 
     const consume = (lot: Lot, take: number): number => {
       if (take <= 0 || lot.qtyRemaining <= 0) return 0;
@@ -79,11 +79,37 @@ export function realizedOnClosedLegs(
     }
 
     const closedQty = closeQty - qtyLeft;
-    if (closedQty > 0) {
-      const allocatedCloseNet = closeNet * (closedQty / closeQty);
-      realized += matchedOpenCredit + allocatedCloseNet;
+    if (!matchedAny || closedQty <= 0) {
+      out.push({ transactionId: close.transactionId, realized: null });
+      continue;
     }
+    const allocatedCloseNet = closeNet * (closedQty / closeQty);
+    out.push({
+      transactionId: close.transactionId,
+      realized: round2(matchedOpenCredit + allocatedCloseNet),
+    });
   }
 
+  return out;
+}
+
+/**
+ * Realized G/L on closed legs vs the original credit those lots brought in.
+ * Match same OCC symbol first (FIFO); leftover qty consumes FIFO across any symbol.
+ * realized = matchedOpenCredit + closeNet (e.g. +$X open credit + −$Y buyback).
+ */
+export function realizedOnClosedLegs(
+  closeMembers: SituationMemberView[],
+  priorMembers: SituationMemberView[],
+): number | null {
+  if (!closeMembers.length) return null;
+  const per = realizedPerClosedLeg(closeMembers, priorMembers);
+  let realized = 0;
+  let matchedAny = false;
+  for (const p of per) {
+    if (p.realized == null) continue;
+    realized += p.realized;
+    matchedAny = true;
+  }
   return matchedAny ? round2(realized) : null;
 }

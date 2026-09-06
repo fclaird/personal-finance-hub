@@ -99,7 +99,7 @@ export function LiveStructureBooks({
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
         <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Live {noun}</h3>
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        <p className="text-xs text-zinc-600 dark:text-zinc-300">
           Click a card for trade history (open → adjustments → current). Snapshot legs above the fold.
         </p>
       </div>
@@ -136,7 +136,7 @@ export function LiveStructureBooks({
                         {strikes ? ` ${strikes}` : ""}
                       </span>
                     </div>
-                    <div className="pl-5 text-xs text-zinc-500">
+                    <div className="pl-5 text-xs text-zinc-600 dark:text-zinc-300">
                       {b.accountName}
                       {b.dte != null ? ` · ${b.dte} DTE` : b.expiration ? ` · ${b.expiration}` : ""}
                       {situation
@@ -148,7 +148,7 @@ export function LiveStructureBooks({
                     </div>
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-0.5 pr-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-300">
                       Snapshot
                     </span>
                     {situation?.netPremium != null ? (
@@ -171,7 +171,7 @@ export function LiveStructureBooks({
                         {leg.quantity} {leg.right}
                         {leg.strike != null ? ` ${leg.strike}` : ""}
                       </span>
-                      <span className="text-zinc-500">
+                      <span className="text-zinc-600 dark:text-zinc-300">
                         {leg.flags.structure === "short-strangle"
                           ? "strangle"
                           : leg.flags.structure.replace(/-/g, " ")}
@@ -189,7 +189,7 @@ export function LiveStructureBooks({
                   situation ? (
                     <SituationLifecycle row={situation} privacyMasked={privacyMasked} />
                   ) : (
-                    <div className="border-t border-zinc-200 px-3 py-3 text-xs text-zinc-600 dark:border-white/25 dark:text-zinc-400">
+                    <div className="border-t border-zinc-200 px-3 py-3 text-xs text-zinc-600 dark:border-white/25 dark:text-zinc-300">
                       <p>
                         No linked TRADE history for this live book yet. Refresh links to rebuild open → roll →
                         close trees from Schwab fills.
@@ -214,8 +214,8 @@ export function LiveStructureBooks({
 
         {/* Reserved for future ToS-style risk profile chart */}
         <aside className="hidden min-h-[12rem] flex-1 rounded-xl border border-dashed border-zinc-300 bg-zinc-50/50 p-4 dark:border-white/20 dark:bg-zinc-900/40 lg:block">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Risk profile</div>
-          <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-300">Risk profile</div>
+          <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">
             Reserved for the expiration / T+0 P&amp;L chart. Metrics stay in the left column — this pane will
             hold the selected book&apos;s risk graph.
           </p>

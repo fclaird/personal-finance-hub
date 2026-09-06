@@ -59,6 +59,8 @@ describe("buildSituationTree", () => {
     if (adj.kind !== "adjustment") throw new Error("expected adjustment");
     assert.equal(adj.stepNet, 40);
     assert.equal(adj.cumulativeNet, 140);
+    assert.equal(adj.priorMembers.length, 1);
+    assert.equal(adj.priorMembers[0]!.transactionId, "open");
     assert.equal(adj.children[0]!.kind, "close");
     assert.equal(adj.children[0]!.cumulativeNet, 120);
   });

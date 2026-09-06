@@ -117,7 +117,7 @@ export function StructureBookPanel({
         </>
       )}
       {tab !== "fills" ? (
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        <p className="text-xs text-zinc-600 dark:text-zinc-300">
           {tab === "open"
             ? `Click a live ${noun.slice(0, -1)} to expand trade history (initial open, adjustments/rolls, cumulative premium).`
             : `Closed books expand to the same trade tree. Fills is the raw TRADE list.`}

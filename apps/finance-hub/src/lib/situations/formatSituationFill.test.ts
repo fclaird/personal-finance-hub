@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import type { SituationMemberView } from "@/lib/situations/apiTypes";
 import {
+  buildAdjustmentHighlightParts,
   formatAdjustmentSummary,
   formatCurrentDteLabel,
   formatFillLine,
@@ -103,5 +104,73 @@ describe("formatSituationFill", () => {
     const s = formatFillWhen("2026-09-04", "2026-09-04T18:21:28+0000");
     assert.match(s, /Sep 4, 2026/);
     assert.match(s, /PM|AM/);
+  });
+
+  it("highlights changed wings and DTE for BE 210P/225C → 210P/235C", () => {
+    const parts = buildAdjustmentHighlightParts(
+      [
+        m({
+          transactionId: "cP",
+          role: "roll_close",
+          tradeDate: "2026-08-27",
+          tradeTime: "2026-08-27T14:00:00+0000",
+          symbol: "BE    260828P00210000",
+          expiration: "2026-08-28",
+          right: "P",
+          strike: 210,
+          positionEffect: "CLOSING",
+        }),
+        m({
+          transactionId: "cC",
+          role: "roll_close",
+          tradeDate: "2026-08-27",
+          tradeTime: "2026-08-27T14:00:00+0000",
+          symbol: "BE    260828C00225000",
+          expiration: "2026-08-28",
+          right: "C",
+          strike: 225,
+          positionEffect: "CLOSING",
+        }),
+      ],
+      [
+        m({
+          transactionId: "oP",
+          role: "roll_open",
+          tradeDate: "2026-08-27",
+          tradeTime: "2026-08-27T14:00:00+0000",
+          symbol: "BE    260904P00210000",
+          expiration: "2026-09-04",
+          right: "P",
+          strike: 210,
+          positionEffect: "OPENING",
+        }),
+        m({
+          transactionId: "oC",
+          role: "roll_open",
+          tradeDate: "2026-08-27",
+          tradeTime: "2026-08-27T14:00:00+0000",
+          symbol: "BE    260904C00235000",
+          expiration: "2026-09-04",
+          right: "C",
+          strike: 235,
+          positionEffect: "OPENING",
+        }),
+      ],
+    );
+    const tokens = parts.filter((p) => p.kind === "token");
+    const byText = Object.fromEntries(tokens.map((p) => [p.text, p.changed]));
+    assert.equal(byText["210P"], false, "210P unchanged");
+    assert.equal(byText["225C"], true, "225C changed");
+    assert.equal(byText["235C"], true, "235C changed");
+    assert.equal(byText["1 DTE"], true, "from DTE changed");
+    assert.equal(byText["8 DTE"], true, "to DTE changed");
+    // only one 210P token should be unchanged on both sides — count unchanged 210P
+    const putTokens = tokens.filter((p) => p.text === "210P");
+    assert.equal(putTokens.length, 2);
+    assert.ok(putTokens.every((p) => p.changed === false));
+    const label = parts.map((p) => p.text).join("");
+    assert.match(label, /BE adjust 210P\/225C → 210P\/235C/);
+    assert.match(label, /1 DTE → 8 DTE/);
+    assert.match(label, /Aug 27/);
   });
 });

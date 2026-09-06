@@ -2,12 +2,15 @@
 
 import { formatUsd2 } from "@/lib/format";
 import type { SituationMemberView, SituationView } from "@/lib/situations/apiTypes";
+import { realizedPerClosedLeg } from "@/lib/situations/adjustmentEconomics";
 import { clumpPartialFills } from "@/lib/situations/clumpPartialFills";
 import {
+  buildAdjustmentHighlightParts,
   formatAdjustmentSummary,
   formatCurrentDteLabel,
   formatFillLine,
   sumMemberNets,
+  type AdjustmentHighlightPart,
 } from "@/lib/situations/formatSituationFill";
 import {
   buildSituationTree,
@@ -60,9 +63,28 @@ export function pnlTone(
   net: number | null | undefined,
   opts: { realized: boolean },
 ): string {
-  if (net == null || !Number.isFinite(net) || net === 0) return "text-zinc-500";
-  if (!opts.realized) return "text-zinc-400 dark:text-zinc-500";
-  return posNegClass(net) || "text-zinc-500";
+  if (net == null || !Number.isFinite(net) || net === 0) return "text-zinc-600 dark:text-zinc-300";
+  if (!opts.realized) return "text-zinc-600 dark:text-zinc-300";
+  return posNegClass(net) || "text-zinc-600 dark:text-zinc-300";
+}
+
+const ADJUSTMENT_CHANGED_CLASS =
+  "rounded px-1 bg-amber-400/20 text-amber-100 ring-1 ring-amber-400/50";
+
+function AdjustmentHeadlineParts({ parts }: { parts: AdjustmentHighlightPart[] }) {
+  return (
+    <span className="ml-2 font-medium text-zinc-800 dark:text-zinc-100">
+      {parts.map((p, i) =>
+        p.kind === "token" && p.changed ? (
+          <span key={i} className={ADJUSTMENT_CHANGED_CLASS}>
+            {p.text}
+          </span>
+        ) : (
+          <span key={i}>{p.text}</span>
+        ),
+      )}
+    </span>
+  );
 }
 
 function FillRow({
@@ -107,33 +129,52 @@ function OpenFillLines({ members, masked }: { members: SituationMemberView[]; ma
 function AdjustmentFillLines({
   closeMembers,
   openMembers,
+  priorMembers,
   stepNet,
   realizedOnClose,
   masked,
 }: {
   closeMembers: SituationMemberView[];
   openMembers: SituationMemberView[];
+  priorMembers: SituationMemberView[];
   stepNet: number | null;
   realizedOnClose: number | null;
   masked: boolean;
 }) {
   const summary = formatAdjustmentSummary(closeMembers, openMembers);
+  const perLeg = realizedPerClosedLeg(closeMembers, priorMembers);
+  const realizedById = new Map(perLeg.map((p) => [p.transactionId, p.realized]));
   return (
     <ul className="mt-1 space-y-1">
-      <li className="text-[11px] text-zinc-600 dark:text-zinc-300">{summary.label}</li>
       <FillRow line="Net roll" net={stepNet ?? summary.net} masked={masked} realized />
       {realizedOnClose != null ? (
         <FillRow line="Realized on close" net={realizedOnClose} masked={masked} realized />
       ) : null}
-      {closeMembers.map((m) => (
-        <li key={"c:" + m.transactionId} className="pl-3 text-[10px] text-zinc-500 dark:text-zinc-400">
-          closed · {formatFillLine(m)}
-        </li>
-      ))}
+      {closeMembers.map((m) => {
+        const legRealized = realizedById.get(m.transactionId) ?? null;
+        return (
+          <li
+            key={"c:" + m.transactionId}
+            className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 pl-3 text-[10px] text-zinc-600 dark:text-zinc-300"
+          >
+            <span className="min-w-0 flex-1">closed · {formatFillLine(m)}</span>
+            <span
+              className={
+                "shrink-0 tabular-nums font-medium " + pnlTone(legRealized, { realized: true })
+              }
+            >
+              {usd(legRealized, masked)}
+            </span>
+          </li>
+        );
+      })}
       {openMembers.map((m) => (
-        <li key={"o:" + m.transactionId} className="pl-3 text-[10px] text-zinc-400 dark:text-zinc-500">
-          opened · {formatFillLine(m)}
-          <span className="ml-2 tabular-nums">{usd(m.netAmount, masked)}</span>
+        <li
+          key={"o:" + m.transactionId}
+          className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 pl-3 text-[10px] text-zinc-600 dark:text-zinc-300"
+        >
+          <span className="min-w-0 flex-1">opened · {formatFillLine(m)}</span>
+          <span className="shrink-0 tabular-nums">{usd(m.netAmount, masked)}</span>
         </li>
       ))}
     </ul>
@@ -155,7 +196,7 @@ function CloseFillLines({ members, masked }: { members: SituationMemberView[]; m
     <ul className="mt-1 space-y-1">
       <FillRow line={members.length + " closes · net"} net={combined} masked={masked} realized />
       {members.map((m) => (
-        <li key={m.transactionId} className="pl-3 text-[10px] text-zinc-500 dark:text-zinc-400">
+        <li key={m.transactionId} className="pl-3 text-[10px] text-zinc-600 dark:text-zinc-300">
           {formatFillLine(m)} · {usd(m.netAmount, masked)}
         </li>
       ))}
@@ -177,9 +218,14 @@ function TreeNodeView({
   situationOpen: boolean;
 }) {
   const hasKids = node.children.length > 0;
+  const adjustmentParts =
+    node.kind === "adjustment"
+      ? buildAdjustmentHighlightParts(node.closeMembers, node.openMembers)
+      : null;
+
   let headline = "";
   if (node.kind === "open") headline = "Initial open";
-  else if (node.kind === "adjustment") headline = formatAdjustmentSummary(node.closeMembers, node.openMembers).label;
+  else if (node.kind === "adjustment") headline = ""; // rendered via adjustmentParts
   else if (node.kind === "close")
     headline = node.members.length === 1 ? formatFillLine(node.members[0]!) : "Close · " + node.members.length + " fills";
   else if (node.kind === "current") {
@@ -228,29 +274,33 @@ function TreeNodeView({
         >
           <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs">
             <div className="min-w-0">
-              <span className="font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+              <span className="font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">
                 {kindTitle(node.kind)}
               </span>
-              <span
-                className={
-                  "ml-2 font-medium " +
-                  (stepForColor != null
-                    ? pnlTone(stepForColor, { realized: stepRealized })
-                    : "text-zinc-800 dark:text-zinc-100")
-                }
-              >
-                {headline}
-              </span>
+              {adjustmentParts ? (
+                <AdjustmentHeadlineParts parts={adjustmentParts} />
+              ) : (
+                <span
+                  className={
+                    "ml-2 font-medium " +
+                    (stepForColor != null
+                      ? pnlTone(stepForColor, { realized: stepRealized })
+                      : "text-zinc-800 dark:text-zinc-100")
+                  }
+                >
+                  {headline}
+                </span>
+              )}
             </div>
             <div className="flex flex-wrap items-baseline gap-3">
               {"stepNet" in node ? (
                 <span className={pnlTone(node.stepNet, { realized: stepRealized })}>
-                  <span className="mr-1 text-[10px] uppercase tracking-wide text-zinc-400">Step</span>
+                  <span className="mr-1 text-[10px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Step</span>
                   {usd(node.stepNet, masked)}
                 </span>
               ) : null}
               <span className={"font-semibold " + pnlTone(node.cumulativeNet, { realized: cumRealized })}>
-                <span className="mr-1 text-[10px] font-normal uppercase tracking-wide text-zinc-400">Cum</span>
+                <span className="mr-1 text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Cum</span>
                 {usd(node.cumulativeNet, masked)}
               </span>
             </div>
@@ -260,6 +310,7 @@ function TreeNodeView({
             <AdjustmentFillLines
               closeMembers={node.closeMembers}
               openMembers={node.openMembers}
+              priorMembers={node.priorMembers}
               stepNet={node.stepNet}
               realizedOnClose={node.realizedOnClose}
               masked={masked}
@@ -272,7 +323,7 @@ function TreeNodeView({
             </ul>
           ) : null}
           {node.kind === "current" ? (
-            <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+            <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
               Live structure at the tip of this book. Mark-to-market is on the snapshot legs above.
               {formatCurrentDteLabel(node.symbols) ? ` · ${formatCurrentDteLabel(node.symbols)}` : ""}
             </p>
@@ -312,7 +363,7 @@ export function SituationLifecycle({
   const netRealized = !situationOpen;
   return (
     <div className="border-t border-zinc-200 px-3 py-3 dark:border-white/25">
-      <div className="mb-3 flex max-w-3xl flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-zinc-600 dark:text-zinc-400">
+      <div className="mb-3 flex max-w-3xl flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-zinc-600 dark:text-zinc-300">
         <span>
           Trade tree · {clumped.length} fill{clumped.length === 1 ? "" : "s"}
           {row.members.length !== clumped.length
@@ -326,7 +377,7 @@ export function SituationLifecycle({
         </span>
       </div>
       {tree.length === 0 ? (
-        <p className="text-xs text-zinc-500">No fills linked on this situation yet.</p>
+        <p className="text-xs text-zinc-600 dark:text-zinc-300">No fills linked on this situation yet.</p>
       ) : (
         <ol className="max-w-3xl space-y-0">
           {tree.map((node, idx) => (

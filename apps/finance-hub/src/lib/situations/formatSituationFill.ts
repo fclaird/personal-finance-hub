@@ -187,22 +187,140 @@ function representativeDte(members: SituationMemberView[]): number | null {
   return null;
 }
 
+/** Serializable highlight token for adjustment headlines (tests + React renderer). */
+export type AdjustmentHighlightPart =
+  | { kind: "text"; text: string }
+  | { kind: "token"; text: string; changed: boolean };
+
+type WingToken = {
+  text: string;
+  right: "C" | "P" | null;
+  strike: number | null;
+  changed: boolean;
+};
+
+/**
+ * Build structured before→after headline parts with changed wings/DTE marked.
+ * Match close→open by option right (P↔P, C↔C). Same strike+right = unchanged;
+ * different strike = highlight both; unmatched = highlight.
+ * When fromDte === toDte, omit from→to (single plain DTE, not highlighted).
+ */
+export function buildAdjustmentHighlightParts(
+  closeMembers: SituationMemberView[],
+  openMembers: SituationMemberView[],
+): AdjustmentHighlightPart[] {
+  const closes = closeMembers.map(resolveFill);
+  const opens = openMembers.map(resolveFill);
+  const und = closes[0]?.underlying ?? opens[0]?.underlying ?? "—";
+
+  const closeTokens: WingToken[] = closes.map((f) => ({
+    text: formatStrikeRight(f.strike, f.right),
+    right: f.right,
+    strike: f.strike,
+    changed: false,
+  }));
+  const openTokens: WingToken[] = opens.map((f) => ({
+    text: formatStrikeRight(f.strike, f.right),
+    right: f.right,
+    strike: f.strike,
+    changed: false,
+  }));
+
+  const openMatched = new Array(openTokens.length).fill(false);
+  for (const ct of closeTokens) {
+    let matchIdx = -1;
+    if (ct.right != null) {
+      for (let j = 0; j < openTokens.length; j++) {
+        if (openMatched[j]) continue;
+        if (openTokens[j]!.right === ct.right) {
+          matchIdx = j;
+          break;
+        }
+      }
+    }
+    if (matchIdx < 0) {
+      ct.changed = true;
+      continue;
+    }
+    openMatched[matchIdx] = true;
+    const ot = openTokens[matchIdx]!;
+    const sameStrike =
+      ct.strike != null && ot.strike != null && ct.strike === ot.strike;
+    if (!sameStrike) {
+      ct.changed = true;
+      ot.changed = true;
+    }
+  }
+  for (let j = 0; j < openTokens.length; j++) {
+    if (!openMatched[j]) openTokens[j]!.changed = true;
+  }
+
+  const parts: AdjustmentHighlightPart[] = [];
+  const pushText = (t: string) => {
+    if (!t) return;
+    parts.push({ kind: "text", text: t });
+  };
+  const pushToken = (t: WingToken) => {
+    parts.push({ kind: "token", text: t.text, changed: t.changed });
+  };
+  const pushJoined = (tokens: WingToken[]) => {
+    tokens.forEach((t, i) => {
+      if (i > 0) pushText("/");
+      pushToken(t);
+    });
+  };
+
+  if (closeTokens.length && openTokens.length) {
+    pushText(und + " adjust ");
+    pushJoined(closeTokens);
+    pushText(" → ");
+    pushJoined(openTokens);
+  } else if (closeTokens.length) {
+    pushText(und + " close ");
+    pushJoined(closeTokens);
+  } else {
+    pushText(und + " open ");
+    pushJoined(openTokens);
+  }
+
+  const fromDte = representativeDte(closeMembers);
+  const toDte = representativeDte(openMembers);
+  const whenSrc = [...closeMembers, ...openMembers][0];
+  const datePart = whenSrc
+    ? formatTradeDateShort(whenSrc.tradeDate, whenSrc.tradeTime)
+    : null;
+
+  if (fromDte != null && toDte != null && fromDte !== toDte) {
+    pushText(" · ");
+    parts.push({ kind: "token", text: Math.round(fromDte) + " DTE", changed: true });
+    pushText(" → ");
+    parts.push({ kind: "token", text: Math.round(toDte) + " DTE", changed: true });
+  } else if (toDte != null) {
+    pushText(" · " + formatDte(toDte));
+  } else if (fromDte != null) {
+    pushText(" · " + formatDte(fromDte));
+  }
+
+  if (datePart) {
+    pushText(" · " + datePart);
+  }
+
+  return parts;
+}
+
 /** Combined adjustment: close → open with DTE from→to (primary) + trade date (secondary). */
 export function formatAdjustmentSummary(
   closeMembers: SituationMemberView[],
   openMembers: SituationMemberView[],
 ): { label: string; net: number | null; when: string; dteLabel: string | null } {
-  const closes = closeMembers.map(resolveFill);
-  const opens = openMembers.map(resolveFill);
-  const und = closes[0]?.underlying ?? opens[0]?.underlying ?? "—";
-  const closeBits = closes.map((f) => formatStrikeRight(f.strike, f.right)).join("/");
-  const openBits = opens.map((f) => formatStrikeRight(f.strike, f.right)).join("/");
+  const parts = buildAdjustmentHighlightParts(closeMembers, openMembers);
+  const label = parts.map((p) => p.text).join("");
 
   const fromDte = representativeDte(closeMembers);
   const toDte = representativeDte(openMembers);
   let dteLabel: string | null = null;
   if (fromDte != null && toDte != null && fromDte !== toDte) {
-    dteLabel = `${Math.round(fromDte)} DTE → ${Math.round(toDte)} DTE`;
+    dteLabel = Math.round(fromDte) + " DTE → " + Math.round(toDte) + " DTE";
   } else if (toDte != null) {
     dteLabel = formatDte(toDte);
   } else if (fromDte != null) {
@@ -219,20 +337,13 @@ export function formatAdjustmentSummary(
   }
   if (saw && net != null) net = Math.round(net * 100) / 100;
 
-  const core =
-    closeBits && openBits
-      ? `${und} adjust ${closeBits} → ${openBits}`
-      : closeBits
-        ? `${und} close ${closeBits}`
-        : `${und} open ${openBits}`;
   const whenSrc = [...closeMembers, ...openMembers][0];
   const datePart = whenSrc
     ? formatTradeDateShort(whenSrc.tradeDate, whenSrc.tradeTime)
     : null;
   const timing =
-    dteLabel && datePart ? `${dteLabel} · ${datePart}` : dteLabel ?? datePart;
+    dteLabel && datePart ? dteLabel + " · " + datePart : dteLabel ?? datePart;
 
-  const label = timing ? `${core} · ${timing}` : core;
   return { label, net: saw ? net : null, when: timing ?? "—", dteLabel };
 }
 
