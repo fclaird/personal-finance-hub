@@ -4,7 +4,17 @@ export type SituationMemberView = {
   transactionId: string;
   role: SituationMemberRole;
   tradeDate: string;
+  /** ISO timestamp from Schwab when available (e.g. 2026-09-04T18:21:28+0000). */
+  tradeTime: string | null;
   symbol: string | null;
+  underlying: string | null;
+  expiration: string | null;
+  right: "C" | "P" | null;
+  strike: number | null;
+  /** Fill price per share. */
+  price: number | null;
+  quantity: number | null;
+  positionEffect: string | null;
   netAmount: number | null;
   instruction: string | null;
   description: string | null;

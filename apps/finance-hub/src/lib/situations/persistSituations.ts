@@ -22,7 +22,15 @@ export type SituationListRow = {
     transactionId: string;
     role: SituationMemberRole;
     tradeDate: string;
+    tradeTime: string | null;
     symbol: string | null;
+    underlying: string | null;
+    expiration: string | null;
+    right: "C" | "P" | null;
+    strike: number | null;
+    price: number | null;
+    quantity: number | null;
+    positionEffect: string | null;
     netAmount: number | null;
     instruction: string | null;
     description: string | null;
@@ -152,7 +160,15 @@ export function listSituations(db: Database.Database): SituationListRow[] {
         m.transaction_id AS transactionId,
         m.role AS role,
         b.trade_date AS tradeDate,
+        json_extract(b.raw_json, '$.time') AS tradeTime,
         b.symbol AS symbol,
+        b.underlying_symbol AS underlying,
+        COALESCE(b.option_expiration, json_extract(b.raw_json, '$.transferItems[0].instrument.expirationDate')) AS expiration,
+        b.option_right AS right,
+        b.option_strike AS strike,
+        b.price AS price,
+        b.quantity AS quantity,
+        b.position_effect AS positionEffect,
         b.net_amount AS netAmount,
         b.instruction AS instruction,
         b.description AS description
@@ -166,7 +182,15 @@ export function listSituations(db: Database.Database): SituationListRow[] {
     transactionId: string;
     role: SituationMemberRole;
     tradeDate: string;
+    tradeTime: string | null;
     symbol: string | null;
+    underlying: string | null;
+    expiration: string | null;
+    right: string | null;
+    strike: number | null;
+    price: number | null;
+    quantity: number | null;
+    positionEffect: string | null;
     netAmount: number | null;
     instruction: string | null;
     description: string | null;
@@ -175,11 +199,21 @@ export function listSituations(db: Database.Database): SituationListRow[] {
   const bySit = new Map<string, SituationListRow["members"]>();
   for (const m of members) {
     const list = bySit.get(m.situationId) ?? [];
+    const rightRaw = (m.right ?? "").toString().toUpperCase();
+    const right = rightRaw.startsWith("C") ? "C" as const : rightRaw.startsWith("P") ? "P" as const : null;
     list.push({
       transactionId: m.transactionId,
       role: m.role,
       tradeDate: m.tradeDate,
+      tradeTime: typeof m.tradeTime === "string" ? m.tradeTime : null,
       symbol: m.symbol,
+      underlying: m.underlying,
+      expiration: typeof m.expiration === "string" ? m.expiration.slice(0, 10) : null,
+      right,
+      strike: m.strike,
+      price: m.price,
+      quantity: m.quantity,
+      positionEffect: m.positionEffect,
       netAmount: m.netAmount,
       instruction: m.instruction,
       description: m.description,
