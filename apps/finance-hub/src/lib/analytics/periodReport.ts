@@ -396,7 +396,8 @@ export async function computePeriodReport(options: {
       : ledgerComplete
         ? { jointBrokerage: 0, retirement: 0, total: 0 }
         : { jointBrokerage: null, retirement: null, total: null };
-  const includeTradeDetails = window.period === "daily" || window.period === "weekly";
+  const includeTradeDetails =
+    window.period === "daily" || window.period === "weekly" || window.period === "monthly";
 
   const footnotes: string[] = [];
   if (window.period !== "daily") {
