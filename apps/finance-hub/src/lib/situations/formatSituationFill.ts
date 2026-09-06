@@ -1,5 +1,7 @@
-import { parseOptionFromSchwabSymbol } from "@/lib/strategy/optionParse";
+import { nyCalendarIso } from "@/lib/analytics/allocationNyDate";
+import { parseOptionFromSchwabSymbol, optionDte } from "@/lib/strategy/optionParse";
 import type { SituationMemberView } from "@/lib/situations/apiTypes";
+import { parseTradeTimeMs } from "@/lib/situations/fillDelta";
 
 export type ResolvedFill = {
   underlying: string;
@@ -13,7 +15,27 @@ export type ResolvedFill = {
   netAmount: number | null;
   positionEffect: string | null;
   action: "opened" | "closed" | "adjusted";
+  deltaAtFill: number | null;
+  dteAtFill: number | null;
 };
+
+/** Calendar trade date in America/New_York when we have a timestamp; else tradeDate. */
+export function tradeCalendarDate(tradeDate: string, tradeTime: string | null): string {
+  const ms = parseTradeTimeMs(tradeTime, tradeDate);
+  if (ms != null) return nyCalendarIso(new Date(ms));
+  return tradeDate.slice(0, 10);
+}
+
+export function dteAtTrade(tradeDate: string, tradeTime: string | null, expiration: string | null): number | null {
+  if (!expiration) return null;
+  return optionDte(tradeCalendarDate(tradeDate, tradeTime), expiration.slice(0, 10));
+}
+
+/** Live DTE from today (NY calendar) to an option expiration. */
+export function liveDte(expiration: string | null, now: Date = new Date()): number | null {
+  if (!expiration) return null;
+  return optionDte(nyCalendarIso(now), expiration.slice(0, 10));
+}
 
 export function resolveFill(m: SituationMemberView): ResolvedFill {
   const parsed = parseOptionFromSchwabSymbol(m.symbol);
@@ -31,6 +53,7 @@ export function resolveFill(m: SituationMemberView): ResolvedFill {
       : m.role === "roll_open" || m.role === "open" || effect === "OPENING"
         ? "opened"
         : "adjusted";
+  const dte = dteAtTrade(m.tradeDate, m.tradeTime, expiration);
   return {
     underlying,
     right,
@@ -43,14 +66,16 @@ export function resolveFill(m: SituationMemberView): ResolvedFill {
     netAmount: m.netAmount,
     positionEffect: m.positionEffect,
     action,
+    deltaAtFill: m.deltaAtFill ?? null,
+    dteAtFill: dte,
   };
 }
 
-/** Format a wall-clock fill time in America/New_York when we have an ISO timestamp. */
+/** @deprecated Wall-clock fill time — prefer DTE in fill lines. Kept for tests/legacy. */
 export function formatFillWhen(tradeDate: string, tradeTime: string | null): string {
   if (tradeTime) {
-    const ms = Date.parse(tradeTime);
-    if (Number.isFinite(ms)) {
+    const ms = parseTradeTimeMs(tradeTime, tradeDate);
+    if (ms != null) {
       return new Intl.DateTimeFormat("en-US", {
         timeZone: "America/New_York",
         month: "short",
@@ -62,7 +87,6 @@ export function formatFillWhen(tradeDate: string, tradeTime: string | null): str
       }).format(new Date(ms));
     }
   }
-  // Date-only fallback
   const d = Date.parse(`${tradeDate}T12:00:00Z`);
   if (!Number.isFinite(d)) return tradeDate;
   return new Intl.DateTimeFormat("en-US", {
@@ -93,35 +117,67 @@ export function formatStrikeRight(strike: number | null, right: "C" | "P" | null
   return s;
 }
 
-/** One human line for a single fill. */
+export function formatDte(dte: number | null): string | null {
+  if (dte == null || !Number.isFinite(dte)) return null;
+  return `${Math.round(dte)} DTE`;
+}
+
+export function formatDelta(delta: number | null | undefined): string | null {
+  if (delta == null || !Number.isFinite(delta)) return null;
+  const rounded = Math.round(delta * 100) / 100;
+  const abs = Math.abs(rounded).toFixed(2);
+  const sign = rounded < 0 ? "−" : rounded > 0 ? "" : "";
+  return `Δ ${sign}${abs}`;
+}
+
+/** One human line for a single fill — identity + DTE + Δ + price (no calendar noise). */
 export function formatFillLine(m: SituationMemberView): string {
   const f = resolveFill(m);
   const qty = f.quantity != null ? `${Math.abs(f.quantity)}× ` : "";
-  const px = f.price != null && Number.isFinite(f.price) ? ` @ $${f.price.toFixed(2)}` : "";
-  return `${f.underlying} ${qty}${formatStrikeRight(f.strike, f.right)} · exp ${formatExpiry(f.expiration)} · ${f.action} ${formatFillWhen(f.tradeDate, f.tradeTime)}${px}`;
+  const parts = [
+    `${f.underlying} ${qty}${formatStrikeRight(f.strike, f.right)}`,
+    f.action,
+  ];
+  const dte = formatDte(f.dteAtFill);
+  if (dte) parts.push(dte);
+  const delta = formatDelta(f.deltaAtFill);
+  const px = f.price != null && Number.isFinite(f.price) ? `@ $${f.price.toFixed(2)}` : null;
+  if (delta && px) parts.push(`${delta} ${px}`);
+  else if (delta) parts.push(delta);
+  else if (px) parts.push(px);
+  return parts.join(" · ");
 }
 
-/** Combined adjustment: close legs → open legs with a single net. */
+function representativeDte(members: SituationMemberView[]): number | null {
+  for (const m of members) {
+    const d = dteAtTrade(m.tradeDate, m.tradeTime, resolveFill(m).expiration);
+    if (d != null) return d;
+  }
+  return null;
+}
+
+/** Combined adjustment: close legs → open legs with DTE from→to (not calendar when). */
 export function formatAdjustmentSummary(
   closeMembers: SituationMemberView[],
   openMembers: SituationMemberView[],
-): { label: string; net: number | null; when: string } {
+): { label: string; net: number | null; when: string; dteLabel: string | null } {
   const closes = closeMembers.map(resolveFill);
   const opens = openMembers.map(resolveFill);
-  const und =
-    closes[0]?.underlying ??
-    opens[0]?.underlying ??
-    "—";
-  const closeBits = closes
-    .map((f) => formatStrikeRight(f.strike, f.right))
-    .join("/");
-  const openBits = opens
-    .map((f) => formatStrikeRight(f.strike, f.right))
-    .join("/");
-  const whenSrc = [...closeMembers, ...openMembers][0];
-  const when = whenSrc
-    ? formatFillWhen(whenSrc.tradeDate, whenSrc.tradeTime)
-    : "—";
+  const und = closes[0]?.underlying ?? opens[0]?.underlying ?? "—";
+  const closeBits = closes.map((f) => formatStrikeRight(f.strike, f.right)).join("/");
+  const openBits = opens.map((f) => formatStrikeRight(f.strike, f.right)).join("/");
+
+  const fromDte = representativeDte(closeMembers);
+  const toDte = representativeDte(openMembers);
+  let dteLabel: string | null = null;
+  if (fromDte != null && toDte != null && fromDte !== toDte) {
+    dteLabel = `${Math.round(fromDte)} DTE → ${Math.round(toDte)} DTE`;
+  } else if (toDte != null) {
+    dteLabel = formatDte(toDte);
+  } else if (fromDte != null) {
+    dteLabel = formatDte(fromDte);
+  }
+
   let net: number | null = null;
   let saw = false;
   for (const m of [...closeMembers, ...openMembers]) {
@@ -131,13 +187,31 @@ export function formatAdjustmentSummary(
     }
   }
   if (saw && net != null) net = Math.round(net * 100) / 100;
-  const label =
+
+  const core =
     closeBits && openBits
-      ? `${und} adjust ${closeBits} → ${openBits} · ${when}`
+      ? `${und} adjust ${closeBits} → ${openBits}`
       : closeBits
-        ? `${und} close ${closeBits} · ${when}`
-        : `${und} open ${openBits} · ${when}`;
-  return { label, net: saw ? net : null, when };
+        ? `${und} close ${closeBits}`
+        : `${und} open ${openBits}`;
+  const label = dteLabel ? `${core} · ${dteLabel}` : core;
+  return { label, net: saw ? net : null, when: dteLabel ?? "—", dteLabel };
+}
+
+/** Live tip label: DTE to current structure expiration(s). */
+export function formatCurrentDteLabel(symbols: string[], now: Date = new Date()): string | null {
+  const dtes: number[] = [];
+  const seen = new Set<string>();
+  for (const sym of symbols) {
+    const parsed = parseOptionFromSchwabSymbol(sym);
+    if (!parsed?.expiration || seen.has(parsed.expiration)) continue;
+    seen.add(parsed.expiration);
+    const d = liveDte(parsed.expiration, now);
+    if (d != null) dtes.push(d);
+  }
+  if (dtes.length === 0) return null;
+  if (dtes.length === 1) return formatDte(dtes[0]!);
+  return dtes.map((d) => formatDte(d)!).join(" / ");
 }
 
 export function sumMemberNets(members: SituationMemberView[]): number | null {

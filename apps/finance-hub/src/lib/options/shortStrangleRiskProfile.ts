@@ -37,7 +37,7 @@ export type RiskProfileModel = {
   dte: number | null;
 };
 
-function erf(x: number): number {
+export function erf(x: number): number {
   // Abramowitz & Stegun 7.1.26
   const sign = x < 0 ? -1 : 1;
   const ax = Math.abs(x);
@@ -49,7 +49,7 @@ function erf(x: number): number {
   return sign * y;
 }
 
-function normCdf(x: number): number {
+export function normCdf(x: number): number {
   return 0.5 * (1 + erf(x / Math.SQRT2));
 }
 
@@ -76,6 +76,58 @@ export function blackScholesPrice(
     return spot * normCdf(d1) - strike * Math.exp(-rate * years) * normCdf(d2);
   }
   return strike * Math.exp(-rate * years) * normCdf(-d2) - spot * normCdf(-d1);
+}
+
+/** Contract delta (call +ve, put -ve) — underwriting delta, not position delta. */
+export function blackScholesDelta(
+  right: "C" | "P",
+  spot: number,
+  strike: number,
+  years: number,
+  rate: number,
+  iv: number,
+): number | null {
+  if (!(spot > 0) || !(strike > 0) || !(iv > 0) || !(years > 1e-8)) return null;
+  const sqrtT = Math.sqrt(years);
+  const d1 = (Math.log(spot / strike) + (rate + 0.5 * iv * iv) * years) / (iv * sqrtT);
+  if (right === "C") return normCdf(d1);
+  return normCdf(d1) - 1;
+}
+
+/**
+ * Solve implied vol from a fill premium via bisection on Black-Scholes.
+ * Returns null when the premium is unattainable / inputs are invalid.
+ */
+export function impliedVolFromPrice(
+  right: "C" | "P",
+  spot: number,
+  strike: number,
+  years: number,
+  rate: number,
+  price: number,
+): number | null {
+  if (!(spot > 0) || !(strike > 0) || !(years > 1e-8) || !(price >= 0) || !Number.isFinite(price)) {
+    return null;
+  }
+  const intrinsic = right === "C" ? Math.max(spot - strike, 0) : Math.max(strike - spot, 0);
+  // Allow tiny below-intrinsic noise from fees/marks
+  if (price < intrinsic - 0.02) return null;
+
+  let lo = 1e-4;
+  let hi = 5;
+  const pLo = blackScholesPrice(right, spot, strike, years, rate, lo);
+  const pHi = blackScholesPrice(right, spot, strike, years, rate, hi);
+  if (price <= pLo) return lo;
+  if (price >= pHi) return hi;
+
+  for (let i = 0; i < 60; i++) {
+    const mid = 0.5 * (lo + hi);
+    const p = blackScholesPrice(right, spot, strike, years, rate, mid);
+    if (Math.abs(p - price) < 1e-6) return mid;
+    if (p > price) hi = mid;
+    else lo = mid;
+  }
+  return 0.5 * (lo + hi);
 }
 
 function legExpirationValue(right: "C" | "P", strike: number, spot: number): number {

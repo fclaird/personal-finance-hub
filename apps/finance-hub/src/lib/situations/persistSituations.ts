@@ -5,6 +5,7 @@ import { loadLinkableBrokerTransactions } from "@/lib/situations/fromBrokerTx";
 import { proposeSituations } from "@/lib/situations/linkSituations";
 import type { ProposedSituation, SituationLinkStatus, SituationMemberRole } from "@/lib/situations/types";
 import { hasCoveringShares } from "@/lib/strategy/equityCoverage";
+import { deltaAtFillFromDb } from "@/lib/situations/fillDelta";
 
 export type SituationListRow = {
   id: string;
@@ -34,6 +35,8 @@ export type SituationListRow = {
     netAmount: number | null;
     instruction: string | null;
     description: string | null;
+    orderId: string | null;
+    deltaAtFill: number | null;
   }>;
 };
 
@@ -171,7 +174,8 @@ export function listSituations(db: Database.Database): SituationListRow[] {
         b.position_effect AS positionEffect,
         b.net_amount AS netAmount,
         b.instruction AS instruction,
-        b.description AS description
+        b.description AS description,
+        CAST(json_extract(b.raw_json, '$.orderId') AS TEXT) AS orderId
       FROM option_situation_members m
       JOIN broker_transactions b ON b.id = m.transaction_id
       ORDER BY b.trade_date ASC, b.id ASC
@@ -194,6 +198,7 @@ export function listSituations(db: Database.Database): SituationListRow[] {
     netAmount: number | null;
     instruction: string | null;
     description: string | null;
+    orderId: string | number | null;
   }>;
 
   const bySit = new Map<string, SituationListRow["members"]>();
@@ -201,14 +206,29 @@ export function listSituations(db: Database.Database): SituationListRow[] {
     const list = bySit.get(m.situationId) ?? [];
     const rightRaw = (m.right ?? "").toString().toUpperCase();
     const right = rightRaw.startsWith("C") ? "C" as const : rightRaw.startsWith("P") ? "P" as const : null;
+    const orderId =
+      m.orderId == null || m.orderId === ""
+        ? null
+        : String(m.orderId);
+    const expiration = typeof m.expiration === "string" ? m.expiration.slice(0, 10) : null;
+    const tradeTime = typeof m.tradeTime === "string" ? m.tradeTime : null;
+    const deltaAtFill = deltaAtFillFromDb(db, {
+      underlying: m.underlying,
+      right,
+      strike: m.strike,
+      expiration,
+      price: m.price,
+      tradeDate: m.tradeDate,
+      tradeTime,
+    });
     list.push({
       transactionId: m.transactionId,
       role: m.role,
       tradeDate: m.tradeDate,
-      tradeTime: typeof m.tradeTime === "string" ? m.tradeTime : null,
+      tradeTime,
       symbol: m.symbol,
       underlying: m.underlying,
-      expiration: typeof m.expiration === "string" ? m.expiration.slice(0, 10) : null,
+      expiration,
       right,
       strike: m.strike,
       price: m.price,
@@ -217,6 +237,8 @@ export function listSituations(db: Database.Database): SituationListRow[] {
       netAmount: m.netAmount,
       instruction: m.instruction,
       description: m.description,
+      orderId,
+      deltaAtFill,
     });
     bySit.set(m.situationId, list);
   }

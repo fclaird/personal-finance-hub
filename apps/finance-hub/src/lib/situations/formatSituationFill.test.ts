@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import type { SituationMemberView } from "@/lib/situations/apiTypes";
 import {
   formatAdjustmentSummary,
+  formatCurrentDteLabel,
   formatFillLine,
   formatFillWhen,
 } from "@/lib/situations/formatSituationFill";
@@ -22,12 +23,14 @@ function m(partial: Partial<SituationMemberView> & Pick<SituationMemberView, "tr
     netAmount: null,
     instruction: null,
     description: null,
+    orderId: null,
+    deltaAtFill: null,
     ...partial,
   };
 }
 
 describe("formatSituationFill", () => {
-  it("translates OCC gobble into underlying / strike / expiry / action / price", () => {
+  it("shows DTE + delta without calendar fill/exp dates", () => {
     const line = formatFillLine(
       m({
         transactionId: "1",
@@ -39,23 +42,30 @@ describe("formatSituationFill", () => {
         quantity: -10,
         positionEffect: "OPENING",
         netAmount: 7770,
+        deltaAtFill: -0.14,
       }),
     );
     assert.match(line, /AVGO/);
     assert.match(line, /350P/);
-    assert.match(line, /Sep 11, 2026/);
     assert.match(line, /opened/);
+    assert.match(line, /9 DTE/);
+    assert.match(line, /Δ −0\.14|Δ -0\.14/);
     assert.match(line, /\$7\.78/);
+    assert.doesNotMatch(line, /Sep 11, 2026/);
+    assert.doesNotMatch(line, /Sep 2, 2026/);
+    assert.doesNotMatch(line, /\bexp\b/i);
   });
 
-  it("combines roll close+open into one net adjustment line", () => {
+  it("adjustment headline uses DTE from→to when expiry changes", () => {
     const summary = formatAdjustmentSummary(
       [
         m({
           transactionId: "c",
           role: "roll_close",
           tradeDate: "2026-09-03",
-          symbol: "AVGO  260911C00400000",
+          tradeTime: "2026-09-03T14:00:00+0000",
+          symbol: "BE    260904P00210000",
+          expiration: "2026-09-04",
           netAmount: -500,
           positionEffect: "CLOSING",
         }),
@@ -65,20 +75,30 @@ describe("formatSituationFill", () => {
           transactionId: "o",
           role: "roll_open",
           tradeDate: "2026-09-03",
-          symbol: "AVGO  260911C00380000",
+          tradeTime: "2026-09-03T14:00:00+0000",
+          symbol: "BE    260918P00230000",
+          expiration: "2026-09-18",
           netAmount: 800,
           positionEffect: "OPENING",
         }),
       ],
     );
-    assert.match(summary.label, /AVGO/);
-    assert.match(summary.label, /400C/);
-    assert.match(summary.label, /380C/);
-    assert.match(summary.label, /→/);
+    assert.match(summary.label, /BE/);
+    assert.match(summary.label, /210P/);
+    assert.match(summary.label, /230P/);
+    assert.match(summary.label, /1 DTE → 15 DTE/);
+    assert.doesNotMatch(summary.label, /Sep /);
     assert.equal(summary.net, 300);
   });
 
-  it("formats ET wall time from Schwab ISO", () => {
+  it("current tip live DTE from OCC symbols", () => {
+    // Freeze "today" as 2026-09-06 ET by constructing a UTC noon that maps to Sep 6 NY
+    const now = new Date("2026-09-06T16:00:00Z");
+    const label = formatCurrentDteLabel(["AVGO  260911P00350000", "AVGO  260911C00400000"], now);
+    assert.equal(label, "5 DTE");
+  });
+
+  it("formats ET wall time from Schwab ISO (legacy helper)", () => {
     const s = formatFillWhen("2026-09-04", "2026-09-04T18:21:28+0000");
     assert.match(s, /Sep 4, 2026/);
     assert.match(s, /PM|AM/);

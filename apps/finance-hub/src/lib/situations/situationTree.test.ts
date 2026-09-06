@@ -8,10 +8,20 @@ function m(
   partial: Partial<SituationMemberView> & Pick<SituationMemberView, "transactionId" | "role" | "tradeDate">,
 ): SituationMemberView {
   return {
+    tradeTime: null,
     symbol: partial.symbol ?? partial.transactionId,
+    underlying: null,
+    expiration: null,
+    right: null,
+    strike: null,
+    price: null,
+    quantity: null,
+    positionEffect: null,
     netAmount: partial.netAmount ?? null,
     instruction: partial.instruction ?? null,
     description: partial.description ?? null,
+    orderId: null,
+    deltaAtFill: null,
     ...partial,
   };
 }

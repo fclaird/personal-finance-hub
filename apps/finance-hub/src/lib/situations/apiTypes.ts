@@ -18,6 +18,10 @@ export type SituationMemberView = {
   netAmount: number | null;
   instruction: string | null;
   description: string | null;
+  /** Schwab order id when present (used to clump partial fills). */
+  orderId: string | null;
+  /** Contract delta at fill (call +ve, put −ve); null when spot/IV unavailable. */
+  deltaAtFill: number | null;
 };
 
 export type SituationView = {
