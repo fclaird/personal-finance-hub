@@ -1,4 +1,6 @@
 import type { SituationMemberView } from "@/lib/situations/apiTypes";
+import { realizedOnClosedLegs } from "@/lib/situations/adjustmentEconomics";
+import { parseOptionFromSchwabSymbol } from "@/lib/strategy/optionParse";
 
 export type SituationTreeNode =
   | {
@@ -17,6 +19,8 @@ export type SituationTreeNode =
       closeMembers: SituationMemberView[];
       openMembers: SituationMemberView[];
       stepNet: number | null;
+      /** Realized G/L on closed legs vs original open credits. */
+      realizedOnClose: number | null;
       cumulativeNet: number | null;
       children: SituationTreeNode[];
     }
@@ -126,6 +130,7 @@ export function buildSituationTree(
 
   const openStep = sumNets(opens);
   let running = openStep;
+  const priorForRealize: SituationMemberView[] = [...opens];
 
   const root: SituationTreeNode = {
     id: `open:${opens.map((m) => m.transactionId).join(",") || "none"}`,
@@ -158,6 +163,7 @@ export function buildSituationTree(
         i += 1;
       }
       const step = sumNets([...closeMembers, ...openMembers]);
+      const realized = realizedOnClosedLegs(closeMembers, priorForRealize);
       running = addCumulative(running, step);
       const node: SituationTreeNode = {
         id: `adj:${closeMembers.map((x) => x.transactionId).join(",")}`,
@@ -166,11 +172,13 @@ export function buildSituationTree(
         closeMembers,
         openMembers,
         stepNet: step,
+        realizedOnClose: realized,
         cumulativeNet: running,
         children: [],
       };
       tip.children.push(node);
       tip = node;
+      priorForRealize.push(...closeMembers, ...openMembers);
       continue;
     }
 
@@ -191,11 +199,13 @@ export function buildSituationTree(
         closeMembers: [],
         openMembers,
         stepNet: step,
+        realizedOnClose: null,
         cumulativeNet: running,
         children: [],
       };
       tip.children.push(node);
       tip = node;
+      priorForRealize.push(...openMembers);
       continue;
     }
 
@@ -217,6 +227,7 @@ export function buildSituationTree(
         cumulativeNet: running,
         children: [],
       });
+      priorForRealize.push(...closeMembers);
       sawClose = true;
       continue;
     }
@@ -233,15 +244,39 @@ export function buildSituationTree(
       cumulativeNet: running,
       children: [],
     });
+    priorForRealize.push(m);
     i += 1;
   }
 
   if ((options?.status ?? "open") === "open") {
-    // Current tip: symbols from the latest open/roll_open cluster still in force
+    // Current tip: start from initial opens; each adjustment replaces closed wings only
+    // (put-only roll keeps the call wing, etc.).
     let currentSymbols: string[] = symbolsOf(opens);
     const walk = (n: SituationTreeNode) => {
-      if (n.kind === "adjustment" && n.openMembers.length) {
-        currentSymbols = symbolsOf(n.openMembers);
+      if (n.kind === "adjustment") {
+        const closedSyms = new Set(symbolsOf(n.closeMembers));
+        currentSymbols = currentSymbols.filter((s) => !closedSyms.has(s));
+        for (const c of n.closeMembers) {
+          const parsed = parseOptionFromSchwabSymbol(c.symbol);
+          if (!parsed?.right) continue;
+          currentSymbols = currentSymbols.filter((s) => {
+            const p = parseOptionFromSchwabSymbol(s);
+            return p?.right !== parsed.right;
+          });
+        }
+        for (const s of symbolsOf(n.openMembers)) {
+          if (!currentSymbols.includes(s)) currentSymbols.push(s);
+        }
+      } else if (n.kind === "leg") {
+        const sym = (n.member.symbol ?? "").trim();
+        if (sym) currentSymbols = currentSymbols.filter((s) => s !== sym);
+        const parsed = parseOptionFromSchwabSymbol(n.member.symbol);
+        if (parsed?.right) {
+          currentSymbols = currentSymbols.filter((s) => {
+            const p = parseOptionFromSchwabSymbol(s);
+            return p?.right !== parsed.right;
+          });
+        }
       }
       for (const c of n.children) walk(c);
     };

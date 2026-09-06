@@ -4,6 +4,11 @@ import { formatUsd2 } from "@/lib/format";
 import type { SituationMemberView, SituationView } from "@/lib/situations/apiTypes";
 import { clumpPartialFills } from "@/lib/situations/clumpPartialFills";
 import {
+  cashDirection,
+  formatCashDirectionLabel,
+  lifecycleCash,
+} from "@/lib/situations/adjustmentEconomics";
+import {
   formatAdjustmentSummary,
   formatCurrentDteLabel,
   formatFillLine,
@@ -107,24 +112,33 @@ function OpenFillLines({ members, masked }: { members: SituationMemberView[]; ma
 function AdjustmentFillLines({
   closeMembers,
   openMembers,
+  stepNet,
+  realizedOnClose,
   masked,
 }: {
   closeMembers: SituationMemberView[];
   openMembers: SituationMemberView[];
+  stepNet: number | null;
+  realizedOnClose: number | null;
   masked: boolean;
 }) {
   const summary = formatAdjustmentSummary(closeMembers, openMembers);
   return (
     <ul className="mt-1 space-y-1">
-      <FillRow line={summary.label} net={summary.net} masked={masked} realized />
+      <li className="text-[11px] text-zinc-600 dark:text-zinc-300">{summary.label}</li>
+      <FillRow line="Net roll" net={stepNet ?? summary.net} masked={masked} realized />
+      {realizedOnClose != null ? (
+        <FillRow line="Realized on close" net={realizedOnClose} masked={masked} realized />
+      ) : null}
       {closeMembers.map((m) => (
         <li key={"c:" + m.transactionId} className="pl-3 text-[10px] text-zinc-500 dark:text-zinc-400">
           closed · {formatFillLine(m)}
         </li>
       ))}
       {openMembers.map((m) => (
-        <li key={"o:" + m.transactionId} className="pl-3 text-[10px] text-zinc-500 dark:text-zinc-400">
+        <li key={"o:" + m.transactionId} className="pl-3 text-[10px] text-zinc-400 dark:text-zinc-500">
           opened · {formatFillLine(m)}
+          <span className="ml-2 tabular-nums">{usd(m.netAmount, masked)}</span>
         </li>
       ))}
     </ul>
@@ -248,7 +262,13 @@ function TreeNodeView({
           </div>
           {node.kind === "open" ? <OpenFillLines members={node.members} masked={masked} /> : null}
           {node.kind === "adjustment" ? (
-            <AdjustmentFillLines closeMembers={node.closeMembers} openMembers={node.openMembers} masked={masked} />
+            <AdjustmentFillLines
+              closeMembers={node.closeMembers}
+              openMembers={node.openMembers}
+              stepNet={node.stepNet}
+              realizedOnClose={node.realizedOnClose}
+              masked={masked}
+            />
           ) : null}
           {node.kind === "close" ? <CloseFillLines members={node.members} masked={masked} /> : null}
           {node.kind === "leg" ? (
@@ -282,6 +302,39 @@ function TreeNodeView({
   );
 }
 
+
+function LifecycleCashChip({
+  members,
+  masked,
+}: {
+  members: SituationMemberView[];
+  masked: boolean;
+}) {
+  const cash = lifecycleCash(members);
+  const dir = cashDirection(cash);
+  const label = formatCashDirectionLabel(cash);
+  const tone =
+    dir === "flat"
+      ? "bg-zinc-100 text-zinc-600 dark:bg-white/10 dark:text-zinc-300"
+      : dir === "generating"
+        ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+        : "bg-rose-500/15 text-rose-700 dark:text-rose-300";
+  return (
+    <span
+      className={
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide " +
+        tone
+      }
+      title="Sum of all fill credits and debits on this book so far"
+    >
+      {label}
+      {cash != null ? (
+        <span className="tabular-nums normal-case tracking-normal">{usd(cash, masked)}</span>
+      ) : null}
+    </span>
+  );
+}
+
 export function SituationLifecycle({
   row,
   privacyMasked,
@@ -307,6 +360,7 @@ export function SituationLifecycle({
         <span className={pnlTone(row.netPremium, { realized: netRealized })}>
           Net {row.netPremium == null ? "—" : formatUsd2(row.netPremium, { mask: privacyMasked })}
         </span>
+        <LifecycleCashChip members={clumped} masked={privacyMasked} />
       </div>
       {tree.length === 0 ? (
         <p className="text-xs text-zinc-500">No fills linked on this situation yet.</p>

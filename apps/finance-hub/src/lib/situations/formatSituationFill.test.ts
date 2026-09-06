@@ -30,7 +30,7 @@ function m(partial: Partial<SituationMemberView> & Pick<SituationMemberView, "tr
 }
 
 describe("formatSituationFill", () => {
-  it("shows DTE + delta without calendar fill/exp dates", () => {
+  it("shows DTE primary with secondary trade date + delta", () => {
     const line = formatFillLine(
       m({
         transactionId: "1",
@@ -49,11 +49,12 @@ describe("formatSituationFill", () => {
     assert.match(line, /350P/);
     assert.match(line, /opened/);
     assert.match(line, /9 DTE/);
+    assert.match(line, /Sep 2/); // secondary trade date
     assert.match(line, /Δ −0\.14|Δ -0\.14/);
     assert.match(line, /\$7\.78/);
-    assert.doesNotMatch(line, /Sep 11, 2026/);
-    assert.doesNotMatch(line, /Sep 2, 2026/);
+    assert.doesNotMatch(line, /Sep 11/); // no expiry calendar
     assert.doesNotMatch(line, /\bexp\b/i);
+    assert.doesNotMatch(line, /3:26|PM|AM/); // no wall-clock time
   });
 
   it("adjustment headline uses DTE from→to when expiry changes", () => {
@@ -87,7 +88,7 @@ describe("formatSituationFill", () => {
     assert.match(summary.label, /210P/);
     assert.match(summary.label, /230P/);
     assert.match(summary.label, /1 DTE → 15 DTE/);
-    assert.doesNotMatch(summary.label, /Sep /);
+    assert.match(summary.label, /Sep 3/); // secondary trade date
     assert.equal(summary.net, 300);
   });
 

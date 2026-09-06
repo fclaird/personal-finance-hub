@@ -48,4 +48,12 @@ export type LinkableTxn = {
   tradeDate: string;
   netAmount: number | null;
   legs: LinkableLeg[];
+  /** Schwab order id when present — partial fills share one. */
+  orderId?: string | null;
+  /** Broker event time for intra-day ordering of rolls. */
+  tradeTime?: string | null;
+  /** Fill price when known (VWAP input when clumping). */
+  price?: number | null;
+  /** Real broker_transaction ids represented by this (possibly clumped) row. */
+  sourceTransactionIds?: string[];
 };

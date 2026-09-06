@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 
 import { newId } from "@/lib/id";
-import { loadLinkableBrokerTransactions } from "@/lib/situations/fromBrokerTx";
+import { clumpLinkablePartials, loadLinkableBrokerTransactions } from "@/lib/situations/fromBrokerTx";
 import { proposeSituations } from "@/lib/situations/linkSituations";
 import type { ProposedSituation, SituationLinkStatus, SituationMemberRole } from "@/lib/situations/types";
 import { hasCoveringShares } from "@/lib/strategy/equityCoverage";
@@ -87,7 +87,12 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
     WHERE link_status IN ('auto', 'proposed')
   `);
 
-  const allTxns = loadLinkableBrokerTransactions(db).filter((t) => !lockedIds.has(t.id));
+  const rawTxns = loadLinkableBrokerTransactions(db).filter((t) => !lockedIds.has(t.id));
+  const allTxns = clumpLinkablePartials(rawTxns);
+  const sourceIdsByPrimary = new Map<string, string[]>();
+  for (const t of allTxns) {
+    sourceIdsByPrimary.set(t.id, t.sourceTransactionIds?.length ? t.sourceTransactionIds : [t.id]);
+  }
   const proposed = proposeSituations(allTxns, {
     rejectedPairs: loadRejectedPairs(db),
     coveredCallTxnIds: coveredCallTxnIds(db, allTxns),
@@ -129,7 +134,10 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
         now,
       });
       for (const m of s.members) {
-        insertMember.run({ situationId: id, transactionId: m.transactionId, role: m.role });
+        const sources = sourceIdsByPrimary.get(m.transactionId) ?? [m.transactionId];
+        for (const transactionId of sources) {
+          insertMember.run({ situationId: id, transactionId, role: m.role });
+        }
       }
     }
   });

@@ -122,6 +122,37 @@ export function formatDte(dte: number | null): string | null {
   return `${Math.round(dte)} DTE`;
 }
 
+/** Short trade calendar date (secondary to DTE) — month + day, ET when timestamp exists. */
+export function formatTradeDateShort(tradeDate: string, tradeTime: string | null): string | null {
+  const ms = parseTradeTimeMs(tradeTime, tradeDate);
+  if (ms != null) {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      month: "short",
+      day: "numeric",
+    }).format(new Date(ms));
+  }
+  const d = Date.parse(`${tradeDate.slice(0, 10)}T12:00:00Z`);
+  if (!Number.isFinite(d)) return tradeDate.slice(0, 10) || null;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    month: "short",
+    day: "numeric",
+  }).format(new Date(d));
+}
+
+/** Primary DTE with optional secondary trade date, e.g. "9 DTE · Sep 2". */
+export function formatDteWithDate(
+  dte: number | null,
+  tradeDate: string,
+  tradeTime: string | null,
+): string | null {
+  const dtePart = formatDte(dte);
+  const datePart = formatTradeDateShort(tradeDate, tradeTime);
+  if (dtePart && datePart) return `${dtePart} · ${datePart}`;
+  return dtePart ?? datePart;
+}
+
 export function formatDelta(delta: number | null | undefined): string | null {
   if (delta == null || !Number.isFinite(delta)) return null;
   const rounded = Math.round(delta * 100) / 100;
@@ -130,7 +161,7 @@ export function formatDelta(delta: number | null | undefined): string | null {
   return `Δ ${sign}${abs}`;
 }
 
-/** One human line for a single fill — identity + DTE + Δ + price (no calendar noise). */
+/** One human line: identity + action + DTE (primary) + trade date (secondary) + Δ + price. */
 export function formatFillLine(m: SituationMemberView): string {
   const f = resolveFill(m);
   const qty = f.quantity != null ? `${Math.abs(f.quantity)}× ` : "";
@@ -138,8 +169,8 @@ export function formatFillLine(m: SituationMemberView): string {
     `${f.underlying} ${qty}${formatStrikeRight(f.strike, f.right)}`,
     f.action,
   ];
-  const dte = formatDte(f.dteAtFill);
-  if (dte) parts.push(dte);
+  const dteDate = formatDteWithDate(f.dteAtFill, f.tradeDate, f.tradeTime);
+  if (dteDate) parts.push(dteDate);
   const delta = formatDelta(f.deltaAtFill);
   const px = f.price != null && Number.isFinite(f.price) ? `@ $${f.price.toFixed(2)}` : null;
   if (delta && px) parts.push(`${delta} ${px}`);
@@ -156,7 +187,7 @@ function representativeDte(members: SituationMemberView[]): number | null {
   return null;
 }
 
-/** Combined adjustment: close legs → open legs with DTE from→to (not calendar when). */
+/** Combined adjustment: close → open with DTE from→to (primary) + trade date (secondary). */
 export function formatAdjustmentSummary(
   closeMembers: SituationMemberView[],
   openMembers: SituationMemberView[],
@@ -194,8 +225,15 @@ export function formatAdjustmentSummary(
       : closeBits
         ? `${und} close ${closeBits}`
         : `${und} open ${openBits}`;
-  const label = dteLabel ? `${core} · ${dteLabel}` : core;
-  return { label, net: saw ? net : null, when: dteLabel ?? "—", dteLabel };
+  const whenSrc = [...closeMembers, ...openMembers][0];
+  const datePart = whenSrc
+    ? formatTradeDateShort(whenSrc.tradeDate, whenSrc.tradeTime)
+    : null;
+  const timing =
+    dteLabel && datePart ? `${dteLabel} · ${datePart}` : dteLabel ?? datePart;
+
+  const label = timing ? `${core} · ${timing}` : core;
+  return { label, net: saw ? net : null, when: timing ?? "—", dteLabel };
 }
 
 /** Live tip label: DTE to current structure expiration(s). */

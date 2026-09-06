@@ -3,6 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { SituationLifecycle, pnlTone } from "@/app/components/strategy/SituationLifecycle";
+import {
+  cashDirection,
+  formatCashDirectionLabel,
+  lifecycleCash,
+} from "@/lib/situations/adjustmentEconomics";
+import { clumpPartialFills } from "@/lib/situations/clumpPartialFills";
 import type { OptionRiskSummary } from "@/lib/alerts/optionRisk";
 import { formatUsd2 } from "@/lib/format";
 import {
@@ -161,6 +167,22 @@ export function LiveStructureBooks({
                         Net {formatUsd2(situation.netPremium, { mask: privacyMasked })}
                       </span>
                     ) : null}
+                    {situation ? (() => {
+                      const cash = lifecycleCash(clumpPartialFills(situation.members));
+                      const dir = cashDirection(cash);
+                      const tone =
+                        dir === "flat"
+                          ? "text-zinc-500"
+                          : dir === "generating"
+                            ? "text-emerald-700 dark:text-emerald-300"
+                            : "text-rose-700 dark:text-rose-300";
+                      return (
+                        <span className={"text-[10px] font-semibold uppercase tracking-wide tabular-nums " + tone}>
+                          {formatCashDirectionLabel(cash)}
+                          {cash != null ? " · " + formatUsd2(cash, { mask: privacyMasked }) : ""}
+                        </span>
+                      );
+                    })() : null}
                   </div>
                 </button>
 

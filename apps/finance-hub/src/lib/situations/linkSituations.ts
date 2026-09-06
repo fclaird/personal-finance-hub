@@ -104,6 +104,70 @@ function isRejectedPair(rejected: Set<string>, a: string, b: string): boolean {
   return rejected.has(pairKey(a, b));
 }
 
+/** Opens that share an orderId with a close are roll legs — not new strangle seeds. */
+function isSameOrderRollOpen(txn: LinkableTxn, all: LinkableTxn[]): boolean {
+  const oid = (txn.orderId ?? "").trim();
+  if (!oid) return false;
+  const leg = optionLegsOf(txn)[0];
+  if (!leg?.opening || !isShortPremiumInstruction(leg.instruction)) return false;
+  return all.some((other) => {
+    if (other.id === txn.id) return false;
+    if ((other.orderId ?? "").trim() !== oid) return false;
+    const oLeg = optionLegsOf(other)[0];
+    return Boolean(oLeg && isCloseInstruction(oLeg.instruction));
+  });
+}
+
+function txnChrono(a: LinkableTxn, b: LinkableTxn): number {
+  const d = a.tradeDate.localeCompare(b.tradeDate);
+  if (d) return d;
+  const ta = a.tradeTime ? Date.parse(a.tradeTime) : Number.POSITIVE_INFINITY;
+  const tb = b.tradeTime ? Date.parse(b.tradeTime) : Number.POSITIVE_INFINITY;
+  if (ta !== tb) return ta - tb;
+  return a.id.localeCompare(b.id);
+}
+
+/**
+ * Collapse same-day short-strangle books on one underlying into a single coherent book
+ * (e.g. two 10-lot opens that Chris trades as one 20-lot story).
+ */
+function mergeSameDayShortStrangles(out: ProposedSituation[], txns: LinkableTxn[]): void {
+  const groups = new Map<string, number[]>();
+  for (let i = 0; i < out.length; i++) {
+    const s = out[i]!;
+    if (s.kind !== "short-strangle" || s.status !== "open") continue;
+    const key = `${s.accountId}|${s.underlying}|${s.openedOn}`;
+    const arr = groups.get(key) ?? [];
+    arr.push(i);
+    groups.set(key, arr);
+  }
+  const remove = new Set<number>();
+  for (const indices of groups.values()) {
+    if (indices.length < 2) continue;
+    const keep = indices[0]!;
+    const keeper = out[keep]!;
+    for (let k = 1; k < indices.length; k++) {
+      const idx = indices[k]!;
+      const other = out[idx]!;
+      for (const m of other.members) {
+        if (!keeper.members.some((x) => x.transactionId === m.transactionId)) {
+          keeper.members.push(m);
+        }
+      }
+      if (other.linkStatus === "proposed") keeper.linkStatus = "proposed";
+      remove.add(idx);
+    }
+    keeper.netPremium = netOf(
+      txns,
+      keeper.members.map((m) => m.transactionId),
+    );
+  }
+  if (remove.size === 0) return;
+  for (let i = out.length - 1; i >= 0; i--) {
+    if (remove.has(i)) out.splice(i, 1);
+  }
+}
+
 /**
  * N-transaction linker: same-activity multi-leg, near-day short strangles,
  * then attach rolls/closes to the open short-premium book.
@@ -114,7 +178,7 @@ export function proposeSituations(
 ): ProposedSituation[] {
   const rejected = new Set((opts?.rejectedPairs ?? []).map(([a, b]) => pairKey(a, b)));
   const covered = opts?.coveredCallTxnIds ?? new Set<string>();
-  const sorted = [...txns].sort((a, b) => a.tradeDate.localeCompare(b.tradeDate) || a.id.localeCompare(b.id));
+  const sorted = [...txns].sort(txnChrono);
   const used = new Set<string>();
   const out: ProposedSituation[] = [];
 
@@ -155,12 +219,14 @@ export function proposeSituations(
     if (used.has(a.id)) continue;
     const aLeg = optionLegsOf(a)[0];
     if (!aLeg?.opening || !isShortPremiumInstruction(aLeg.instruction) || !aLeg.right) continue;
+    if (isSameOrderRollOpen(a, sorted)) continue;
     for (let j = i + 1; j < remaining.length; j++) {
       const b = remaining[j]!;
       if (used.has(b.id)) continue;
       if (b.accountId !== a.accountId) continue;
       const bLeg = optionLegsOf(b)[0];
       if (!bLeg?.opening || !isShortPremiumInstruction(bLeg.instruction) || !bLeg.right) continue;
+      if (isSameOrderRollOpen(b, sorted)) continue;
       if (primaryUnderlying(a) !== primaryUnderlying(b)) continue;
       if (aLeg.right === bLeg.right) continue;
       if (isRejectedPair(rejected, a.id, b.id)) continue;
@@ -192,6 +258,9 @@ export function proposeSituations(
       break;
     }
   }
+
+  // Same-day multi-order 10+10 (etc.) → one coherent short-strangle book.
+  mergeSameDayShortStrangles(out, sorted);
 
   // Same-day cross-fill butterflies (Schwab often splits 1-2-1 across separate TRADE rows).
   {
@@ -327,25 +396,97 @@ export function proposeSituations(
     return best;
   }
 
+  function findBookForAnyClose(closes: LinkableTxn[]): OpenBook | null {
+    for (const c of closes) {
+      const leg = optionLegsOf(c)[0];
+      const book = findBook(c, leg?.right ?? null, leg?.strike ?? null);
+      if (book) return book;
+    }
+    return null;
+  }
+
+  function attachSameOrderRolls(): void {
+    const stillForOrder = sorted.filter((t) => !used.has(t.id) && optionLegsOf(t).length > 0);
+    const byOrder = new Map<string, LinkableTxn[]>();
+    for (const t of stillForOrder) {
+      const oid = (t.orderId ?? "").trim();
+      if (!oid) continue;
+      const arr = byOrder.get(oid) ?? [];
+      arr.push(t);
+      byOrder.set(oid, arr);
+    }
+    const orderGroups = [...byOrder.entries()].sort((a, b) => {
+      const ta = a[1].slice().sort(txnChrono)[0]!;
+      const tb = b[1].slice().sort(txnChrono)[0]!;
+      return txnChrono(ta, tb);
+    });
+    for (const [, group] of orderGroups) {
+      if (group.some((t) => used.has(t.id))) continue;
+      const closes = group.filter((t) => {
+        const leg = optionLegsOf(t)[0];
+        return Boolean(leg && isCloseInstruction(leg.instruction));
+      });
+      const opens = group.filter((t) => {
+        const leg = optionLegsOf(t)[0];
+        return Boolean(leg?.opening && isShortPremiumInstruction(leg.instruction));
+      });
+      if (!closes.length || !opens.length) continue;
+      if (closes.some((c) => opens.some((o) => isRejectedPair(rejected, c.id, o.id)))) continue;
+
+      const book = findBookForAnyClose(closes);
+      if (!book) continue;
+
+      for (const c of closes) {
+        out[book.index]!.members.push({ transactionId: c.id, role: "roll_close" });
+        used.add(c.id);
+      }
+      for (const o of opens) {
+        out[book.index]!.members.push({ transactionId: o.id, role: "roll_open" });
+        used.add(o.id);
+      }
+      out[book.index]!.netPremium = netOf(
+        sorted,
+        out[book.index]!.members.map((m) => m.transactionId),
+      );
+      book.lastDate = closes.slice().sort(txnChrono)[0]!.tradeDate;
+      for (const o of opens) {
+        const openLeg = optionLegsOf(o)[0];
+        if (openLeg?.right) book.rights.add(openLeg.right);
+      }
+      rebuildBookKeys(book);
+    }
+  }
+
+  // Same-order multi-leg adjustments BEFORE inventing new books from roll opens.
+  attachSameOrderRolls();
+
   const leftover = sorted.filter((t) => !used.has(t.id) && optionLegsOf(t).length > 0);
 
-  // Opens first so later closes/rolls have a book to attach to.
+  // Remaining opens (no same-order close attached above) become new books.
   for (const txn of leftover) {
     if (used.has(txn.id)) continue;
     const leg = optionLegsOf(txn)[0];
     if (!leg) continue;
     if (!(leg.opening && (isShortPremiumInstruction(leg.instruction) || leg.instruction === "buy_open"))) continue;
     if (isShortPremiumInstruction(leg.instruction)) {
-      const sameDayClose = leftover.find((other) => {
+      const sameDayCloses = leftover.filter((other) => {
         if (other.id === txn.id || used.has(other.id)) return false;
         if (other.accountId !== txn.accountId || other.tradeDate !== txn.tradeDate) return false;
         if (primaryUnderlying(other) !== primaryUnderlying(txn)) return false;
         const oLeg = optionLegsOf(other)[0];
         return Boolean(oLeg && isCloseInstruction(oLeg.instruction));
       });
-      const closeLeg = sameDayClose ? optionLegsOf(sameDayClose)[0] : null;
-      if (sameDayClose && closeLeg && findBook(sameDayClose, closeLeg.right, closeLeg.strike)) {
-        continue;
+      if (findBookForAnyClose(sameDayCloses)) continue;
+
+      const oid = (txn.orderId ?? "").trim();
+      if (oid) {
+        const sameOrderCloses = leftover.filter((other) => {
+          if (other.id === txn.id || used.has(other.id)) return false;
+          if ((other.orderId ?? "").trim() !== oid) return false;
+          const oLeg = optionLegsOf(other)[0];
+          return Boolean(oLeg && isCloseInstruction(oLeg.instruction));
+        });
+        if (findBookForAnyClose(sameOrderCloses)) continue;
       }
     }
     const und = primaryUnderlying(txn);
@@ -376,7 +517,10 @@ export function proposeSituations(
     books.push(newBook);
   }
 
-  // Pair same-day close+open as a roll onto an existing book, else attach closes.
+  // Catch same-order rolls that only became attachable after a new book opened (rare).
+  attachSameOrderRolls();
+
+    // Pair same-day close+open as a roll onto an existing book, else attach closes.
   const still = sorted.filter((t) => !used.has(t.id) && optionLegsOf(t).length > 0);
   const rollPaired = new Set<string>();
 
@@ -430,13 +574,29 @@ export function proposeSituations(
     const book = findBook(txn, leg.right, leg.strike);
     if (!book) continue;
     if (isRejectedAgainstBook(rejected, out[book.index]!.members, txn.id)) continue;
-    // Partial wing takeoff on a multi-leg book (e.g. buy back short call, leave short put) = leg out.
+
+    // True leg-out only when a wing is closed with no same-order open replacing structure
+    // and the other wing remains (e.g. AVGO call buyback leaving the put). Same-order
+    // multi-leg rolls are already attached as roll_close/roll_open above.
+    const oid = (txn.orderId ?? "").trim();
+    const hasSameOrderOpenReplacement =
+      Boolean(oid) &&
+      sorted.some((other) => {
+        if (other.id === txn.id || used.has(other.id)) return false;
+        if ((other.orderId ?? "").trim() !== oid) return false;
+        const oLeg = optionLegsOf(other)[0];
+        return Boolean(oLeg?.opening && isShortPremiumInstruction(oLeg.instruction));
+      });
+
     const key = strikeKey(leg.right, leg.strike);
     const otherWingsRemain =
       key != null &&
       [...book.openKeys].some((k) => k !== key) &&
       out[book.index]!.kind === "short-strangle";
-    const role = otherWingsRemain ? "leg" : "close";
+
+    const role: SituationMemberRole =
+      otherWingsRemain && !hasSameOrderOpenReplacement ? "leg" : "close";
+
     out[book.index]!.members.push({ transactionId: txn.id, role });
     out[book.index]!.netPremium = netOf(
       sorted,
