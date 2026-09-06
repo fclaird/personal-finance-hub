@@ -43,6 +43,24 @@ function nyWeekStartYmd(now: Date): string {
   return nyYmd(subtractNyCalendarDays(now, daysFromMonday));
 }
 
+/** Monday (NY week start) that contains the calendar day `ymd` (YYYY-MM-DD). */
+export function mondayWeekStartYmd(ymd: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd;
+  const [y, m, d] = ymd.split("-").map(Number);
+  const asDate = new Date(Date.UTC(y!, m! - 1, d!, 17, 0, 0));
+  const wd = nyWeekdayIso(asDate);
+  const daysFromMonday = wd >= 1 ? wd - 1 : 0;
+  return nyYmd(subtractNyCalendarDays(asDate, daysFromMonday));
+}
+
+/** Sunday of the NY week that starts on `mondayYmd`. */
+export function sundayOfWeekYmd(mondayYmd: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(mondayYmd)) return mondayYmd;
+  const [y, m, d] = mondayYmd.split("-").map(Number);
+  const asDate = new Date(Date.UTC(y!, m! - 1, d!, 17, 0, 0));
+  return nyYmd(subtractNyCalendarDays(asDate, -6));
+}
+
 function nyMonthStartYmd(now: Date): string {
   const ymd = nyYmd(now);
   return `${ymd.slice(0, 7)}-01`;

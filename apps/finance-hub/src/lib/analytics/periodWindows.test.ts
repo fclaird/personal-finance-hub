@@ -3,8 +3,10 @@ import test from "node:test";
 
 import {
   isNyTradingDayYmd,
+  mondayWeekStartYmd,
   priorTradingDayYmd,
   resolvePeriodWindow,
+  sundayOfWeekYmd,
 } from "@/lib/analytics/periodWindows";
 
 test("isNyTradingDayYmd rejects weekends and NYSE holidays", () => {
@@ -47,4 +49,15 @@ test("resolvePeriodWindow ytd starts Jan 1 NY", () => {
   assert.equal(w.startYmd, "2026-01-01");
   assert.equal(w.endYmd, "2026-08-31");
   assert.equal(w.startAnchorYmd, "2025-12-31");
+});
+
+
+test("mondayWeekStartYmd returns Monday for midweek and weekend dates", () => {
+  assert.equal(mondayWeekStartYmd("2026-09-03"), "2026-08-31"); // Thu
+  assert.equal(mondayWeekStartYmd("2026-08-31"), "2026-08-31"); // Mon
+  assert.equal(mondayWeekStartYmd("2026-09-06"), "2026-08-31"); // Sun
+});
+
+test("sundayOfWeekYmd is six days after Monday", () => {
+  assert.equal(sundayOfWeekYmd("2026-08-31"), "2026-09-06");
 });
