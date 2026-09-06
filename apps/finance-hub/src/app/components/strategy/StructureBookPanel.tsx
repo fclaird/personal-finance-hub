@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { LiveStructureBooks } from "@/app/components/strategy/LiveStructureBooks";
 import { SituationsPanel } from "@/app/components/strategy/SituationsPanel";
@@ -27,6 +27,8 @@ export function StructureBookPanel({
   const [tab, setTab] = useState<BookTab>("open");
   const [counts, setCounts] = useState({ open: 0, closed: 0 });
   const [situations, setSituations] = useState<SituationView[]>([]);
+  const [refreshingLinks, setRefreshingLinks] = useState(false);
+  const proposeRef = useRef<(() => Promise<void>) | null>(null);
   const noun = kind === "short-strangles" ? "strangles" : "butterflies";
 
   const onCounts = useCallback((next: { open: number; closed: number }) => {
@@ -35,31 +37,56 @@ export function StructureBookPanel({
   const onRows = useCallback((rows: SituationView[]) => {
     setSituations(rows);
   }, []);
+  const onPropose = useCallback((fn: () => Promise<void>) => {
+    proposeRef.current = fn;
+  }, []);
+
+  async function refreshLinks() {
+    if (!proposeRef.current) return;
+    setRefreshingLinks(true);
+    try {
+      await proposeRef.current();
+    } finally {
+      setRefreshingLinks(false);
+    }
+  }
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap gap-2 text-xs">
-        {(
-          [
-            ["open", `Open ${noun}`, counts.open],
-            ["closed", `Closed ${noun}`, counts.closed],
-            ["fills", "Fills", trades.length],
-          ] as const
-        ).map(([id, label, n]) => (
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-2 text-xs">
+          {(
+            [
+              ["open", `Open ${noun}`, counts.open],
+              ["closed", `Closed ${noun}`, counts.closed],
+              ["fills", "Fills", trades.length],
+            ] as const
+          ).map(([id, label, n]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              className={
+                "rounded-full px-3 py-1 font-medium " +
+                (tab === id
+                  ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
+                  : "border border-zinc-300 text-zinc-700 hover:bg-zinc-50 dark:border-white/20 dark:text-zinc-200 dark:hover:bg-white/5")
+              }
+            >
+              {label} {n}
+            </button>
+          ))}
+        </div>
+        {tab !== "fills" ? (
           <button
-            key={id}
             type="button"
-            onClick={() => setTab(id)}
-            className={
-              "rounded-full px-3 py-1 font-medium " +
-              (tab === id
-                ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
-                : "border border-zinc-300 text-zinc-700 hover:bg-zinc-50 dark:border-white/20 dark:text-zinc-200 dark:hover:bg-white/5")
-            }
+            onClick={() => void refreshLinks()}
+            disabled={refreshingLinks}
+            className="rounded-full border border-zinc-300 px-3 py-1 text-xs font-semibold text-zinc-800 hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20 dark:text-zinc-100 dark:hover:bg-white/5"
           >
-            {label} {n}
+            {refreshingLinks ? "Linking…" : "Refresh links"}
           </button>
-        ))}
+        ) : null}
       </div>
       {tab === "fills" ? (
         <>
@@ -69,22 +96,31 @@ export function StructureBookPanel({
       ) : (
         <>
           {tab === "open" ? (
-            <LiveStructureBooks kind={kind} situations={situations} privacyMasked={privacyMasked} />
+            <LiveStructureBooks
+              kind={kind}
+              situations={situations}
+              privacyMasked={privacyMasked}
+              onRefreshLinks={() => void refreshLinks()}
+              refreshingLinks={refreshingLinks}
+            />
           ) : null}
           <SituationsPanel
             privacyMasked={privacyMasked}
             kindFilter={kind}
             hideChrome
+            hideList={tab === "open"}
             forcedStatus={tab}
             onCounts={onCounts}
             onRows={onRows}
+            onPropose={onPropose}
           />
         </>
       )}
       {tab !== "fills" ? (
         <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          Open shows live snapshot {noun} plus linked situations (lifecycle expanded). Closed is past books. Fills is the
-          raw TRADE list.
+          {tab === "open"
+            ? `Click a live ${noun.slice(0, -1)} to expand trade history (initial open, adjustments/rolls, cumulative premium).`
+            : `Closed books expand to the same trade tree. Fills is the raw TRADE list.`}
         </p>
       ) : null}
     </div>

@@ -3,6 +3,25 @@ import type Database from "better-sqlite3";
 import type { SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
 import { securityLegsOf } from "@/lib/schwab/transactionNormalize";
 import { instructionKind, parseOptionFromSchwabSymbol, positionIsOpening } from "@/lib/strategy/optionParse";
+
+/** Infer buy/sell open/close when Schwab omits instruction but has positionEffect + signed qty. */
+export function inferInstructionKind(input: {
+  instruction?: string | null;
+  positionEffect?: string | null;
+  quantity?: number | null;
+}): ReturnType<typeof instructionKind> {
+  const direct = instructionKind(input.instruction ?? null);
+  if (direct !== "unknown") return direct;
+  const effect = (input.positionEffect ?? "").toUpperCase();
+  const qty = input.quantity;
+  if (qty == null || !Number.isFinite(qty) || qty === 0) return "unknown";
+  const sold = qty < 0;
+  if (effect === "OPENING") return sold ? "sell_open" : "buy_open";
+  if (effect === "CLOSING") return sold ? "sell_close" : "buy_close";
+  // No effect: treat signed qty as open (common on sparse exports).
+  return sold ? "sell_open" : "buy_open";
+}
+
 import type { LinkableLeg, LinkableTxn } from "@/lib/situations/types";
 
 export function legsFromRawJson(rawJson: string, fallback?: {
@@ -26,7 +45,17 @@ export function legsFromRawJson(rawJson: string, fallback?: {
   if (optionItems.length) {
     return optionItems.map((leg) => {
       const parsed = parseOptionFromSchwabSymbol(leg.instrument?.symbol);
-      const inst = instructionKind(leg.instruction ?? null);
+      const qty =
+        typeof leg.quantity === "number"
+          ? leg.quantity
+          : typeof leg.amount === "number"
+            ? leg.amount
+            : null;
+      const inst = inferInstructionKind({
+        instruction: leg.instruction ?? null,
+        positionEffect: leg.positionEffect ?? null,
+        quantity: qty,
+      });
       const putCall = (leg.instrument?.putCall ?? "").toUpperCase();
       return {
         symbol: (leg.instrument?.symbol ?? parsed?.underlying ?? "").trim(),
@@ -36,13 +65,17 @@ export function legsFromRawJson(rawJson: string, fallback?: {
         strike: parsed?.strike ?? (typeof leg.instrument?.strikePrice === "number" ? leg.instrument.strikePrice : null),
         instruction: inst,
         opening: positionIsOpening(leg.positionEffect ?? null, inst),
-        quantity: typeof leg.quantity === "number" ? leg.quantity : typeof leg.amount === "number" ? leg.amount : null,
+        quantity: qty,
       };
     });
   }
   if (!fallback) return [];
   const parsed = parseOptionFromSchwabSymbol(fallback.symbol);
-  const inst = instructionKind(fallback.instruction ?? null);
+  const inst = inferInstructionKind({
+    instruction: fallback.instruction ?? null,
+    positionEffect: fallback.positionEffect ?? null,
+    quantity: fallback.quantity ?? null,
+  });
   const rightRaw = (fallback.right ?? parsed?.right ?? "").toUpperCase();
   const right = rightRaw === "P" || rightRaw === "C" ? rightRaw : null;
   if (!parsed && !right && (fallback.symbol ?? "").toUpperCase().indexOf("OPTION") < 0) {

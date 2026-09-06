@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { SituationLifecycle } from "@/app/components/strategy/SituationLifecycle";
 import { formatUsd2 } from "@/lib/format";
@@ -16,16 +16,21 @@ export function SituationsPanel({
   privacyMasked,
   kindFilter = "all",
   hideChrome = false,
+  hideList = false,
   forcedStatus,
   onCounts,
   onRows,
+  onPropose,
 }: {
   privacyMasked: boolean;
   kindFilter?: KindFilter;
   hideChrome?: boolean;
+  /** When true, still loads/rebuilds situations but does not render the card list (live books own the UI). */
+  hideList?: boolean;
   forcedStatus?: StatusFilter;
   onCounts?: (counts: SituationCounts) => void;
   onRows?: (rows: SituationView[]) => void;
+  onPropose?: (fn: () => Promise<void>) => void;
 }) {
   const [rows, setRows] = useState<SituationView[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +40,7 @@ export function SituationsPanel({
   const [userCollapsed, setUserCollapsed] = useState<Set<string>>(new Set());
   const [userExpanded, setUserExpanded] = useState<Set<string>>(new Set());
   const [statusFilterState, setStatusFilter] = useState<StatusFilter>("all");
+  const didAutoPropose = useRef(false);
   const statusFilter = forcedStatus ?? statusFilterState;
 
   const load = useCallback(async () => {
@@ -56,6 +62,19 @@ export function SituationsPanel({
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    onPropose?.(() => propose());
+  }, [onPropose, proposing]);
+
+  // First visit: empty book means links were never built — rebuild once from TRADE history.
+  useEffect(() => {
+    if (loading || proposing || error) return;
+    if (rows.length > 0 || didAutoPropose.current) return;
+    didAutoPropose.current = true;
+    void propose();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot when the book is empty after first load
+  }, [loading, rows.length]);
 
   const eligible = useMemo(() => {
     return rows.filter((r) => {
@@ -205,6 +224,13 @@ export function SituationsPanel({
         <div className="rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">{error}</div>
       ) : null}
 
+      {hideList ? (
+        !loading && rows.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-zinc-300 p-4 text-center text-sm text-zinc-600 dark:border-white/20 dark:text-zinc-400">
+            {proposing ? "Building trade history from Schwab fills…" : "No linked situations yet."}
+          </div>
+        ) : null
+      ) : (
       <div className="flex flex-col gap-3">
         {filtered.map((r) => {
           const expanded = isExpanded(r);
@@ -280,6 +306,7 @@ export function SituationsPanel({
           </div>
         ) : null}
       </div>
+      )}
     </div>
   );
 }
