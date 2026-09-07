@@ -17,8 +17,8 @@ import { liveBookToRiskProfile } from "@/lib/options/liveBookToRiskProfile";
 import type { RiskProfileModel } from "@/lib/options/shortStrangleRiskProfile";
 import type { LiveStructureBook } from "@/lib/situations/liveStructures";
 
-const GREEN = "#22c55e";
-const RED = "#ef4444";
+const GREEN = "#4ade80";
+const RED = "#f87171";
 const CYAN = "#22d3ee";
 const AMBER = "#fbbf24";
 const ZERO = "#a1a1aa";
@@ -220,12 +220,14 @@ export function ShortStrangleRiskChart({
             ) : null}
             <defs>
               <linearGradient id="expPosFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={GREEN} stopOpacity={0.35} />
-                <stop offset="100%" stopColor={GREEN} stopOpacity={0.05} />
+                <stop offset="0%" stopColor={GREEN} stopOpacity={0.92} />
+                <stop offset="50%" stopColor={GREEN} stopOpacity={0.68} />
+                <stop offset="100%" stopColor={GREEN} stopOpacity={0.32} />
               </linearGradient>
               <linearGradient id="expNegFill" x1="0" y1="1" x2="0" y2="0">
-                <stop offset="0%" stopColor={RED} stopOpacity={0.35} />
-                <stop offset="100%" stopColor={RED} stopOpacity={0.05} />
+                <stop offset="0%" stopColor={RED} stopOpacity={0.92} />
+                <stop offset="50%" stopColor={RED} stopOpacity={0.68} />
+                <stop offset="100%" stopColor={RED} stopOpacity={0.32} />
               </linearGradient>
             </defs>
             <Area
@@ -273,10 +275,10 @@ export function ShortStrangleRiskChart({
 
       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-zinc-400">
         <span>
-          <span className="inline-block h-2 w-2 rounded-sm bg-emerald-500/80" /> Exp +
+          <span className="inline-block h-2 w-2 rounded-sm bg-emerald-500" /> Exp +
         </span>
         <span>
-          <span className="inline-block h-2 w-2 rounded-sm bg-rose-500/80" /> Exp −
+          <span className="inline-block h-2 w-2 rounded-sm bg-rose-500" /> Exp −
         </span>
         {hasT0 ? (
           <span>

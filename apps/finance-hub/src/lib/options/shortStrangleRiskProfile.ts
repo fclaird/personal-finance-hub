@@ -225,7 +225,7 @@ function breakevens(
 
 /**
  * Build a ToS-style risk profile for a short strangle (works for any short-premium multi-leg book).
- * Domain spans ~±8% past the outer strikes (or spot), sampled densely for a smooth chart.
+ * Domain spans half the prior wing pad past the outer strikes (or spot), sampled densely for a smooth chart.
  */
 export function buildShortStrangleRiskProfile(input: {
   legs: RiskProfileLeg[];
@@ -253,7 +253,7 @@ export function buildShortStrangleRiskProfile(input: {
   const mid = anchors.length ? anchors.reduce((a, b) => a + b, 0) / anchors.length : 100;
   const loStrike = Math.min(...anchors, mid);
   const hiStrike = Math.max(...anchors, mid);
-  const pad = Math.max((hiStrike - loStrike) * 0.35, mid * 0.06);
+  const pad = Math.max((hiStrike - loStrike) * 0.175, mid * 0.03);
   const x0 = Math.max(1, loStrike - pad);
   const x1 = hiStrike + pad;
 
