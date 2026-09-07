@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { SituationLifecycle, pnlTone } from "@/app/components/strategy/SituationLifecycle";
+import { ShortStrangleRiskChart } from "@/app/components/strategy/ShortStrangleRiskChart";
 import { situationRealizedPnl } from "@/lib/situations/adjustmentEconomics";
 import { clumpPartialFills } from "@/lib/situations/clumpPartialFills";
 import type { OptionRiskSummary } from "@/lib/alerts/optionRisk";
@@ -57,6 +58,8 @@ export function LiveStructureBooks({
   const noun = kind === "short-strangles" ? "strangles" : "butterflies";
   const [summary, setSummary] = useState<OptionRiskSummary | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  /** Chart follows expanded card when set; otherwise last-clicked / first book. */
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -86,7 +89,8 @@ export function LiveStructureBooks({
     [summary, liveKind],
   );
 
-  function toggle(key: string) {
+  function selectBook(key: string) {
+    setSelectedKey(key);
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -94,6 +98,16 @@ export function LiveStructureBooks({
       return next;
     });
   }
+
+  const selectedBook = useMemo(() => {
+    if (books.length === 0) return null;
+    const expandedBooks = books.filter((b) => expanded.has(b.key));
+    if (expandedBooks.length > 0) {
+      return expandedBooks.find((b) => b.key === selectedKey) ?? expandedBooks[expandedBooks.length - 1]!;
+    }
+    if (selectedKey) return books.find((b) => b.key === selectedKey) ?? books[0]!;
+    return books[0]!;
+  }, [books, expanded, selectedKey]);
 
   if (!summary || books.length === 0) return null;
 
@@ -114,17 +128,18 @@ export function LiveStructureBooks({
             const situation = matchSituation(b, situations);
             const isOpen = expanded.has(b.key);
             const strikes = strikeLabel(b);
-            // Live books are open structures — snapshot net is unrealized → grey.
-            const snapshotRealized = false;
 
             return (
               <article
                 key={b.key}
-                className="overflow-hidden border-x border-zinc-200 bg-white first:rounded-t-xl last:rounded-b-xl dark:border-white/25 dark:bg-zinc-950"
+                className={
+                  "overflow-hidden border-x border-zinc-200 bg-white first:rounded-t-xl last:rounded-b-xl dark:border-white/25 dark:bg-zinc-950" +
+                  (selectedBook?.key === b.key ? " ring-1 ring-inset ring-cyan-500/40" : "")
+                }
               >
                 <button
                   type="button"
-                  onClick={() => toggle(b.key)}
+                  onClick={() => selectBook(b.key)}
                   className="flex w-full flex-wrap items-baseline gap-x-4 gap-y-1 px-3 py-2.5 text-left transition-colors hover:bg-zinc-50 dark:hover:bg-white/5"
                   aria-expanded={isOpen}
                 >
@@ -153,16 +168,32 @@ export function LiveStructureBooks({
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-300">
                       Snapshot
                     </span>
-                    {situation?.netPremium != null ? (
-                      <span
-                        className={
-                          "text-xs tabular-nums " +
-                          pnlTone(situation.netPremium, { realized: snapshotRealized })
-                        }
-                      >
-                        Net {formatUsd2(situation.netPremium, { mask: privacyMasked })}
-                      </span>
-                    ) : null}
+                    {situation
+                      ? (() => {
+                          const realized = situationRealizedPnl(clumpPartialFills(situation.members));
+                          if (realized == null) {
+                            return (
+                              <span className="text-xs tabular-nums text-zinc-500 dark:text-zinc-300">
+                                Net realized —
+                              </span>
+                            );
+                          }
+                          return (
+                            <span
+                              className={
+                                "text-xs tabular-nums font-medium " +
+                                pnlTone(realized, { realized: true })
+                              }
+                            >
+                              Net realized {formatUsd2(realized, { mask: privacyMasked })}
+                            </span>
+                          );
+                        })()
+                      : (
+                        <span className="text-xs tabular-nums text-zinc-500 dark:text-zinc-300">
+                          Net realized —
+                        </span>
+                      )}
                     {situation
                       ? (() => {
                           const realized = situationRealizedPnl(clumpPartialFills(situation.members));
@@ -231,14 +262,7 @@ export function LiveStructureBooks({
           })}
         </div>
 
-        {/* Reserved for future ToS-style risk profile chart */}
-        <aside className="hidden min-h-[12rem] flex-1 rounded-xl border border-dashed border-zinc-300 bg-zinc-50/50 p-4 dark:border-white/20 dark:bg-zinc-900/40 lg:block">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-300">Risk profile</div>
-          <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">
-            Reserved for the expiration / T+0 P&amp;L chart. Metrics stay in the left column — this pane will
-            hold the selected book&apos;s risk graph.
-          </p>
-        </aside>
+        <ShortStrangleRiskChart book={selectedBook} privacyMasked={privacyMasked} />
       </div>
     </div>
   );
