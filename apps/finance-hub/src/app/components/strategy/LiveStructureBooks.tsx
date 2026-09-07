@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { SituationLifecycle, pnlTone } from "@/app/components/strategy/SituationLifecycle";
+import { situationRealizedPnl } from "@/lib/situations/adjustmentEconomics";
+import { clumpPartialFills } from "@/lib/situations/clumpPartialFills";
 import type { OptionRiskSummary } from "@/lib/alerts/optionRisk";
 import { formatUsd2 } from "@/lib/format";
 import {
@@ -161,6 +163,23 @@ export function LiveStructureBooks({
                         Net {formatUsd2(situation.netPremium, { mask: privacyMasked })}
                       </span>
                     ) : null}
+                    {situation
+                      ? (() => {
+                          const realized = situationRealizedPnl(clumpPartialFills(situation.members));
+                          if (realized == null) return null;
+                          const label = realized >= 0 ? "Realized gain" : "Realized loss";
+                          return (
+                            <span
+                              className={
+                                "text-[11px] tabular-nums font-medium " +
+                                pnlTone(realized, { realized: true })
+                              }
+                            >
+                              {label} {formatUsd2(realized, { mask: privacyMasked })}
+                            </span>
+                          );
+                        })()
+                      : null}
                   </div>
                 </button>
 

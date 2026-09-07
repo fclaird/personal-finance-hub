@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { SituationMemberView } from "@/lib/situations/apiTypes";
-import { realizedOnClosedLegs, realizedPerClosedLeg } from "@/lib/situations/adjustmentEconomics";
+import { realizedOnClosedLegs, realizedPerClosedLeg, situationRealizedPnl } from "@/lib/situations/adjustmentEconomics";
 
 function m(
   partial: Partial<SituationMemberView> & Pick<SituationMemberView, "transactionId" | "role" | "tradeDate">,
@@ -94,4 +94,15 @@ describe("adjustmentEconomics", () => {
     assert.equal(realizedOnClosedLegs(closes, prior), 1500);
   });
 
+  it("situationRealizedPnl sums closed-leg realized across the book", () => {
+    const members = [
+      m({ transactionId: "o1", role: "open", tradeDate: "2026-08-01", symbol: "BE 210P", quantity: -20, netAmount: 5000 }),
+      m({ transactionId: "o2", role: "open", tradeDate: "2026-08-01", symbol: "BE 225C", quantity: -20, netAmount: 4000 }),
+      m({ transactionId: "c1", role: "roll_close", tradeDate: "2026-08-10", symbol: "BE 210P", quantity: 20, netAmount: -3800 }),
+      m({ transactionId: "c2", role: "roll_close", tradeDate: "2026-08-10", symbol: "BE 225C", quantity: 20, netAmount: -4500 }),
+      m({ transactionId: "n1", role: "roll_open", tradeDate: "2026-08-10", symbol: "BE 235C", quantity: -20, netAmount: 3000 }),
+    ];
+    // put +1200, call -500 → +700
+    assert.equal(situationRealizedPnl(members), 700);
+  });
 });

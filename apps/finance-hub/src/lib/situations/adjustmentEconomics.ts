@@ -113,3 +113,51 @@ export function realizedOnClosedLegs(
   }
   return matchedAny ? round2(realized) : null;
 }
+
+/**
+ * Book-level realized G/L: sum FIFO realized on every close / roll_close / leg
+ * vs open / roll_open credits established earlier in the book.
+ */
+export function situationRealizedPnl(members: SituationMemberView[]): number | null {
+  const sorted = [...members].sort(
+    (a, b) =>
+      a.tradeDate.localeCompare(b.tradeDate) ||
+      roleSort(a.role) - roleSort(b.role) ||
+      a.transactionId.localeCompare(b.transactionId),
+  );
+  const prior: SituationMemberView[] = [];
+  let total = 0;
+  let any = false;
+  for (const m of sorted) {
+    if (m.role === "open" || m.role === "roll_open") {
+      prior.push(m);
+      continue;
+    }
+    if (m.role === "roll_close" || m.role === "close" || m.role === "leg") {
+      const r = realizedOnClosedLegs([m], prior);
+      if (r != null) {
+        total += r;
+        any = true;
+      }
+      prior.push(m);
+    }
+  }
+  return any ? round2(total) : null;
+}
+
+function roleSort(role: SituationMemberView["role"]): number {
+  switch (role) {
+    case "open":
+      return 0;
+    case "roll_close":
+      return 1;
+    case "roll_open":
+      return 2;
+    case "close":
+      return 3;
+    case "leg":
+      return 4;
+    default:
+      return 5;
+  }
+}
