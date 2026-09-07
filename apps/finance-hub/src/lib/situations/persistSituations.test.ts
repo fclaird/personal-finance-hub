@@ -130,4 +130,85 @@ describe("persistSituations", () => {
     assert.equal(again.length, 1);
     assert.equal(again[0]!.linkStatus, "confirmed");
   });
+
+  it("reject splits a same-day strangle into singles that survive rebuild", () => {
+    const db = createTestDb();
+    insertTx(db, {
+      id: "put",
+      ext: "1",
+      date: "2026-06-01",
+      net: 200,
+      instruction: "SELL_TO_OPEN",
+      symbol: occ("IWM", "260717", "P", 180),
+      underlying: "IWM",
+      right: "P",
+      strike: 180,
+      exp: "2026-07-17",
+    });
+    insertTx(db, {
+      id: "call",
+      ext: "2",
+      date: "2026-06-01",
+      net: 150,
+      instruction: "SELL_TO_OPEN",
+      symbol: occ("IWM", "260717", "C", 230),
+      underlying: "IWM",
+      right: "C",
+      strike: 230,
+      exp: "2026-07-17",
+    });
+
+    const first = rebuildAutoSituations(db);
+    assert.equal(first.proposed, 1);
+    const listed = listSituations(db);
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0]!.kind, "short-strangle");
+
+    assert.equal(setSituationLinkStatus(db, listed[0]!.id, "rejected"), true);
+    const afterReject = rebuildAutoSituations(db);
+    assert.equal(afterReject.kept, 1);
+    assert.equal(afterReject.proposed, 2);
+
+    const again = listSituations(db);
+    const visible = again.filter((r) => r.linkStatus !== "rejected");
+    assert.equal(visible.length, 2);
+    assert.ok(visible.every((r) => r.kind !== "short-strangle"));
+    assert.deepEqual(
+      visible
+        .flatMap((r) => r.members.map((m) => m.transactionId))
+        .sort(),
+      ["call", "put"],
+    );
+
+    const third = rebuildAutoSituations(db);
+    assert.equal(third.proposed, 2);
+    const still = listSituations(db).filter((r) => r.linkStatus !== "rejected");
+    assert.equal(still.length, 2);
+    assert.ok(still.every((r) => r.kind !== "short-strangle"));
+  });
+
+  it("reject of a single-leg situation keeps the fill dismissed across rebuild", () => {
+    const db = createTestDb();
+    insertTx(db, {
+      id: "put",
+      ext: "1",
+      date: "2026-06-01",
+      net: 200,
+      instruction: "SELL_TO_OPEN",
+      symbol: occ("IWM", "260717", "P", 180),
+      underlying: "IWM",
+      right: "P",
+      strike: 180,
+      exp: "2026-07-17",
+    });
+
+    assert.equal(rebuildAutoSituations(db).proposed, 1);
+    const listed = listSituations(db);
+    assert.equal(listed.length, 1);
+    assert.equal(setSituationLinkStatus(db, listed[0]!.id, "rejected"), true);
+    const after = rebuildAutoSituations(db);
+    assert.equal(after.proposed, 0);
+    const visible = listSituations(db).filter((r) => r.linkStatus !== "rejected");
+    assert.equal(visible.length, 0);
+  });
 });
