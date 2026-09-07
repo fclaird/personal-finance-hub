@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
+import { recordSituationsLinkFingerprint } from "@/lib/situations/ensureSituationsFresh";
 import { rebuildAutoSituations } from "@/lib/situations/persistSituations";
 import { reclassifyAllBrokerTransactions } from "@/lib/strategy/classifyTransaction";
 
@@ -12,6 +13,7 @@ export async function POST(req: Request) {
     const db = getDb();
     const n = reclassifyAllBrokerTransactions(db, since);
     const situations = rebuildAutoSituations(db);
+    recordSituationsLinkFingerprint(db);
     return NextResponse.json({ ok: true, reclassified: n, situations });
   } catch (e) {
     logError("strategy_reclassify_failed", e);

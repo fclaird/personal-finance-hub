@@ -1,7 +1,9 @@
 import type Database from "better-sqlite3";
 
 import { optionMarginSecuredDollars } from "@/lib/options/optionMarginRoi";
+import { optionMarkPerShare } from "@/lib/options/optionPnlFromAvgPrice";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
+import { resolvePositionAveragePrice } from "@/lib/holdings/positionAveragePrice";
 import { latestSnapshotIds, type LatestSnapshotScope } from "@/lib/holdings/latestSnapshots";
 import { longShareQuantityForUnderlying } from "@/lib/strategy/equityCoverage";
 import type { FlavorId } from "@/lib/flavor";
@@ -44,6 +46,12 @@ export type OptionRiskPosition = {
   spot: number | null;
   intrinsic: number | null;
   marginSecured: number | null;
+  /** Schwab average entry (per share). */
+  avgPrice: number | null;
+  /** Current mark per share (absolute). */
+  markPrice: number | null;
+  /** Implied vol from option_greeks (percent or decimal). */
+  iv: number | null;
   flags: OptionRiskFlags;
 };
 
@@ -87,6 +95,13 @@ function parseOcc(symbol: string | null): { expiration: string; right: "C" | "P"
   const dd = Number(m[1]!.slice(4, 6));
   const expiration = `${(2000 + yy).toString().padStart(4, "0")}-${mm.toString().padStart(2, "0")}-${dd.toString().padStart(2, "0")}`;
   return { expiration, right: m[2] === "C" ? "C" : "P", strike: Number(m[3]!) / 1000 };
+}
+
+/** Drop Schwab sentinels (-999) and non-positive IVs. */
+export function sanitizeOptionIv(iv: number | null | undefined): number | null {
+  if (iv == null || !Number.isFinite(iv) || iv <= 0) return null;
+  if (iv > 500) return null;
+  return iv;
 }
 
 function dteFrom(expiration: string | null, asOf: string): number | null {
@@ -189,7 +204,11 @@ export function loadOptionRiskSummary(
         s.symbol AS symbol,
         us.symbol AS underlyingSymbol,
         p.quantity AS quantity,
-        og.delta AS delta
+        p.price AS price,
+        p.market_value AS marketValue,
+        p.metadata_json AS metadataJson,
+        og.delta AS delta,
+        og.iv AS iv
       FROM positions p
       JOIN holding_snapshots hs ON hs.id = p.snapshot_id
       JOIN accounts a ON a.id = hs.account_id
@@ -209,7 +228,11 @@ export function loadOptionRiskSummary(
     symbol: string | null;
     underlyingSymbol: string | null;
     quantity: number;
+    price: number | null;
+    marketValue: number | null;
+    metadataJson: string | null;
     delta: number | null;
+    iv: number | null;
   }>;
 
   const spots = db
@@ -239,6 +262,32 @@ export function loadOptionRiskSummary(
     if (Number.isFinite(r.close) && r.close > 0 && !spotMap.has(r.symbol)) spotMap.set(r.symbol, r.close);
   }
 
+  // Fill remaining underlyings from latest OHLCV (prefer 5m, else 1d).
+  const ohlcvNeeded = new Set<string>();
+  for (const r of rows) {
+    const u = normalizeOptionUnderlying(r.underlyingSymbol, r.symbol);
+    if (u && !spotMap.has(u)) ohlcvNeeded.add(u);
+  }
+  const latestOhlcvClose = db.prepare(`
+    SELECT close AS close
+    FROM ohlcv_points
+    WHERE provider = 'schwab' AND symbol = ? AND interval = ?
+      AND close IS NOT NULL AND close > 0
+    ORDER BY ts_ms DESC
+    LIMIT 1
+  `);
+  for (const sym of ohlcvNeeded) {
+    if (spotMap.has(sym)) continue;
+    let close: number | null = null;
+    const m5 = latestOhlcvClose.get(sym, "5m") as { close: number } | undefined;
+    if (m5 && Number.isFinite(m5.close) && m5.close > 0) close = m5.close;
+    else {
+      const d1 = latestOhlcvClose.get(sym, "1d") as { close: number } | undefined;
+      if (d1 && Number.isFinite(d1.close) && d1.close > 0) close = d1.close;
+    }
+    if (close != null) spotMap.set(sym, close);
+  }
+
   type Draft = {
     positionId: string;
     accountId: string;
@@ -252,6 +301,9 @@ export function loadOptionRiskSummary(
     dte: number | null;
     delta: number | null;
     spot: number | null;
+    avgPrice: number | null;
+    markPrice: number | null;
+    iv: number | null;
     coveringShares: number;
   };
 
@@ -259,6 +311,10 @@ export function loadOptionRiskSummary(
     const parsed = parseOcc(r.symbol);
     const underlying = normalizeOptionUnderlying(r.underlyingSymbol, r.symbol);
     const coveringShares = longShareQuantityForUnderlying(db, r.accountId, underlying);
+    const avgPrice = resolvePositionAveragePrice(r.price, r.metadataJson);
+    const rawMark = optionMarkPerShare(r.marketValue, r.quantity);
+    const markPrice =
+      rawMark != null && Number.isFinite(rawMark) ? Math.abs(rawMark) : null;
     return {
       positionId: r.positionId,
       accountId: r.accountId,
@@ -272,6 +328,9 @@ export function loadOptionRiskSummary(
       dte: dteFrom(parsed?.expiration ?? null, r.asOf),
       delta: r.delta,
       spot: spotMap.get(underlying) ?? null,
+      avgPrice,
+      markPrice,
+      iv: sanitizeOptionIv(r.iv),
       coveringShares,
     };
   });
@@ -321,6 +380,9 @@ export function loadOptionRiskSummary(
       spot: d.spot,
       intrinsic,
       marginSecured: optionMarginSecuredDollars(d.quantity, d.strike),
+      avgPrice: d.avgPrice,
+      markPrice: d.markPrice,
+      iv: d.iv,
       flags,
     };
   });

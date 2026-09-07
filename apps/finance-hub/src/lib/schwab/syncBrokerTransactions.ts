@@ -5,6 +5,7 @@ import { newId } from "@/lib/id";
 import { DEFAULT_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
 import { fetchSchwabAccountNumbers, fetchSchwabTransactionsChunked } from "@/lib/schwab/fetchAccountTransactions";
 import { normalizeSchwabTransaction } from "@/lib/schwab/transactionNormalize";
+import { recordSituationsLinkFingerprint } from "@/lib/situations/ensureSituationsFresh";
 import { rebuildAutoSituations } from "@/lib/situations/persistSituations";
 import { reclassifyBrokerTransactionRow } from "@/lib/strategy/classifyTransaction";
 
@@ -170,6 +171,7 @@ export async function syncSchwabBrokerTransactions(options?: {
 
   try {
     rebuildAutoSituations(db);
+    recordSituationsLinkFingerprint(db);
   } catch {
     // Situations are best-effort; TRADE sync should still succeed.
   }

@@ -1,10 +1,11 @@
 import type Database from "better-sqlite3";
 
 import { newId } from "@/lib/id";
-import { loadLinkableBrokerTransactions } from "@/lib/situations/fromBrokerTx";
+import { clumpLinkablePartials, loadLinkableBrokerTransactions } from "@/lib/situations/fromBrokerTx";
 import { proposeSituations } from "@/lib/situations/linkSituations";
 import type { ProposedSituation, SituationLinkStatus, SituationMemberRole } from "@/lib/situations/types";
 import { hasCoveringShares } from "@/lib/strategy/equityCoverage";
+import { deltaAtFillFromDb } from "@/lib/situations/fillDelta";
 
 export type SituationListRow = {
   id: string;
@@ -22,10 +23,20 @@ export type SituationListRow = {
     transactionId: string;
     role: SituationMemberRole;
     tradeDate: string;
+    tradeTime: string | null;
     symbol: string | null;
+    underlying: string | null;
+    expiration: string | null;
+    right: "C" | "P" | null;
+    strike: number | null;
+    price: number | null;
+    quantity: number | null;
+    positionEffect: string | null;
     netAmount: number | null;
     instruction: string | null;
     description: string | null;
+    orderId: string | null;
+    deltaAtFill: number | null;
   }>;
 };
 
@@ -76,7 +87,12 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
     WHERE link_status IN ('auto', 'proposed')
   `);
 
-  const allTxns = loadLinkableBrokerTransactions(db).filter((t) => !lockedIds.has(t.id));
+  const rawTxns = loadLinkableBrokerTransactions(db).filter((t) => !lockedIds.has(t.id));
+  const allTxns = clumpLinkablePartials(rawTxns);
+  const sourceIdsByPrimary = new Map<string, string[]>();
+  for (const t of allTxns) {
+    sourceIdsByPrimary.set(t.id, t.sourceTransactionIds?.length ? t.sourceTransactionIds : [t.id]);
+  }
   const proposed = proposeSituations(allTxns, {
     rejectedPairs: loadRejectedPairs(db),
     coveredCallTxnIds: coveredCallTxnIds(db, allTxns),
@@ -118,7 +134,10 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
         now,
       });
       for (const m of s.members) {
-        insertMember.run({ situationId: id, transactionId: m.transactionId, role: m.role });
+        const sources = sourceIdsByPrimary.get(m.transactionId) ?? [m.transactionId];
+        for (const transactionId of sources) {
+          insertMember.run({ situationId: id, transactionId, role: m.role });
+        }
       }
     }
   });
@@ -152,10 +171,19 @@ export function listSituations(db: Database.Database): SituationListRow[] {
         m.transaction_id AS transactionId,
         m.role AS role,
         b.trade_date AS tradeDate,
+        json_extract(b.raw_json, '$.time') AS tradeTime,
         b.symbol AS symbol,
+        b.underlying_symbol AS underlying,
+        COALESCE(b.option_expiration, json_extract(b.raw_json, '$.transferItems[0].instrument.expirationDate')) AS expiration,
+        b.option_right AS right,
+        b.option_strike AS strike,
+        b.price AS price,
+        b.quantity AS quantity,
+        b.position_effect AS positionEffect,
         b.net_amount AS netAmount,
         b.instruction AS instruction,
-        b.description AS description
+        b.description AS description,
+        CAST(json_extract(b.raw_json, '$.orderId') AS TEXT) AS orderId
       FROM option_situation_members m
       JOIN broker_transactions b ON b.id = m.transaction_id
       ORDER BY b.trade_date ASC, b.id ASC
@@ -166,23 +194,59 @@ export function listSituations(db: Database.Database): SituationListRow[] {
     transactionId: string;
     role: SituationMemberRole;
     tradeDate: string;
+    tradeTime: string | null;
     symbol: string | null;
+    underlying: string | null;
+    expiration: string | null;
+    right: string | null;
+    strike: number | null;
+    price: number | null;
+    quantity: number | null;
+    positionEffect: string | null;
     netAmount: number | null;
     instruction: string | null;
     description: string | null;
+    orderId: string | number | null;
   }>;
 
   const bySit = new Map<string, SituationListRow["members"]>();
   for (const m of members) {
     const list = bySit.get(m.situationId) ?? [];
+    const rightRaw = (m.right ?? "").toString().toUpperCase();
+    const right = rightRaw.startsWith("C") ? "C" as const : rightRaw.startsWith("P") ? "P" as const : null;
+    const orderId =
+      m.orderId == null || m.orderId === ""
+        ? null
+        : String(m.orderId);
+    const expiration = typeof m.expiration === "string" ? m.expiration.slice(0, 10) : null;
+    const tradeTime = typeof m.tradeTime === "string" ? m.tradeTime : null;
+    const deltaAtFill = deltaAtFillFromDb(db, {
+      underlying: m.underlying,
+      right,
+      strike: m.strike,
+      expiration,
+      price: m.price,
+      tradeDate: m.tradeDate,
+      tradeTime,
+    });
     list.push({
       transactionId: m.transactionId,
       role: m.role,
       tradeDate: m.tradeDate,
+      tradeTime,
       symbol: m.symbol,
+      underlying: m.underlying,
+      expiration,
+      right,
+      strike: m.strike,
+      price: m.price,
+      quantity: m.quantity,
+      positionEffect: m.positionEffect,
       netAmount: m.netAmount,
       instruction: m.instruction,
       description: m.description,
+      orderId,
+      deltaAtFill,
     });
     bySit.set(m.situationId, list);
   }
