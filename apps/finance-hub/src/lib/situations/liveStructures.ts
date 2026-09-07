@@ -48,7 +48,13 @@ export function groupLiveStructureBooks(
   positions: OptionRiskPosition[],
   kind: LiveStructureKind,
 ): LiveStructureBook[] {
-  const options = positions.filter((p) => Math.abs(p.quantity) > 1e-9 && p.right);
+  const options = positions.filter((p) => {
+    if (!(Math.abs(p.quantity) > 1e-9) || !p.right) return false;
+    // Short-strangle cards are income shorts only. A long LEAP (or other long option)
+    // on the same underlying must not join the live book or ToS risk chart.
+    if (kind === "short-strangle" && p.quantity >= 0) return false;
+    return true;
+  });
   const buckets = new Map<string, OptionRiskPosition[]>();
   for (const p of options) {
     const key = bucketKey(p, kind);
