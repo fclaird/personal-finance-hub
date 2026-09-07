@@ -194,23 +194,6 @@ export function LiveStructureBooks({
                           Net realized —
                         </span>
                       )}
-                    {situation
-                      ? (() => {
-                          const realized = situationRealizedPnl(clumpPartialFills(situation.members));
-                          if (realized == null) return null;
-                          const label = realized >= 0 ? "Realized gain" : "Realized loss";
-                          return (
-                            <span
-                              className={
-                                "text-[11px] tabular-nums font-medium " +
-                                pnlTone(realized, { realized: true })
-                              }
-                            >
-                              {label} {formatUsd2(realized, { mask: privacyMasked })}
-                            </span>
-                          );
-                        })()
-                      : null}
                   </div>
                 </button>
 
