@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { SituationMemberView } from "@/lib/situations/apiTypes";
+import { closedFillRowNet } from "@/lib/situations/adjustmentEconomics";
 import { buildSituationTree } from "@/lib/situations/situationTree";
 
 function m(
@@ -174,5 +175,117 @@ describe("buildSituationTree", () => {
     assert.equal(tree[0]!.children[0]!.stepNet, 40); // 50 + (-10)
     assert.equal(tree[0]!.children[0]!.cumulativeNet, 0);
     assert.equal(tree[0]!.children.some((c) => c.kind === "current"), false);
+  });
+
+  it("sequential wing closes: fill-row net is realized G/L not the BTC debit (NVDA-shaped)", () => {
+    // Closed-strangle screenshot: call BTC while put remains (leg), then put close.
+    // Child fill rows must show REALIZED (green on a win), never the debit.
+    const tree = buildSituationTree(
+      [
+        m({
+          transactionId: "oC",
+          role: "open",
+          tradeDate: "2026-08-26",
+          symbol: "NVDA 230C",
+          quantity: -20,
+          netAmount: 3363.61,
+        }),
+        m({
+          transactionId: "oP",
+          role: "open",
+          tradeDate: "2026-08-26",
+          symbol: "NVDA 200P",
+          quantity: -20,
+          netAmount: 5703.56,
+        }),
+        m({
+          transactionId: "cC",
+          role: "leg",
+          tradeDate: "2026-08-31",
+          symbol: "NVDA 230C",
+          quantity: 20,
+          netAmount: -1106.27,
+        }),
+        m({
+          transactionId: "cP",
+          role: "close",
+          tradeDate: "2026-08-31",
+          symbol: "NVDA 200P",
+          quantity: 20,
+          netAmount: -366.27,
+        }),
+      ],
+      { status: "closed" },
+    );
+    const root = tree[0]!;
+    assert.equal(root.kind, "open");
+    assert.equal(root.stepNet, null);
+    assert.equal(root.cumulativeNet, 9067.17);
+
+    const callClose = root.children.find((c) => c.kind === "leg");
+    assert.equal(callClose?.kind, "leg");
+    if (callClose?.kind !== "leg") throw new Error("expected leg");
+    assert.equal(callClose.stepNet, 2257.34);
+    assert.notEqual(callClose.member.netAmount, callClose.stepNet);
+    assert.equal(closedFillRowNet(callClose.member, root.members, callClose.stepNet), 2257.34);
+
+    const putClose = root.children.find((c) => c.kind === "close");
+    assert.equal(putClose?.kind, "close");
+    if (putClose?.kind !== "close") throw new Error("expected close");
+    assert.equal(putClose.stepNet, 5337.29);
+    assert.notEqual(putClose.members[0]!.netAmount, putClose.stepNet);
+    assert.equal(
+      closedFillRowNet(putClose.members[0]!, putClose.priorMembers, putClose.stepNet),
+      5337.29,
+    );
+  });
+
+  it("grouped close fills: stepNet and per-leg display are realized, not debit sum", () => {
+    const tree = buildSituationTree(
+      [
+        m({
+          transactionId: "oC",
+          role: "open",
+          tradeDate: "2026-08-26",
+          symbol: "NVDA 230C",
+          quantity: -20,
+          netAmount: 3363.61,
+        }),
+        m({
+          transactionId: "oP",
+          role: "open",
+          tradeDate: "2026-08-26",
+          symbol: "NVDA 200P",
+          quantity: -20,
+          netAmount: 5703.56,
+        }),
+        m({
+          transactionId: "cC",
+          role: "close",
+          tradeDate: "2026-08-31",
+          symbol: "NVDA 230C",
+          quantity: 20,
+          netAmount: -1106.27,
+        }),
+        m({
+          transactionId: "cP",
+          role: "close",
+          tradeDate: "2026-08-31",
+          symbol: "NVDA 200P",
+          quantity: 20,
+          netAmount: -366.27,
+        }),
+      ],
+      { status: "closed" },
+    );
+    const close = tree[0]!.children[0]!;
+    assert.equal(close.kind, "close");
+    if (close.kind !== "close") throw new Error("expected close");
+    assert.equal(close.stepNet, 7594.63);
+    assert.notEqual(close.stepNet, -1472.54);
+    const callShown = closedFillRowNet(close.members.find((x) => x.transactionId === "cC")!, close.priorMembers);
+    const putShown = closedFillRowNet(close.members.find((x) => x.transactionId === "cP")!, close.priorMembers);
+    assert.equal(callShown, 2257.34);
+    assert.equal(putShown, 5337.29);
   });
 });

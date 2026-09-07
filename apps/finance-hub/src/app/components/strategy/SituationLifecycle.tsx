@@ -2,13 +2,12 @@
 
 import { formatUsd2 } from "@/lib/format";
 import type { SituationMemberView, SituationView } from "@/lib/situations/apiTypes";
-import { realizedPerClosedLeg } from "@/lib/situations/adjustmentEconomics";
+import { closedFillRowNet, realizedPerClosedLeg } from "@/lib/situations/adjustmentEconomics";
 import { clumpPartialFills } from "@/lib/situations/clumpPartialFills";
 import {
   buildAdjustmentHighlightParts,
   formatCurrentDteLabel,
   formatFillLine,
-  sumMemberNets,
   type AdjustmentHighlightPart,
 } from "@/lib/situations/formatSituationFill";
 import {
@@ -171,25 +170,43 @@ function AdjustmentFillLines({
   );
 }
 
-function CloseFillLines({ members, masked }: { members: SituationMemberView[]; masked: boolean }) {
+function CloseFillLines({
+  members,
+  priorMembers,
+  stepNet,
+  masked,
+}: {
+  members: SituationMemberView[];
+  priorMembers: SituationMemberView[];
+  stepNet: number | null;
+  masked: boolean;
+}) {
   if (members.length === 0) return null;
   if (members.length === 1) {
     const m = members[0]!;
+    const realized = closedFillRowNet(m, priorMembers, stepNet);
     return (
       <ul className="mt-1 space-y-1">
-        <FillRow line={formatFillLine(m)} net={m.netAmount} masked={masked} realized />
+        <FillRow line={formatFillLine(m)} net={realized} masked={masked} realized />
       </ul>
     );
   }
-  const combined = sumMemberNets(members);
+  const perLeg = realizedPerClosedLeg(members, priorMembers);
+  const realizedById = new Map(perLeg.map((p) => [p.transactionId, p.realized]));
   return (
     <ul className="mt-1 space-y-1">
-      <FillRow line={members.length + " closes · net"} net={combined} masked={masked} realized />
-      {members.map((m) => (
-        <li key={m.transactionId} className="pl-3 text-[10px] text-zinc-600 dark:text-zinc-300">
-          {formatFillLine(m)} · {usd(m.netAmount, masked)}
-        </li>
-      ))}
+      <FillRow line={members.length + " closes · net"} net={stepNet} masked={masked} realized />
+      {members.map((m) => {
+        const legRealized = realizedById.get(m.transactionId) ?? null;
+        return (
+          <li
+            key={m.transactionId}
+            className={"pl-3 text-[10px] " + pnlTone(legRealized, { realized: true })}
+          >
+            {formatFillLine(m)} · {usd(legRealized, masked)}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -293,10 +310,17 @@ function TreeNodeView({
               masked={masked}
             />
           ) : null}
-          {node.kind === "close" ? <CloseFillLines members={node.members} masked={masked} /> : null}
+          {node.kind === "close" ? (
+            <CloseFillLines
+              members={node.members}
+              priorMembers={node.priorMembers}
+              stepNet={node.stepNet}
+              masked={masked}
+            />
+          ) : null}
           {node.kind === "leg" ? (
             <ul className="mt-1 space-y-1">
-              <FillRow line={formatFillLine(node.member)} net={node.member.netAmount} masked={masked} realized />
+              <FillRow line={formatFillLine(node.member)} net={node.stepNet} masked={masked} realized />
             </ul>
           ) : null}
           {node.kind === "current" ? (

@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { SituationMemberView } from "@/lib/situations/apiTypes";
-import { realizedOnClosedLegs, realizedPerClosedLeg, situationRealizedPnl } from "@/lib/situations/adjustmentEconomics";
+import {
+  closedFillRowNet,
+  realizedOnClosedLegs,
+  realizedPerClosedLeg,
+  situationRealizedPnl,
+} from "@/lib/situations/adjustmentEconomics";
 
 function m(
   partial: Partial<SituationMemberView> & Pick<SituationMemberView, "transactionId" | "role" | "tradeDate">,
@@ -104,5 +109,28 @@ describe("adjustmentEconomics", () => {
     ];
     // put +1200, call -500 → +700
     assert.equal(situationRealizedPnl(members), 700);
+  });
+
+  it("closedFillRowNet is realized G/L, not the buy-to-close debit (NVDA-shaped)", () => {
+    // Screenshot: NVDA 20x 230C closed @ $0.55 debit $-1,106.27; REALIZED $2,257.34.
+    const open = m({
+      transactionId: "oC",
+      role: "open",
+      tradeDate: "2026-08-26",
+      symbol: "NVDA 230C",
+      quantity: -20,
+      netAmount: 3363.61,
+    });
+    const close = m({
+      transactionId: "cC",
+      role: "close",
+      tradeDate: "2026-08-31",
+      symbol: "NVDA 230C",
+      quantity: 20,
+      netAmount: -1106.27,
+    });
+    const shown = closedFillRowNet(close, [open], null);
+    assert.equal(shown, 2257.34);
+    assert.notEqual(shown, close.netAmount);
   });
 });

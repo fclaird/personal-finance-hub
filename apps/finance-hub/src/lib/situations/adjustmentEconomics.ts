@@ -94,6 +94,19 @@ export function realizedPerClosedLeg(
 }
 
 /**
+ * Dollar amount shown on a Strategies tree close/leg fill row.
+ * Always FIFO realized G/L vs opening credits — never the raw BTC debit.
+ */
+export function closedFillRowNet(
+  closeMember: SituationMemberView,
+  priorMembers: SituationMemberView[],
+  stepNetFallback: number | null = null,
+): number | null {
+  const per = realizedPerClosedLeg([closeMember], priorMembers);
+  return per[0]?.realized ?? stepNetFallback;
+}
+
+/**
  * Realized G/L on closed legs vs the original credit those lots brought in.
  * Match same OCC symbol first (FIFO); leftover qty consumes FIFO across any symbol.
  * realized = matchedOpenCredit + closeNet (e.g. +$X open credit + −$Y buyback).
