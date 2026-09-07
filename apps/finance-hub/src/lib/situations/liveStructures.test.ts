@@ -48,6 +48,60 @@ describe("groupLiveStructureBooks", () => {
     assert.equal(books[0]!.legs.length, 2);
   });
 
+  it("keeps a butterfly book when a different-expiration LEAP exists on the same underlying", () => {
+    const wing = (id: string, strike: number, qty: number) =>
+      pos({
+        positionId: id,
+        right: "C",
+        strike,
+        quantity: qty,
+        underlying: "IWM",
+        symbol: "IWM",
+        flags: evaluateOptionRiskFlags({
+          quantity: qty,
+          right: "C",
+          strike,
+          dte: 30,
+          delta: qty < 0 ? -0.5 : 0.3,
+          spot: 220,
+          coveringShares: 0,
+          pairedOppositeShort: false,
+        }),
+      });
+    const books = groupLiveStructureBooks(
+      [
+        wing("w1", 200, 1),
+        wing("body", 220, -2),
+        wing("w2", 240, 1),
+        pos({
+          positionId: "leap",
+          right: "C",
+          strike: 180,
+          quantity: 1,
+          underlying: "IWM",
+          symbol: "IWM",
+          expiration: "2027-01-15",
+          dte: 400,
+          flags: evaluateOptionRiskFlags({
+            quantity: 1,
+            right: "C",
+            strike: 180,
+            dte: 400,
+            delta: 0.7,
+            spot: 220,
+            coveringShares: 0,
+            pairedOppositeShort: false,
+          }),
+        }),
+      ],
+      "butterfly",
+    );
+    assert.equal(books.length, 1);
+    assert.equal(books[0]!.kind, "butterfly");
+    assert.equal(books[0]!.legs.length, 3);
+    assert.ok(!books[0]!.legs.some((l) => l.positionId === "leap"));
+  });
+
   it("detects a 1-2-1 butterfly from live legs", () => {
     const books = groupLiveStructureBooks(
       [
@@ -60,6 +114,43 @@ describe("groupLiveStructureBooks", () => {
     assert.equal(books.length, 1);
     assert.equal(books[0]!.kind, "butterfly");
     assert.equal(books[0]!.legs.length, 3);
+  });
+
+  it("excludes a long LEAP on the same underlying from the short-strangle book", () => {
+    const leapFlags = evaluateOptionRiskFlags({
+      quantity: 2,
+      right: "C",
+      strike: 400,
+      dte: 400,
+      delta: 0.7,
+      spot: 250,
+      coveringShares: 0,
+      pairedOppositeShort: false,
+    });
+    const books = groupLiveStructureBooks(
+      [
+        pos({ positionId: "p", right: "P", strike: 230, quantity: -10, underlying: "AVGO", symbol: "AVGO" }),
+        pos({ positionId: "c", right: "C", strike: 290, quantity: -10, underlying: "AVGO", symbol: "AVGO" }),
+        pos({
+          positionId: "leap",
+          right: "C",
+          strike: 400,
+          quantity: 2,
+          underlying: "AVGO",
+          symbol: "AVGO",
+          expiration: "2027-01-15",
+          dte: 400,
+          flags: leapFlags,
+        }),
+      ],
+      "short-strangle",
+    );
+    assert.equal(books.length, 1);
+    assert.equal(books[0]!.legs.length, 2);
+    assert.deepEqual(
+      books[0]!.legs.map((l) => l.positionId).sort(),
+      ["c", "p"],
+    );
   });
 
   it("does not call a lone short put a strangle", () => {
