@@ -26,6 +26,9 @@ function pos(partial: Partial<OptionRiskPosition> & Pick<OptionRiskPosition, "po
     spot: 100,
     intrinsic: 0,
     marginSecured: 10000,
+    avgPrice: null,
+    markPrice: null,
+    iv: null,
     flags,
     ...partial,
   };

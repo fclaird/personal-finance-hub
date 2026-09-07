@@ -72,6 +72,9 @@ describe("optionRiskEventsFromSummary", () => {
       spot: 201,
       intrinsic: 100,
       marginSecured: 20000,
+      avgPrice: null,
+      markPrice: null,
+      iv: null,
       flags: evaluateOptionRiskFlags({ ...base, dte: 5, delta: -0.32, spot: 201 }),
     };
     const summary: OptionRiskSummary = {
