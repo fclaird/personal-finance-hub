@@ -8,7 +8,9 @@ export type SituationTreeNode =
       kind: "open";
       label: string;
       members: SituationMemberView[];
+      /** Realized G/L on this step — null for initial open (credits are unrealized). */
       stepNet: number | null;
+      /** Open credit: establishing premium still on open lots after this step. */
       cumulativeNet: number | null;
       children: SituationTreeNode[];
     }
@@ -20,9 +22,11 @@ export type SituationTreeNode =
       openMembers: SituationMemberView[];
       /** Members chronologically before this adjustment (for per-leg realized G/L). */
       priorMembers: SituationMemberView[];
+      /** Realized G/L on closed legs only (not roll cash / new open credit). */
       stepNet: number | null;
       /** Realized G/L on closed legs vs original open credits. */
       realizedOnClose: number | null;
+      /** Open credit remaining after this adjustment. */
       cumulativeNet: number | null;
       children: SituationTreeNode[];
     }
@@ -40,6 +44,7 @@ export type SituationTreeNode =
       kind: "current";
       label: string;
       symbols: string[];
+      /** Live open premium on tip structure (unrealized). */
       cumulativeNet: number | null;
       children: SituationTreeNode[];
     }
@@ -53,24 +58,18 @@ export type SituationTreeNode =
       children: SituationTreeNode[];
     };
 
-function sumNets(members: SituationMemberView[]): number | null {
-  let sum = 0;
-  let any = false;
-  for (const m of members) {
-    if (m.netAmount != null && Number.isFinite(m.netAmount)) {
-      sum += m.netAmount;
-      any = true;
-    }
-  }
-  return any ? Math.round(sum * 100) / 100 : null;
+type CreditLot = {
+  symbol: string;
+  qtyRemaining: number;
+  creditPerContract: number;
+};
+
+function absQty(q: number | null | undefined): number {
+  return q != null && Number.isFinite(q) ? Math.abs(q) : 0;
 }
 
-function addCumulative(
-  prev: number | null,
-  step: number | null,
-): number | null {
-  if (prev == null && step == null) return null;
-  return Math.round(((prev ?? 0) + (step ?? 0)) * 100) / 100;
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 function roleRank(role: SituationMemberView["role"]): number {
@@ -115,10 +114,86 @@ function memberLabel(m: SituationMemberView): string {
   return m.symbol ?? m.transactionId;
 }
 
+/** Add establishing credits (open / roll_open) onto the open-lot book. */
+function addEstablishingLots(lots: CreditLot[], members: SituationMemberView[]): void {
+  for (const m of members) {
+    if (m.role !== "open" && m.role !== "roll_open") continue;
+    const net = m.netAmount != null && Number.isFinite(m.netAmount) ? m.netAmount : null;
+    if (net == null) continue;
+    const qty = absQty(m.quantity);
+    // Missing qty: treat whole net as a single-contract lot so open credit still tracks.
+    const useQty = qty > 0 ? qty : 1;
+    lots.push({
+      symbol: (m.symbol ?? "").trim(),
+      qtyRemaining: useQty,
+      creditPerContract: net / useQty,
+    });
+  }
+}
+
+/**
+ * Remove closed qty from open lots (FIFO by symbol, then any symbol) —
+ * same matching order as adjustmentEconomics.
+ */
+function consumeClosedLots(lots: CreditLot[], closeMembers: SituationMemberView[]): void {
+  for (const close of closeMembers) {
+    let qtyLeft = absQty(close.quantity);
+    if (qtyLeft <= 0) {
+      // No qty on the close: consume all lots matching the symbol (or all if blank).
+      const closeSym = (close.symbol ?? "").trim();
+      for (const lot of lots) {
+        if (closeSym && lot.symbol !== closeSym) continue;
+        lot.qtyRemaining = 0;
+      }
+      continue;
+    }
+    const closeSym = (close.symbol ?? "").trim();
+    const consume = (lot: CreditLot, take: number): number => {
+      if (take <= 0 || lot.qtyRemaining <= 0) return 0;
+      const used = Math.min(take, lot.qtyRemaining);
+      lot.qtyRemaining -= used;
+      return used;
+    };
+    if (closeSym) {
+      for (const lot of lots) {
+        if (qtyLeft <= 0) break;
+        if (lot.symbol !== closeSym || lot.qtyRemaining <= 0) continue;
+        qtyLeft -= consume(lot, qtyLeft);
+      }
+    }
+    for (const lot of lots) {
+      if (qtyLeft <= 0) break;
+      if (lot.qtyRemaining <= 0) continue;
+      qtyLeft -= consume(lot, qtyLeft);
+    }
+  }
+  // Drop emptied lots so sums stay clean.
+  for (let i = lots.length - 1; i >= 0; i--) {
+    if (lots[i]!.qtyRemaining <= 0) lots.splice(i, 1);
+  }
+}
+
+/** Sum of establishing credits still on open lots (unrealized open premium). */
+function openCreditSum(lots: CreditLot[]): number | null {
+  if (lots.length === 0) return 0;
+  let sum = 0;
+  let any = false;
+  for (const lot of lots) {
+    if (lot.qtyRemaining <= 0) continue;
+    sum += lot.creditPerContract * lot.qtyRemaining;
+    any = true;
+  }
+  return any ? round2(sum) : 0;
+}
+
 /**
  * Collapse a flat situation member list into a tree:
  * open (root) → adjustment branches (roll_close + roll_open) → close / current tip.
  * Sequential rolls nest so the latest structure sits at the tip.
+ *
+ * Accounting:
+ * - stepNet = realized G/L on that adjustment/close/leg (not roll cash).
+ * - cumulativeNet = open credit still on lots open after that step (grey in UI).
  */
 export function buildSituationTree(
   members: SituationMemberView[],
@@ -130,8 +205,8 @@ export function buildSituationTree(
   const opens = sorted.filter((m) => m.role === "open");
   const rest = sorted.filter((m) => m.role !== "open");
 
-  const openStep = sumNets(opens);
-  let running = openStep;
+  const openLots: CreditLot[] = [];
+  addEstablishingLots(openLots, opens);
   const priorForRealize: SituationMemberView[] = [...opens];
 
   const root: SituationTreeNode = {
@@ -139,8 +214,9 @@ export function buildSituationTree(
     kind: "open",
     label: opens.length ? `Open · ${opens.map(memberLabel).join(" + ")}` : "Open",
     members: opens,
-    stepNet: openStep,
-    cumulativeNet: running,
+    // Initial open: credits are unrealized — no realized step.
+    stepNet: null,
+    cumulativeNet: openCreditSum(openLots),
     children: [],
   };
 
@@ -164,9 +240,11 @@ export function buildSituationTree(
         openMembers.push(rest[i]!);
         i += 1;
       }
-      const step = sumNets([...closeMembers, ...openMembers]);
       const realized = realizedOnClosedLegs(closeMembers, priorForRealize);
-      running = addCumulative(running, step);
+      consumeClosedLots(openLots, closeMembers);
+      // Tag open members as roll_open for lot booking (they already are).
+      addEstablishingLots(openLots, openMembers);
+      const openCredit = openCreditSum(openLots);
       const node: SituationTreeNode = {
         id: `adj:${closeMembers.map((x) => x.transactionId).join(",")}`,
         kind: "adjustment",
@@ -174,9 +252,9 @@ export function buildSituationTree(
         closeMembers,
         openMembers,
         priorMembers: [...priorForRealize],
-        stepNet: step,
+        stepNet: realized,
         realizedOnClose: realized,
-        cumulativeNet: running,
+        cumulativeNet: openCredit,
         children: [],
       };
       tip.children.push(node);
@@ -193,8 +271,7 @@ export function buildSituationTree(
         openMembers.push(rest[i]!);
         i += 1;
       }
-      const step = sumNets(openMembers);
-      running = addCumulative(running, step);
+      addEstablishingLots(openLots, openMembers);
       const node: SituationTreeNode = {
         id: `adj-open:${openMembers.map((x) => x.transactionId).join(",")}`,
         kind: "adjustment",
@@ -202,9 +279,10 @@ export function buildSituationTree(
         closeMembers: [],
         openMembers,
         priorMembers: [...priorForRealize],
-        stepNet: step,
+        // No close → no realized step.
+        stepNet: null,
         realizedOnClose: null,
-        cumulativeNet: running,
+        cumulativeNet: openCreditSum(openLots),
         children: [],
       };
       tip.children.push(node);
@@ -220,15 +298,15 @@ export function buildSituationTree(
         closeMembers.push(rest[i]!);
         i += 1;
       }
-      const step = sumNets(closeMembers);
-      running = addCumulative(running, step);
+      const realized = realizedOnClosedLegs(closeMembers, priorForRealize);
+      consumeClosedLots(openLots, closeMembers);
       tip.children.push({
         id: `close:${closeMembers.map((x) => x.transactionId).join(",")}`,
         kind: "close",
         label: `Close · ${closeMembers.map(memberLabel).join(" + ")}`,
         members: closeMembers,
-        stepNet: step,
-        cumulativeNet: running,
+        stepNet: realized,
+        cumulativeNet: openCreditSum(openLots),
         children: [],
       });
       priorForRealize.push(...closeMembers);
@@ -236,16 +314,16 @@ export function buildSituationTree(
       continue;
     }
 
-    // leg / unknown
-    const step = sumNets([m]);
-    running = addCumulative(running, step);
+    // leg / unknown — realized on that leg; open credit updates
+    const realized = realizedOnClosedLegs([m], priorForRealize);
+    consumeClosedLots(openLots, [m]);
     tip.children.push({
       id: `leg:${m.transactionId}`,
       kind: "leg",
       label: `Leg · ${memberLabel(m)}`,
       member: m,
-      stepNet: step,
-      cumulativeNet: running,
+      stepNet: realized,
+      cumulativeNet: openCreditSum(openLots),
       children: [],
     });
     priorForRealize.push(m);
@@ -294,7 +372,7 @@ export function buildSituationTree(
             ? `Current · ${currentSymbols.join(" + ")}`
             : "Current · still open",
         symbols: currentSymbols,
-        cumulativeNet: running,
+        cumulativeNet: openCreditSum(openLots),
         children: [],
       });
     }

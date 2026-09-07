@@ -6,7 +6,6 @@ import { realizedPerClosedLeg } from "@/lib/situations/adjustmentEconomics";
 import { clumpPartialFills } from "@/lib/situations/clumpPartialFills";
 import {
   buildAdjustmentHighlightParts,
-  formatAdjustmentSummary,
   formatCurrentDteLabel,
   formatFillLine,
   sumMemberNets,
@@ -130,26 +129,17 @@ function AdjustmentFillLines({
   closeMembers,
   openMembers,
   priorMembers,
-  stepNet,
-  realizedOnClose,
   masked,
 }: {
   closeMembers: SituationMemberView[];
   openMembers: SituationMemberView[];
   priorMembers: SituationMemberView[];
-  stepNet: number | null;
-  realizedOnClose: number | null;
   masked: boolean;
 }) {
-  const summary = formatAdjustmentSummary(closeMembers, openMembers);
   const perLeg = realizedPerClosedLeg(closeMembers, priorMembers);
   const realizedById = new Map(perLeg.map((p) => [p.transactionId, p.realized]));
   return (
     <ul className="mt-1 space-y-1">
-      <FillRow line="Net roll" net={stepNet ?? summary.net} masked={masked} realized />
-      {realizedOnClose != null ? (
-        <FillRow line="Realized on close" net={realizedOnClose} masked={masked} realized />
-      ) : null}
       {closeMembers.map((m) => {
         const legRealized = realizedById.get(m.transactionId) ?? null;
         return (
@@ -234,25 +224,14 @@ function TreeNodeView({
   } else if (node.kind === "leg") headline = "Legged out · " + formatFillLine(node.member);
   else headline = "Step";
 
-  // Open tip / initial open while book still open → unrealized (grey).
-  // Adjustments, closes, legs → realized on that step.
-  const stepRealized =
-    node.kind === "adjustment" || node.kind === "close" || node.kind === "leg";
-  const cumRealized =
-    node.kind === "close" || (node.kind === "adjustment" && !situationOpen)
-      ? true
-      : node.kind === "current" || node.kind === "open"
-        ? false
-        : !situationOpen;
-
-  const stepForColor =
-    node.kind === "adjustment" || node.kind === "close" || node.kind === "leg"
-      ? "stepNet" in node
-        ? node.stepNet
-        : null
-      : node.kind === "open"
-        ? node.stepNet
-        : null;
+  // Realized (step) = green/red; Open credit (cum) always grey (unrealized).
+  // Initial open / current / orphan roll_open: no Realized row.
+  const showRealizedStep =
+    node.kind === "close" ||
+    node.kind === "leg" ||
+    (node.kind === "adjustment" && node.closeMembers.length > 0);
+  const stepNetValue = "stepNet" in node ? node.stepNet : null;
+  const stepForColor = showRealizedStep ? stepNetValue : null;
 
   return (
     <li className="relative">
@@ -284,7 +263,7 @@ function TreeNodeView({
                   className={
                     "ml-2 font-medium " +
                     (stepForColor != null
-                      ? pnlTone(stepForColor, { realized: stepRealized })
+                      ? pnlTone(stepForColor, { realized: true })
                       : "text-zinc-800 dark:text-zinc-100")
                   }
                 >
@@ -293,14 +272,14 @@ function TreeNodeView({
               )}
             </div>
             <div className="flex flex-wrap items-baseline gap-3">
-              {"stepNet" in node ? (
-                <span className={pnlTone(node.stepNet, { realized: stepRealized })}>
-                  <span className="mr-1 text-[10px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Step</span>
-                  {usd(node.stepNet, masked)}
+              {showRealizedStep ? (
+                <span className={pnlTone(stepNetValue, { realized: true })}>
+                  <span className="mr-1 text-[10px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Realized</span>
+                  {usd(stepNetValue, masked)}
                 </span>
               ) : null}
-              <span className={"font-semibold " + pnlTone(node.cumulativeNet, { realized: cumRealized })}>
-                <span className="mr-1 text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Cum</span>
+              <span className={"font-semibold " + pnlTone(node.cumulativeNet, { realized: false })}>
+                <span className="mr-1 text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Open credit</span>
                 {usd(node.cumulativeNet, masked)}
               </span>
             </div>
@@ -311,8 +290,6 @@ function TreeNodeView({
               closeMembers={node.closeMembers}
               openMembers={node.openMembers}
               priorMembers={node.priorMembers}
-              stepNet={node.stepNet}
-              realizedOnClose={node.realizedOnClose}
               masked={masked}
             />
           ) : null}
