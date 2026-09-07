@@ -42,9 +42,22 @@ export function liveBookToRiskProfile(book: LiveStructureBook): RiskProfileModel
     if (mapped) legs.push(mapped);
   }
   if (legs.length === 0) return null;
-  const spot =
+  let spot =
     book.legs.map((l) => l.spot).find((s): s is number => s != null && Number.isFinite(s) && s > 0) ??
     null;
+  // Prefer real OHLCV/equity spot; if still missing, mid of short put/call strikes so the spot line can draw.
+  if (spot == null) {
+    let put: number | null = null;
+    let call: number | null = null;
+    for (const leg of legs) {
+      if (leg.quantity >= 0) continue;
+      if (leg.right === "P") put = put == null ? leg.strike : Math.min(put, leg.strike);
+      if (leg.right === "C") call = call == null ? leg.strike : Math.max(call, leg.strike);
+    }
+    if (put != null && call != null && put > 0 && call > 0) {
+      spot = (put + call) / 2;
+    }
+  }
   return buildShortStrangleRiskProfile({
     legs,
     spot,

@@ -262,6 +262,32 @@ export function loadOptionRiskSummary(
     if (Number.isFinite(r.close) && r.close > 0 && !spotMap.has(r.symbol)) spotMap.set(r.symbol, r.close);
   }
 
+  // Fill remaining underlyings from latest OHLCV (prefer 5m, else 1d).
+  const ohlcvNeeded = new Set<string>();
+  for (const r of rows) {
+    const u = normalizeOptionUnderlying(r.underlyingSymbol, r.symbol);
+    if (u && !spotMap.has(u)) ohlcvNeeded.add(u);
+  }
+  const latestOhlcvClose = db.prepare(`
+    SELECT close AS close
+    FROM ohlcv_points
+    WHERE provider = 'schwab' AND symbol = ? AND interval = ?
+      AND close IS NOT NULL AND close > 0
+    ORDER BY ts_ms DESC
+    LIMIT 1
+  `);
+  for (const sym of ohlcvNeeded) {
+    if (spotMap.has(sym)) continue;
+    let close: number | null = null;
+    const m5 = latestOhlcvClose.get(sym, "5m") as { close: number } | undefined;
+    if (m5 && Number.isFinite(m5.close) && m5.close > 0) close = m5.close;
+    else {
+      const d1 = latestOhlcvClose.get(sym, "1d") as { close: number } | undefined;
+      if (d1 && Number.isFinite(d1.close) && d1.close > 0) close = d1.close;
+    }
+    if (close != null) spotMap.set(sym, close);
+  }
+
   type Draft = {
     positionId: string;
     accountId: string;

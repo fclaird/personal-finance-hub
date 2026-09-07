@@ -131,4 +131,41 @@ describe("liveBookToRiskProfile", () => {
     assert.ok(model!.points.length > 0);
     assert.ok(model!.points.every((p) => p.t0Pnl == null));
   });
+
+  it("falls back to midpoint of short put/call strikes when spot is missing", () => {
+    const book: LiveStructureBook = {
+      key: "a1|BE",
+      kind: "short-strangle",
+      accountId: "a1",
+      accountName: "Brokerage",
+      underlying: "BE",
+      expiration: "2026-09-11",
+      dte: 5,
+      legs: [
+        leg({
+          positionId: "p",
+          right: "P",
+          strike: 240,
+          quantity: -2,
+          avgPrice: 3.5,
+          markPrice: 1.2,
+          spot: null,
+        }),
+        leg({
+          positionId: "c",
+          right: "C",
+          strike: 290,
+          quantity: -2,
+          avgPrice: 2.1,
+          markPrice: 0.8,
+          spot: null,
+        }),
+      ],
+    };
+    const model = liveBookToRiskProfile(book);
+    assert.ok(model);
+    assert.equal(model!.spot, 265);
+    assert.ok(model!.points.length > 0);
+  });
+
 });

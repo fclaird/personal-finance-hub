@@ -26,8 +26,8 @@ const ZERO = "#a1a1aa";
 type ChartRow = {
   spot: number;
   expirationPnl: number;
-  expPos: number | null;
-  expNeg: number | null;
+  expPos: number;
+  expNeg: number;
   t0Pnl: number | null;
 };
 
@@ -80,11 +80,12 @@ function ChartTooltip({
 }
 
 function modelToRows(model: RiskProfileModel): ChartRow[] {
+  // Zeros (not nulls) keep Area continuous; Line paints the full expiration curve.
   return model.points.map((p) => ({
     spot: p.spot,
     expirationPnl: p.expirationPnl,
-    expPos: p.expirationPnl >= 0 ? p.expirationPnl : null,
-    expNeg: p.expirationPnl < 0 ? p.expirationPnl : null,
+    expPos: p.expirationPnl >= 0 ? p.expirationPnl : 0,
+    expNeg: p.expirationPnl < 0 ? p.expirationPnl : 0,
     t0Pnl: p.t0Pnl,
   }));
 }
@@ -155,8 +156,8 @@ export function ShortStrangleRiskChart({
         />
       </div>
 
-      <div className="mt-2 h-56 w-full min-w-0 flex-1">
-        <ResponsiveContainer width="100%" height="100%">
+      <div className="mt-2 h-60 w-full min-w-0 shrink-0" style={{ minHeight: 240 }}>
+        <ResponsiveContainer width="100%" height={240} minHeight={240}>
           <ComposedChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
             <XAxis
               dataKey="spot"
@@ -217,27 +218,42 @@ export function ShortStrangleRiskChart({
                 strokeDasharray="2 4"
               />
             ) : null}
+            <defs>
+              <linearGradient id="expPosFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={GREEN} stopOpacity={0.35} />
+                <stop offset="100%" stopColor={GREEN} stopOpacity={0.05} />
+              </linearGradient>
+              <linearGradient id="expNegFill" x1="0" y1="1" x2="0" y2="0">
+                <stop offset="0%" stopColor={RED} stopOpacity={0.35} />
+                <stop offset="100%" stopColor={RED} stopOpacity={0.05} />
+              </linearGradient>
+            </defs>
             <Area
               type="monotone"
               dataKey="expPos"
-              stroke={GREEN}
-              fill={GREEN}
-              fillOpacity={0.28}
-              strokeWidth={1.5}
+              stroke="none"
+              fill="url(#expPosFill)"
+              baseValue={0}
               isAnimationActive={false}
-              connectNulls={false}
               name="Expiration +"
             />
             <Area
               type="monotone"
               dataKey="expNeg"
-              stroke={RED}
-              fill={RED}
-              fillOpacity={0.28}
-              strokeWidth={1.5}
+              stroke="none"
+              fill="url(#expNegFill)"
+              baseValue={0}
               isAnimationActive={false}
-              connectNulls={false}
               name="Expiration −"
+            />
+            <Line
+              type="monotone"
+              dataKey="expirationPnl"
+              stroke={GREEN}
+              strokeWidth={1.75}
+              dot={false}
+              isAnimationActive={false}
+              name="Expiration"
             />
             {hasT0 ? (
               <Line
