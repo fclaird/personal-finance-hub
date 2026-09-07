@@ -2,19 +2,21 @@
 
 import { formatUsd2 } from "@/lib/format";
 import type { SituationMemberView, SituationView } from "@/lib/situations/apiTypes";
-import { closedFillRowNet, realizedPerClosedLeg } from "@/lib/situations/adjustmentEconomics";
 import { clumpPartialFills } from "@/lib/situations/clumpPartialFills";
 import {
   buildAdjustmentHighlightParts,
   formatCurrentDteLabel,
   formatFillLine,
+  sumMemberNets,
   type AdjustmentHighlightPart,
 } from "@/lib/situations/formatSituationFill";
 import {
   buildSituationTree,
   type SituationTreeNode,
 } from "@/lib/situations/situationTree";
-import { posNegClass } from "@/lib/terminal/colors";
+import { pnlTone, SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
+
+export { pnlTone };
 
 function kindDotClass(kind: SituationTreeNode["kind"]): string {
   switch (kind) {
@@ -53,19 +55,6 @@ function usd(v: number | null | undefined, masked: boolean): string {
   return formatUsd2(v, { mask: masked });
 }
 
-/**
- * Open/unrealized nets stay grey; realized steps use green/red by sign.
- * Credits on a still-open book are not "wins" yet.
- */
-export function pnlTone(
-  net: number | null | undefined,
-  opts: { realized: boolean },
-): string {
-  if (net == null || !Number.isFinite(net) || net === 0) return "text-zinc-600 dark:text-zinc-300";
-  if (!opts.realized) return "text-zinc-600 dark:text-zinc-300";
-  return posNegClass(net) || "text-zinc-600 dark:text-zinc-300";
-}
-
 const ADJUSTMENT_CHANGED_CLASS =
   "rounded px-1 bg-amber-400/20 text-amber-100 ring-1 ring-amber-400/50";
 
@@ -96,7 +85,7 @@ function FillRow({
   masked: boolean;
   realized: boolean;
 }) {
-  const rowClass = realized ? pnlTone(net, { realized: true }) : "text-zinc-600 dark:text-zinc-300";
+  const rowClass = realized ? pnlTone(net, { realized: true }) : SITUATION_FILL_CASHFLOW_CLASS;
   return (
     <li className={"flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] " + rowClass}>
       <span className="min-w-0 flex-1">{line}</span>
@@ -127,40 +116,27 @@ function OpenFillLines({ members, masked }: { members: SituationMemberView[]; ma
 function AdjustmentFillLines({
   closeMembers,
   openMembers,
-  priorMembers,
   masked,
 }: {
   closeMembers: SituationMemberView[];
   openMembers: SituationMemberView[];
-  priorMembers: SituationMemberView[];
   masked: boolean;
 }) {
-  const perLeg = realizedPerClosedLeg(closeMembers, priorMembers);
-  const realizedById = new Map(perLeg.map((p) => [p.transactionId, p.realized]));
   return (
     <ul className="mt-1 space-y-1">
-      {closeMembers.map((m) => {
-        const legRealized = realizedById.get(m.transactionId) ?? null;
-        return (
-          <li
-            key={"c:" + m.transactionId}
-            className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 pl-3 text-[10px] text-zinc-600 dark:text-zinc-300"
-          >
-            <span className="min-w-0 flex-1">closed · {formatFillLine(m)}</span>
-            <span
-              className={
-                "shrink-0 tabular-nums font-medium " + pnlTone(legRealized, { realized: true })
-              }
-            >
-              {usd(legRealized, masked)}
-            </span>
-          </li>
-        );
-      })}
+      {closeMembers.map((m) => (
+        <li
+          key={"c:" + m.transactionId}
+          className={"flex flex-wrap items-baseline gap-x-3 gap-y-0.5 pl-3 text-[10px] " + SITUATION_FILL_CASHFLOW_CLASS}
+        >
+          <span className="min-w-0 flex-1">closed · {formatFillLine(m)}</span>
+          <span className="shrink-0 tabular-nums font-medium">{usd(m.netAmount, masked)}</span>
+        </li>
+      ))}
       {openMembers.map((m) => (
         <li
           key={"o:" + m.transactionId}
-          className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 pl-3 text-[10px] text-zinc-600 dark:text-zinc-300"
+          className={"flex flex-wrap items-baseline gap-x-3 gap-y-0.5 pl-3 text-[10px] " + SITUATION_FILL_CASHFLOW_CLASS}
         >
           <span className="min-w-0 flex-1">opened · {formatFillLine(m)}</span>
           <span className="shrink-0 tabular-nums">{usd(m.netAmount, masked)}</span>
@@ -170,43 +146,25 @@ function AdjustmentFillLines({
   );
 }
 
-function CloseFillLines({
-  members,
-  priorMembers,
-  stepNet,
-  masked,
-}: {
-  members: SituationMemberView[];
-  priorMembers: SituationMemberView[];
-  stepNet: number | null;
-  masked: boolean;
-}) {
+function CloseFillLines({ members, masked }: { members: SituationMemberView[]; masked: boolean }) {
   if (members.length === 0) return null;
   if (members.length === 1) {
     const m = members[0]!;
-    const realized = closedFillRowNet(m, priorMembers, stepNet);
     return (
       <ul className="mt-1 space-y-1">
-        <FillRow line={formatFillLine(m)} net={realized} masked={masked} realized />
+        <FillRow line={formatFillLine(m)} net={m.netAmount} masked={masked} realized={false} />
       </ul>
     );
   }
-  const perLeg = realizedPerClosedLeg(members, priorMembers);
-  const realizedById = new Map(perLeg.map((p) => [p.transactionId, p.realized]));
+  const combined = sumMemberNets(members);
   return (
     <ul className="mt-1 space-y-1">
-      <FillRow line={members.length + " closes · net"} net={stepNet} masked={masked} realized />
-      {members.map((m) => {
-        const legRealized = realizedById.get(m.transactionId) ?? null;
-        return (
-          <li
-            key={m.transactionId}
-            className={"pl-3 text-[10px] " + pnlTone(legRealized, { realized: true })}
-          >
-            {formatFillLine(m)} · {usd(legRealized, masked)}
-          </li>
-        );
-      })}
+      <FillRow line={members.length + " closes · net"} net={combined} masked={masked} realized={false} />
+      {members.map((m) => (
+        <li key={m.transactionId} className={"pl-3 text-[10px] " + SITUATION_FILL_CASHFLOW_CLASS}>
+          {formatFillLine(m)} · {usd(m.netAmount, masked)}
+        </li>
+      ))}
     </ul>
   );
 }
@@ -306,21 +264,13 @@ function TreeNodeView({
             <AdjustmentFillLines
               closeMembers={node.closeMembers}
               openMembers={node.openMembers}
-              priorMembers={node.priorMembers}
               masked={masked}
             />
           ) : null}
-          {node.kind === "close" ? (
-            <CloseFillLines
-              members={node.members}
-              priorMembers={node.priorMembers}
-              stepNet={node.stepNet}
-              masked={masked}
-            />
-          ) : null}
+          {node.kind === "close" ? <CloseFillLines members={node.members} masked={masked} /> : null}
           {node.kind === "leg" ? (
             <ul className="mt-1 space-y-1">
-              <FillRow line={formatFillLine(node.member)} net={node.stepNet} masked={masked} realized />
+              <FillRow line={formatFillLine(node.member)} net={node.member.netAmount} masked={masked} realized={false} />
             </ul>
           ) : null}
           {node.kind === "current" ? (

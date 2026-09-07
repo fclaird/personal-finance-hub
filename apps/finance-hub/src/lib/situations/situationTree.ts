@@ -35,8 +35,6 @@ export type SituationTreeNode =
       kind: "close";
       label: string;
       members: SituationMemberView[];
-      /** Members chronologically before this close (for per-leg realized G/L). */
-      priorMembers: SituationMemberView[];
       stepNet: number | null;
       cumulativeNet: number | null;
       children: SituationTreeNode[];
@@ -307,7 +305,6 @@ export function buildSituationTree(
         kind: "close",
         label: `Close · ${closeMembers.map(memberLabel).join(" + ")}`,
         members: closeMembers,
-        priorMembers: [...priorForRealize],
         stepNet: realized,
         cumulativeNet: openCreditSum(openLots),
         children: [],
