@@ -147,4 +147,158 @@ describe("proposeSituations N-transaction linking", () => {
     ]);
     assert.equal(rows[0]!.kind, "butterfly");
   });
+
+  it("rolls the older same-strike put, not the nearer-dated overlapping book", () => {
+    const rows = proposeSituations([
+      txn({
+        id: "open1",
+        accountId: "a1",
+        tradeDate: "2026-06-01",
+        netAmount: 300,
+        legs: [leg({ symbol: "IWM 180P JUL", right: "P", instruction: "sell_open", strike: 180, expiration: "2026-07-17" })],
+      }),
+      txn({
+        id: "open2",
+        accountId: "a1",
+        tradeDate: "2026-06-10",
+        netAmount: 280,
+        legs: [leg({ symbol: "IWM 180P AUG", right: "P", instruction: "sell_open", strike: 180, expiration: "2026-08-21" })],
+      }),
+      txn({
+        id: "roll-close",
+        accountId: "a1",
+        tradeDate: "2026-06-20",
+        netAmount: -80,
+        orderId: "roll-jul",
+        legs: [
+          leg({
+            symbol: "IWM 180P JUL",
+            right: "P",
+            instruction: "buy_close",
+            strike: 180,
+            expiration: "2026-07-17",
+            opening: false,
+          }),
+        ],
+      }),
+      txn({
+        id: "roll-open",
+        accountId: "a1",
+        tradeDate: "2026-06-20",
+        netAmount: 220,
+        orderId: "roll-jul",
+        legs: [leg({ symbol: "IWM 175P AUG", right: "P", instruction: "sell_open", strike: 175, expiration: "2026-08-21" })],
+      }),
+    ]);
+    const jul = rows.find((r) => r.members.some((m) => m.transactionId === "open1"));
+    const aug = rows.find((r) => r.members.some((m) => m.transactionId === "open2"));
+    assert.ok(jul, "June 1 book");
+    assert.ok(aug, "June 10 book");
+    assert.notEqual(jul, aug);
+    assert.deepEqual(
+      jul!.members.map((m) => `${m.transactionId}:${m.role}`).sort(),
+      ["open1:open", "roll-close:roll_close", "roll-open:roll_open"],
+    );
+    assert.deepEqual(
+      aug!.members.map((m) => `${m.transactionId}:${m.role}`),
+      ["open2:open"],
+    );
+  });
+
+  it("attaches a two-wing roll to the book that uniquely holds the call strike", () => {
+    const rows = proposeSituations([
+      txn({
+        id: "s1-p",
+        accountId: "a1",
+        tradeDate: "2026-06-01",
+        netAmount: 200,
+        legs: [leg({ symbol: "IWM 180P", right: "P", instruction: "sell_open", strike: 180, expiration: "2026-07-17" })],
+      }),
+      txn({
+        id: "s1-c",
+        accountId: "a1",
+        tradeDate: "2026-06-01",
+        netAmount: 180,
+        legs: [leg({ symbol: "IWM 230C", right: "C", instruction: "sell_open", strike: 230, expiration: "2026-07-17" })],
+      }),
+      txn({
+        id: "s2-p",
+        accountId: "a1",
+        tradeDate: "2026-06-05",
+        netAmount: 190,
+        legs: [leg({ symbol: "IWM 180P", right: "P", instruction: "sell_open", strike: 180, expiration: "2026-07-17" })],
+      }),
+      txn({
+        id: "s2-c",
+        accountId: "a1",
+        tradeDate: "2026-06-05",
+        netAmount: 170,
+        legs: [leg({ symbol: "IWM 240C", right: "C", instruction: "sell_open", strike: 240, expiration: "2026-07-17" })],
+      }),
+      // Put close id sorts first so first-match findBookForAnyClose would steal onto the nearer Jun 5 book.
+      txn({
+        id: "aaa-close-put",
+        accountId: "a1",
+        tradeDate: "2026-06-20",
+        netAmount: -90,
+        orderId: "roll-s1",
+        legs: [
+          leg({
+            symbol: "IWM 180P",
+            right: "P",
+            instruction: "buy_close",
+            strike: 180,
+            expiration: "2026-07-17",
+            opening: false,
+          }),
+        ],
+      }),
+      txn({
+        id: "zzz-close-call",
+        accountId: "a1",
+        tradeDate: "2026-06-20",
+        netAmount: -70,
+        orderId: "roll-s1",
+        legs: [
+          leg({
+            symbol: "IWM 230C",
+            right: "C",
+            instruction: "buy_close",
+            strike: 230,
+            expiration: "2026-07-17",
+            opening: false,
+          }),
+        ],
+      }),
+      txn({
+        id: "roll-s1-open-p",
+        accountId: "a1",
+        tradeDate: "2026-06-20",
+        netAmount: 210,
+        orderId: "roll-s1",
+        legs: [leg({ symbol: "IWM 175P", right: "P", instruction: "sell_open", strike: 175, expiration: "2026-08-21" })],
+      }),
+      txn({
+        id: "roll-s1-open-c",
+        accountId: "a1",
+        tradeDate: "2026-06-20",
+        netAmount: 160,
+        orderId: "roll-s1",
+        legs: [leg({ symbol: "IWM 235C", right: "C", instruction: "sell_open", strike: 235, expiration: "2026-08-21" })],
+      }),
+    ]);
+    const s1 = rows.find((r) => r.members.some((m) => m.transactionId === "s1-p"));
+    const s2 = rows.find((r) => r.members.some((m) => m.transactionId === "s2-p"));
+    assert.ok(s1, "June 1 strangle");
+    assert.ok(s2, "June 5 strangle");
+    const s1Ids = s1!.members.map((m) => m.transactionId).sort();
+    assert.ok(s1Ids.includes("aaa-close-put"));
+    assert.ok(s1Ids.includes("zzz-close-call"));
+    assert.ok(s1Ids.includes("roll-s1-open-p"));
+    assert.ok(s1Ids.includes("roll-s1-open-c"));
+    assert.deepEqual(
+      s2!.members.map((m) => m.transactionId).sort(),
+      ["s2-c", "s2-p"],
+    );
+  });
 });
