@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import type { SituationMemberView } from "@/lib/situations/apiTypes";
 import { pnlTone, SITUATION_ACTION_LINE_CLASS, SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
-import { buildSituationTree } from "@/lib/situations/situationTree";
+import { buildSituationTree, situationBlockFigures } from "@/lib/situations/situationTree";
 
 function m(
   partial: Partial<SituationMemberView> & Pick<SituationMemberView, "transactionId" | "role" | "tradeDate">,
@@ -96,13 +96,16 @@ describe("buildSituationTree", () => {
     assert.equal(adj.realizedOnClose, 60);
     // Open credit after roll = new open premium only.
     assert.equal(adj.cumulativeNet, 80);
+    assert.equal(adj.realizedCarry, 60);
     assert.equal(adj.priorMembers.length, 1);
     assert.equal(adj.priorMembers[0]!.transactionId, "open");
     const close = adj.children[0]!;
     assert.equal(close.kind, "close");
-    // Final close realized: 80 + (-20) = 60; open credit cleared.
+    // Final close realized: 80 + (-20) = 60; open credit cleared; carry 60+60.
     assert.equal(close.stepNet, 60);
     assert.equal(close.cumulativeNet, 0);
+    if (close.kind !== "close") throw new Error("expected close");
+    assert.equal(close.realizedCarry, 120);
   });
 
   it("open + roll: step is realized only; cum is new open credit (not cash stack)", () => {
@@ -144,6 +147,7 @@ describe("buildSituationTree", () => {
     if (adj.kind !== "adjustment") throw new Error("expected adjustment");
     assert.equal(adj.stepNet, 200); // 1000 + (-800)
     assert.equal(adj.cumulativeNet, 800); // not 1000-800+800 cash stack, not 1000+cash
+    assert.equal(adj.realizedCarry, 200);
     const tip = adj.children[0]!;
     assert.equal(tip.kind, "current");
     assert.equal(tip.cumulativeNet, 800);
@@ -228,18 +232,22 @@ describe("buildSituationTree", () => {
     if (callClose?.kind !== "close") throw new Error("expected close");
     assert.equal(callClose.members[0]!.netAmount, -1106.27);
     assert.equal(callClose.stepNet, 2257.34);
+    assert.equal(callClose.realizedCarry, 2257.34);
     // Action line / fill: debit stays grey. REALIZED header: green on the locked gain.
     assert.equal(pnlTone(callClose.members[0]!.netAmount, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
     assert.doesNotMatch(SITUATION_ACTION_LINE_CLASS, /emerald|red/);
     assert.match(pnlTone(callClose.stepNet, { realized: true }), /emerald/);
+    assert.match(pnlTone(callClose.realizedCarry, { realized: true }), /emerald/);
 
     const putClose = root.children.find((c) => c.kind === "leg");
     assert.equal(putClose?.kind, "leg");
     if (putClose?.kind !== "leg") throw new Error("expected leg");
     assert.equal(putClose.member.netAmount, -366.27);
     assert.equal(putClose.stepNet, 5337.29);
+    assert.equal(putClose.realizedCarry, 7594.63);
     assert.equal(pnlTone(putClose.member.netAmount, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
     assert.match(pnlTone(putClose.stepNet, { realized: true }), /emerald/);
+    assert.match(pnlTone(putClose.realizedCarry, { realized: true }), /emerald/);
   });
 
   it("grouped close fills: child cashflow is the debit sum; header REALIZED is net G/L", () => {
@@ -284,7 +292,9 @@ describe("buildSituationTree", () => {
     assert.equal(close.kind, "close");
     if (close.kind !== "close") throw new Error("expected close");
     assert.equal(close.stepNet, 7594.63);
+    assert.equal(close.realizedCarry, 7594.63);
     assert.match(pnlTone(close.stepNet, { realized: true }), /emerald/);
+    assert.match(pnlTone(close.realizedCarry, { realized: true }), /emerald/);
     const debitSum = close.members.reduce((s, m) => s + (m.netAmount ?? 0), 0);
     assert.equal(Math.round(debitSum * 100) / 100, -1472.54);
     assert.equal(pnlTone(debitSum, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
@@ -342,7 +352,118 @@ describe("buildSituationTree", () => {
     assert.doesNotMatch(SITUATION_ACTION_LINE_CLASS, /emerald|red/);
     assert.equal(leg.stepNet, 3577); // 4000 + (-423)
     assert.equal(close.stepNet, 2100); // 3500 + (-1400)
+    assert.equal(leg.realizedCarry, 3577);
+    assert.equal(close.realizedCarry, 5677);
     assert.match(pnlTone(leg.stepNet, { realized: true }), /emerald/);
     assert.match(pnlTone(close.stepNet, { realized: true }), /emerald/);
+  });
+
+  it("right column: remaining open credit, step realized, then running position total", () => {
+    // Open book with three adjustments. Second step is a large debit so carry
+    // drops (possibly through zero) then the next step recovers — any ticker.
+    const tree = buildSituationTree(
+      [
+        m({
+          transactionId: "oC",
+          role: "open",
+          tradeDate: "2026-08-05",
+          symbol: "ZZZ 130C",
+          quantity: -1,
+          netAmount: 1000,
+        }),
+        m({
+          transactionId: "oP",
+          role: "open",
+          tradeDate: "2026-08-05",
+          symbol: "ZZZ 90P",
+          quantity: -1,
+          netAmount: 2000,
+        }),
+        m({
+          transactionId: "c1",
+          role: "roll_close",
+          tradeDate: "2026-08-07",
+          symbol: "ZZZ 130C",
+          quantity: 1,
+          netAmount: -200,
+        }),
+        m({
+          transactionId: "o1",
+          role: "roll_open",
+          tradeDate: "2026-08-07",
+          symbol: "ZZZ 115C",
+          quantity: -1,
+          netAmount: 800,
+        }),
+        m({
+          transactionId: "c2",
+          role: "roll_close",
+          tradeDate: "2026-08-19",
+          symbol: "ZZZ 90P",
+          quantity: 1,
+          netAmount: -3500,
+        }),
+        m({
+          transactionId: "o2",
+          role: "roll_open",
+          tradeDate: "2026-08-19",
+          symbol: "ZZZ 85P",
+          quantity: -1,
+          netAmount: 4000,
+        }),
+        m({
+          transactionId: "c3",
+          role: "roll_close",
+          tradeDate: "2026-08-20",
+          symbol: "ZZZ 115C",
+          quantity: 1,
+          netAmount: -100,
+        }),
+        m({
+          transactionId: "o3",
+          role: "roll_open",
+          tradeDate: "2026-08-20",
+          symbol: "ZZZ 100C",
+          quantity: -1,
+          netAmount: 500,
+        }),
+      ],
+      { status: "open" },
+    );
+    const root = tree[0]!;
+    const adj1 = root.children[0]!;
+    assert.equal(adj1.kind, "adjustment");
+    if (adj1.kind !== "adjustment") throw new Error("expected adjustment");
+    const adj2 = adj1.children[0]!;
+    assert.equal(adj2.kind, "adjustment");
+    if (adj2.kind !== "adjustment") throw new Error("expected adjustment");
+    const adj3 = adj2.children[0]!;
+    assert.equal(adj3.kind, "adjustment");
+    if (adj3.kind !== "adjustment") throw new Error("expected adjustment");
+
+    const col1 = situationBlockFigures(adj1);
+    assert.equal(col1.openCredit, 2800);
+    assert.equal(col1.realized, 800);
+    assert.equal(col1.total, 800);
+    assert.equal(col1.showRealizedStep, true);
+    assert.equal(pnlTone(col1.openCredit, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
+    assert.equal(pnlTone(adj1.closeMembers[0]!.netAmount, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
+    assert.match(pnlTone(col1.realized, { realized: true }), /emerald/);
+    assert.match(pnlTone(col1.total, { realized: true }), /emerald/);
+
+    const col2 = situationBlockFigures(adj2);
+    assert.equal(col2.openCredit, 4800);
+    assert.equal(col2.realized, -1500);
+    assert.equal(col2.total, -700);
+    assert.equal(pnlTone(adj2.closeMembers[0]!.netAmount, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
+    assert.match(pnlTone(col2.realized, { realized: true }), /red/);
+    assert.match(pnlTone(col2.total, { realized: true }), /red/);
+
+    const col3 = situationBlockFigures(adj3);
+    assert.equal(col3.openCredit, 4500);
+    assert.equal(col3.realized, 700);
+    assert.equal(col3.total, 0);
+    assert.match(pnlTone(col3.realized, { realized: true }), /emerald/);
+    assert.equal(pnlTone(col3.total, { realized: true }), SITUATION_FILL_CASHFLOW_CLASS);
   });
 });

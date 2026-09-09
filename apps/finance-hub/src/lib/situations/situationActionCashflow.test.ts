@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import type { SituationMemberView } from "@/lib/situations/apiTypes";
 import { situationActionCashflow, situationActionCashflowClass } from "@/lib/situations/situationActionCashflow";
 import { pnlTone, SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
-import { buildSituationTree } from "@/lib/situations/situationTree";
+import { buildSituationTree, situationBlockFigures } from "@/lib/situations/situationTree";
 
 function m(
   partial: Partial<SituationMemberView> & Pick<SituationMemberView, "transactionId" | "role" | "tradeDate">,
@@ -91,7 +91,19 @@ describe("situationActionCashflow", () => {
 
     assert.equal(leg.stepNet, 5743.6);
     assert.equal(close.stepNet, 6333.57);
+    assert.equal(leg.realizedCarry, 5743.6);
+    assert.equal(close.realizedCarry, 12077.17);
+    const legCol = situationBlockFigures(leg);
+    assert.equal(legCol.openCredit, 7776.69);
+    assert.equal(legCol.realized, 5743.6);
+    assert.equal(legCol.total, 5743.6);
+    const closeCol = situationBlockFigures(close);
+    assert.equal(closeCol.openCredit, 0);
+    assert.equal(closeCol.realized, 6333.57);
+    assert.equal(closeCol.total, 12077.17);
     assert.match(pnlTone(leg.stepNet, { realized: true }), /emerald/);
     assert.match(pnlTone(close.stepNet, { realized: true }), /emerald/);
+    assert.match(pnlTone(leg.realizedCarry, { realized: true }), /emerald/);
+    assert.match(pnlTone(close.realizedCarry, { realized: true }), /emerald/);
   });
 });

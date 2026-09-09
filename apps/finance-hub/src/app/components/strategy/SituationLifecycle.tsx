@@ -12,10 +12,10 @@ import {
 } from "@/lib/situations/formatSituationFill";
 import {
   buildSituationTree,
+  situationBlockFigures,
   type SituationTreeNode,
 } from "@/lib/situations/situationTree";
 import { pnlTone, SITUATION_ACTION_LINE_CLASS, SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
-import { situationActionCashflow } from "@/lib/situations/situationActionCashflow";
 
 export { pnlTone };
 
@@ -75,19 +75,57 @@ function AdjustmentHeadlineParts({ parts }: { parts: AdjustmentHighlightPart[] }
   );
 }
 
+/** Shared width so open credit, fill cashflow, realized, and total form one column. */
+const TREE_AMOUNT_CLASS = "w-[8.5rem] shrink-0 text-right tabular-nums";
+
 function CashflowAmount({ net, masked }: { net: number | null; masked: boolean }) {
   return (
-    <span className={"shrink-0 tabular-nums font-medium " + SITUATION_FILL_CASHFLOW_CLASS}>
+    <span className={TREE_AMOUNT_CLASS + " font-medium " + SITUATION_FILL_CASHFLOW_CLASS}>
       {usd(net, masked)}
     </span>
   );
 }
 
-/** Close/leg/open fill rows: description + debit/credit stay grey. Never posNeg. */
-function CashflowFillRow({ line, net, masked }: { line: string; net: number | null; masked: boolean }) {
+function LabeledAmount({
+  label,
+  net,
+  masked,
+  toneClass,
+  emphasize,
+}: {
+  label: string;
+  net: number | null;
+  masked: boolean;
+  toneClass: string;
+  emphasize?: boolean;
+}) {
   return (
-    <li className={"flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] " + SITUATION_FILL_CASHFLOW_CLASS}>
-      <span className={"min-w-0 flex-1 " + SITUATION_FILL_CASHFLOW_CLASS}>{line}</span>
+    <div className="flex shrink-0 items-baseline justify-end gap-2">
+      <span className="text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+        {label}
+      </span>
+      <span className={TREE_AMOUNT_CLASS + " " + (emphasize ? "font-semibold " : "font-medium ") + toneClass}>
+        {usd(net, masked)}
+      </span>
+    </div>
+  );
+}
+
+/** Close/leg/open fill rows: description + debit/credit stay grey. Never posNeg. */
+function CashflowFillRow({
+  line,
+  net,
+  masked,
+  indent,
+}: {
+  line: string;
+  net: number | null;
+  masked: boolean;
+  indent?: boolean;
+}) {
+  return (
+    <li className={"flex items-start gap-x-3 text-[11px] " + SITUATION_FILL_CASHFLOW_CLASS}>
+      <span className={"min-w-0 flex-1 " + (indent ? "pl-3 " : "") + SITUATION_FILL_CASHFLOW_CLASS}>{line}</span>
       <CashflowAmount net={net} masked={masked} />
     </li>
   );
@@ -121,22 +159,22 @@ function AdjustmentFillLines({
   return (
     <ul className="mt-1 space-y-1">
       {closeMembers.map((m) => (
-        <li
+        <CashflowFillRow
           key={"c:" + m.transactionId}
-          className={"flex flex-wrap items-baseline gap-x-3 gap-y-0.5 pl-3 text-[10px] " + SITUATION_FILL_CASHFLOW_CLASS}
-        >
-          <span className={"min-w-0 flex-1 " + SITUATION_FILL_CASHFLOW_CLASS}>closed · {formatFillLine(m)}</span>
-          <CashflowAmount net={m.netAmount} masked={masked} />
-        </li>
+          line={"closed · " + formatFillLine(m)}
+          net={m.netAmount}
+          masked={masked}
+          indent
+        />
       ))}
       {openMembers.map((m) => (
-        <li
+        <CashflowFillRow
           key={"o:" + m.transactionId}
-          className={"flex flex-wrap items-baseline gap-x-3 gap-y-0.5 pl-3 text-[10px] " + SITUATION_FILL_CASHFLOW_CLASS}
-        >
-          <span className={"min-w-0 flex-1 " + SITUATION_FILL_CASHFLOW_CLASS}>opened · {formatFillLine(m)}</span>
-          <CashflowAmount net={m.netAmount} masked={masked} />
-        </li>
+          line={"opened · " + formatFillLine(m)}
+          net={m.netAmount}
+          masked={masked}
+          indent
+        />
       ))}
     </ul>
   );
@@ -157,9 +195,13 @@ function CloseFillLines({ members, masked }: { members: SituationMemberView[]; m
     <ul className="mt-1 space-y-1">
       <CashflowFillRow line={members.length + " closes · net"} net={combined} masked={masked} />
       {members.map((m) => (
-        <li key={m.transactionId} className={"pl-3 text-[10px] " + SITUATION_FILL_CASHFLOW_CLASS}>
-          {formatFillLine(m)} · {usd(m.netAmount, masked)}
-        </li>
+        <CashflowFillRow
+          key={m.transactionId}
+          line={formatFillLine(m)}
+          net={m.netAmount}
+          masked={masked}
+          indent
+        />
       ))}
     </ul>
   );
@@ -170,13 +212,11 @@ function TreeNodeView({
   masked,
   isLast,
   depth,
-  situationOpen,
 }: {
   node: SituationTreeNode;
   masked: boolean;
   isLast: boolean;
   depth: number;
-  situationOpen: boolean;
 }) {
   const hasKids = node.children.length > 0;
   const adjustmentParts =
@@ -195,18 +235,10 @@ function TreeNodeView({
   } else if (node.kind === "leg") headline = "Legged out · " + formatFillLine(node.member);
   else headline = "Step";
 
-  // Realized (step) = green/red; Open credit (cum) always grey (unrealized).
-  // Initial open / current / orphan roll_open: no Realized row.
-  const showRealizedStep =
-    node.kind === "close" ||
-    node.kind === "leg" ||
-    (node.kind === "adjustment" && node.closeMembers.length > 0);
-  const stepNetValue = "stepNet" in node ? node.stepNet : null;
-  const headlineTone =
-    showRealizedStep && stepNetValue != null
-      ? pnlTone(stepNetValue, { realized: true })
-      : SITUATION_ACTION_LINE_CLASS;
-  const closeCashflow = situationActionCashflow(node);
+  const figures = situationBlockFigures(node);
+  const openCreditTone = pnlTone(figures.openCredit, { realized: false });
+  const realizedTone = pnlTone(figures.realized, { realized: true });
+  const totalTone = pnlTone(figures.total, { realized: true });
 
   return (
     <li className="relative">
@@ -226,32 +258,25 @@ function TreeNodeView({
             (hasKids ? "mb-2" : "mb-1")
           }
         >
-          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs">
-            <div className="min-w-0">
+          <div className="flex items-start justify-between gap-3 text-xs">
+            <div className="min-w-0 flex-1">
               <span className="font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">
                 {kindTitle(node.kind)}
               </span>
               {adjustmentParts ? (
                 <AdjustmentHeadlineParts parts={adjustmentParts} />
               ) : (
-                <span className={"ml-2 font-medium " + headlineTone}>
-                  {headline}
-                </span>
+                <span className={"ml-2 font-medium " + SITUATION_ACTION_LINE_CLASS}>{headline}</span>
               )}
             </div>
-            <div className="flex flex-wrap items-baseline gap-3">
-              {showRealizedStep ? (
-                <span className={pnlTone(stepNetValue, { realized: true })}>
-                  <span className="mr-1 text-[10px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Realized</span>
-                  {usd(stepNetValue, masked)}
-                </span>
-              ) : null}
-              <span className={"font-semibold " + pnlTone(node.cumulativeNet, { realized: false })}>
-                <span className="mr-1 text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Open credit</span>
-                {usd(node.cumulativeNet, masked)}
-              </span>
-              {closeCashflow != null ? <CashflowAmount net={closeCashflow} masked={masked} /> : null}
-            </div>
+            {figures.openCredit != null ? (
+              <LabeledAmount
+                label="Open credit"
+                net={figures.openCredit}
+                masked={masked}
+                toneClass={openCreditTone}
+              />
+            ) : null}
           </div>
           {node.kind === "open" ? <OpenFillLines members={node.members} masked={masked} /> : null}
           {node.kind === "adjustment" ? (
@@ -266,6 +291,26 @@ function TreeNodeView({
             <ul className="mt-1 space-y-1">
               <CashflowFillRow line={formatFillLine(node.member)} net={node.member.netAmount} masked={masked} />
             </ul>
+          ) : null}
+          {figures.showRealizedStep ? (
+            <div className="mt-1 space-y-0.5">
+              <LabeledAmount
+                label="Realized"
+                net={figures.realized}
+                masked={masked}
+                toneClass={realizedTone}
+                emphasize
+              />
+              {figures.total != null ? (
+                <LabeledAmount
+                  label="Total"
+                  net={figures.total}
+                  masked={masked}
+                  toneClass={totalTone}
+                  emphasize
+                />
+              ) : null}
+            </div>
           ) : null}
           {node.kind === "current" ? (
             <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
@@ -282,7 +327,6 @@ function TreeNodeView({
                   masked={masked}
                   isLast={idx === node.children.length - 1}
                   depth={depth + 1}
-                  situationOpen={situationOpen}
                 />
               ))}
             </ol>
@@ -332,7 +376,6 @@ export function SituationLifecycle({
               masked={privacyMasked}
               isLast={idx === tree.length - 1}
               depth={0}
-              situationOpen={situationOpen}
             />
           ))}
         </ol>
