@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   Area,
   ComposedChart,
@@ -93,38 +93,13 @@ function modelToRows(model: RiskProfileModel): ChartRow[] {
 export function ShortStrangleRiskChart({
   book,
   privacyMasked = false,
+  liveSpot = null,
 }: {
   book: LiveStructureBook | null;
   privacyMasked?: boolean;
+  /** Best-available live/extended quote for this book's underlying (any ticker). */
+  liveSpot?: number | null;
 }) {
-  const underlying = book?.underlying ?? null;
-  const [liveSpot, setLiveSpot] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!underlying) {
-      setLiveSpot(null);
-      return;
-    }
-    let cancelled = false;
-    setLiveSpot(null);
-    void (async () => {
-      try {
-        const resp = await fetch(
-          `/api/option-strategies/risk-chart-spot?symbol=${encodeURIComponent(underlying)}`,
-          { cache: "no-store" },
-        );
-        const json = (await resp.json()) as { ok?: boolean; spot?: number | null };
-        const px = json.ok ? json.spot : null;
-        if (!cancelled && px != null && Number.isFinite(px) && px > 0) setLiveSpot(px);
-      } catch {
-        /* keep book/OHLCV spot */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [underlying]);
-
   const model = useMemo(
     () => (book ? liveBookToRiskProfile(book, { spotOverride: liveSpot }) : null),
     [book, liveSpot],

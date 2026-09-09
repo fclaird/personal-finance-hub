@@ -36,9 +36,10 @@ export function optionRiskLegToRiskProfileLeg(leg: OptionRiskPosition): RiskProf
  * Build a ToS-style risk profile model from a live structure book.
  * Returns null when legs lack strikes/entry needed for an expiration curve.
  *
- * `spotOverride` is the graphic-only live quote (extended/overnight when cash is closed).
- * Hypothesis: T+0 / expiration curves can use that same spot because they exist only for this
- * chart; option-risk flags, Glance, and the Strategies tree still use `book.legs[].spot`.
+ * `spotOverride` is the graphic-only live quote (extended/overnight when cash is closed)
+ * for whatever underlying this book is. Hypothesis: T+0 / expiration curves can use that
+ * same spot because they exist only for this chart; option-risk flags, Glance, and the
+ * Strategies tree still use `book.legs[].spot`.
  */
 export function liveBookToRiskProfile(
   book: LiveStructureBook,

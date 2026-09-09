@@ -9,7 +9,7 @@ import {
 } from "@/lib/options/riskChartSpot";
 
 describe("bestAvailableSpotFromSchwabEntry", () => {
-  it("when cash is closed, prefers extended last over quote last/close (NBIS overnight)", () => {
+  it("when cash is closed, prefers extended last over quote last/close for any symbol", () => {
     const entry = {
       quote: { lastPrice: 223.05, closePrice: 223.05, mark: 223.05 },
       regular: { regularMarketLastPrice: 223.05 },

@@ -15,51 +15,73 @@ export type FetchedRiskChartSpot = {
 };
 
 /**
- * Live equity print for the Option Strategies PnL risk graphic only.
+ * Live equity prints for the Option Strategies PnL risk graphic only.
  * Schwab `/quotes` extended → quote last/mark → Yahoo post/pre/regular → null (caller uses OHLCV fallback).
+ * Works for any underlying — no ticker special-case.
  */
-export async function fetchRiskChartSpot(
-  symbol: string,
+export async function fetchRiskChartSpots(
+  symbols: Iterable<string>,
   now: Date = new Date(),
-): Promise<FetchedRiskChartSpot> {
-  const sym = normalizeSchwabQuoteSymbol(symbol);
-  if (!sym) return { spot: null, source: null };
-  const sessionOpen = isUsEquityRegularSessionOpen(now);
+): Promise<Map<string, FetchedRiskChartSpot>> {
+  const uniq = [...new Set([...symbols].map((s) => normalizeSchwabQuoteSymbol(s)).filter(Boolean))];
+  const out = new Map<string, FetchedRiskChartSpot>();
+  if (uniq.length === 0) return out;
 
+  const sessionOpen = isUsEquityRegularSessionOpen(now);
+  let resp: Record<string, unknown> = {};
   try {
-    const resp = await fetchSchwabQuotesResponse([sym]);
+    resp = await fetchSchwabQuotesResponse(uniq);
+  } catch {
+    resp = {};
+  }
+
+  const needYahoo: string[] = [];
+  for (const sym of uniq) {
     const entry = resp[sym] ?? resp[sym.toUpperCase()];
     const schwab = bestAvailableSpotFromSchwabEntry(entry, sessionOpen);
     if (schwab.spot != null && schwab.source !== "schwab-close") {
-      return { spot: schwab.spot, source: schwab.source };
+      out.set(sym, { spot: schwab.spot, source: schwab.source });
+      continue;
     }
     if (schwab.spot != null && sessionOpen) {
-      return { spot: schwab.spot, source: schwab.source };
+      out.set(sym, { spot: schwab.spot, source: schwab.source });
+      continue;
     }
+    needYahoo.push(sym);
+    if (schwab.spot != null) out.set(sym, { spot: schwab.spot, source: schwab.source });
+  }
 
+  for (const sym of needYahoo) {
+    const prior = out.get(sym);
     try {
       const chart = await fetchYahooDailyChart(sym, "5d");
       const yahoo = bestAvailableSpotFromYahooChartResult(chart?.result ?? null, sessionOpen);
-      if (yahoo != null && (schwab.close == null || !samePrint(yahoo, schwab.close))) {
-        return { spot: yahoo, source: "yahoo" };
+      if (yahoo != null && (prior?.spot == null || prior.source === "schwab-close")) {
+        const closeLike = prior?.spot;
+        if (closeLike == null || !samePrint(yahoo, closeLike)) {
+          out.set(sym, { spot: yahoo, source: "yahoo" });
+          continue;
+        }
       }
-      if (yahoo != null && schwab.spot == null) {
-        return { spot: yahoo, source: "yahoo" };
+      if (yahoo != null && prior?.spot == null) {
+        out.set(sym, { spot: yahoo, source: "yahoo" });
       }
     } catch {
       /* Yahoo is optional */
     }
-
-    if (schwab.spot != null) return { spot: schwab.spot, source: schwab.source };
-  } catch {
-    try {
-      const chart = await fetchYahooDailyChart(sym, "5d");
-      const yahoo = bestAvailableSpotFromYahooChartResult(chart?.result ?? null, sessionOpen);
-      if (yahoo != null) return { spot: yahoo, source: "yahoo" };
-    } catch {
-      /* both vendors failed */
-    }
   }
 
-  return { spot: null, source: null };
+  for (const sym of uniq) {
+    if (!out.has(sym)) out.set(sym, { spot: null, source: null });
+  }
+  return out;
+}
+
+export async function fetchRiskChartSpot(
+  symbol: string,
+  now: Date = new Date(),
+): Promise<FetchedRiskChartSpot> {
+  const key = normalizeSchwabQuoteSymbol(symbol);
+  const map = await fetchRiskChartSpots([key], now);
+  return map.get(key) ?? { spot: null, source: null };
 }
