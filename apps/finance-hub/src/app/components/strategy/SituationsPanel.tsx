@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { SituationLifecycle } from "@/app/components/strategy/SituationLifecycle";
+import { SituationHeadingTotals, SituationLifecycle } from "@/app/components/strategy/SituationLifecycle";
 import { formatUsd2 } from "@/lib/format";
+import { clumpPartialFills } from "@/lib/situations/clumpPartialFills";
 import { pnlTone } from "@/lib/situations/situationPnlTone";
+import { situationHeadingFigures } from "@/lib/situations/situationTree";
 import { situationKindMatchesTab, type SituationView } from "@/lib/situations/apiTypes";
 
 type KindFilter = "all" | "short-strangles" | "butterflies";
@@ -252,6 +254,7 @@ export function SituationsPanel({
       <div className="flex flex-col gap-3">
         {filtered.map((r) => {
           const expanded = isExpanded(r);
+          const heading = situationHeadingFigures(clumpPartialFills(r.members), { status: r.status });
           return (
             <article
               key={r.id}
@@ -280,14 +283,11 @@ export function SituationsPanel({
                   {r.status}
                 </span>
                 <span className="tabular-nums text-xs text-zinc-600 dark:text-zinc-300">{r.openedOn}</span>
-                <span
-                  className={
-                    "tabular-nums text-sm font-medium " +
-                    pnlTone(r.netPremium, { realized: r.status === "closed" })
-                  }
-                >
-                  {r.netPremium == null ? "—" : formatUsd2(r.netPremium, { mask: privacyMasked })}
-                </span>
+                <SituationHeadingTotals
+                  openCredit={heading.openCredit}
+                  realized={heading.realized}
+                  privacyMasked={privacyMasked}
+                />
                 <span className="text-xs text-zinc-600 dark:text-zinc-300">{r.members.length} fills</span>
                 <span className="flex flex-wrap gap-1">
                   {r.linkStatus === "confirmed" || r.linkStatus === "rejected" ? (

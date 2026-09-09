@@ -3,7 +3,12 @@ import { describe, it } from "node:test";
 
 import type { SituationMemberView } from "@/lib/situations/apiTypes";
 import { pnlTone, SITUATION_ACTION_LINE_CLASS, SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
-import { buildSituationTree, flattenSituationTree, situationBlockFigures } from "@/lib/situations/situationTree";
+import {
+  buildSituationTree,
+  flattenSituationTree,
+  situationBlockFigures,
+  situationHeadingFigures,
+} from "@/lib/situations/situationTree";
 
 function m(
   partial: Partial<SituationMemberView> & Pick<SituationMemberView, "transactionId" | "role" | "tradeDate">,
@@ -43,6 +48,15 @@ describe("buildSituationTree", () => {
     assert.equal(tree[0]!.cumulativeNet, 500);
     assert.equal(tree[0]!.children[0]!.kind, "current");
     assert.equal(tree[0]!.children[0]!.cumulativeNet, 500);
+    const heading = situationHeadingFigures(
+      [
+        m({ transactionId: "o1", role: "open", tradeDate: "2026-08-01", symbol: "QQQ 695P", netAmount: 300 }),
+        m({ transactionId: "o2", role: "open", tradeDate: "2026-08-01", symbol: "QQQ 735C", netAmount: 200 }),
+      ],
+      { status: "open" },
+    );
+    assert.equal(heading.openCredit, 500);
+    assert.equal(heading.realized, null);
   });
 
   it("nests roll_close + roll_open as an adjustment; step=realized, cum=open credit", () => {
@@ -361,8 +375,7 @@ describe("buildSituationTree", () => {
   it("right column: remaining open credit, step realized, then running position total", () => {
     // Open book with three adjustments. Second step is a large debit so carry
     // drops (possibly through zero) then the next step recovers — any ticker.
-    const tree = buildSituationTree(
-      [
+    const members = [
         m({
           transactionId: "oC",
           role: "open",
@@ -427,9 +440,8 @@ describe("buildSituationTree", () => {
           quantity: -1,
           netAmount: 500,
         }),
-      ],
-      { status: "open" },
-    );
+    ];
+    const tree = buildSituationTree(members, { status: "open" });
     const root = tree[0]!;
     const adj1 = root.children[0]!;
     assert.equal(adj1.kind, "adjustment");
@@ -474,5 +486,8 @@ describe("buildSituationTree", () => {
     // Data still nests; flatten is display-only.
     assert.equal(adj1.children[0], adj2);
     assert.equal(flat.length, 5);
+    const heading = situationHeadingFigures(members, { status: "open" });
+    assert.equal(heading.openCredit, 4500);
+    assert.equal(heading.realized, 0);
   });
 });

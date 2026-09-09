@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import type { SituationMemberView } from "@/lib/situations/apiTypes";
 import { situationActionCashflow, situationActionCashflowClass } from "@/lib/situations/situationActionCashflow";
 import { pnlTone, SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
-import { buildSituationTree, situationBlockFigures } from "@/lib/situations/situationTree";
+import { buildSituationTree, situationBlockFigures, situationHeadingFigures } from "@/lib/situations/situationTree";
 
 function m(
   partial: Partial<SituationMemberView> & Pick<SituationMemberView, "transactionId" | "role" | "tradeDate">,
@@ -107,5 +107,47 @@ describe("situationActionCashflow", () => {
     assert.match(pnlTone(close.stepNet, { realized: true }), /emerald/);
     assert.match(pnlTone(leg.realizedCarry, { realized: true }), /emerald/);
     assert.match(pnlTone(close.realizedCarry, { realized: true }), /emerald/);
+
+    const heading = situationHeadingFigures(
+      [
+        m({
+          transactionId: "oP",
+          role: "open",
+          tradeDate: "2026-08-01",
+          symbol: "AVGO 350P",
+          quantity: -10,
+          netAmount: 7776.69,
+        }),
+        m({
+          transactionId: "oC",
+          role: "open",
+          tradeDate: "2026-08-01",
+          symbol: "AVGO 400C",
+          quantity: -10,
+          netAmount: 6166.72,
+        }),
+        m({
+          transactionId: "cC",
+          role: "leg",
+          tradeDate: "2026-09-03",
+          symbol: "AVGO 400C",
+          quantity: 10,
+          netAmount: -423.12,
+        }),
+        m({
+          transactionId: "cP",
+          role: "close",
+          tradeDate: "2026-09-08",
+          symbol: "AVGO 350P",
+          quantity: 10,
+          netAmount: -1443.12,
+        }),
+      ],
+      { status: "closed" },
+    );
+    assert.equal(heading.openCredit, 0);
+    assert.equal(heading.realized, 12077.17);
+    assert.equal(pnlTone(heading.openCredit, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
+    assert.match(pnlTone(heading.realized, { realized: true }), /emerald/);
   });
 });

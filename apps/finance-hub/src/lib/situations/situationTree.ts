@@ -411,6 +411,26 @@ export function flattenSituationTree(roots: SituationTreeNode[]): SituationTreeN
   return out;
 }
 
+/** Book-title figures: remaining open credit + running realized for the whole position. */
+export function situationHeadingFigures(
+  members: SituationMemberView[],
+  options?: { status?: string },
+): { openCredit: number | null; realized: number | null } {
+  const tree = buildSituationTree(members, options);
+  const flat = flattenSituationTree(tree);
+  if (flat.length === 0) return { openCredit: null, realized: null };
+  const last = flat[flat.length - 1]!;
+  let realized: number | null = null;
+  for (let i = flat.length - 1; i >= 0; i--) {
+    const n = flat[i]!;
+    if ("realizedCarry" in n && n.realizedCarry != null) {
+      realized = n.realizedCarry;
+      break;
+    }
+  }
+  return { openCredit: last.cumulativeNet ?? null, realized };
+}
+
 /** Right-column figures for one tree block. UI stacks: credits, fills, realized, net. */
 export function situationBlockFigures(node: SituationTreeNode): {
   openCredit: number | null;

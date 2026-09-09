@@ -20,6 +20,34 @@ import { pnlTone, SITUATION_ACTION_LINE_CLASS, SITUATION_FILL_CASHFLOW_CLASS } f
 
 export { pnlTone };
 
+/** Book title row: remaining open credits (grey) next to running realized/net (green/red). */
+export function SituationHeadingTotals({
+  openCredit,
+  realized,
+  privacyMasked,
+}: {
+  openCredit: number | null;
+  realized: number | null;
+  privacyMasked: boolean;
+}) {
+  return (
+    <div className="flex shrink-0 items-baseline gap-4 tabular-nums">
+      <span className={"text-sm font-medium " + SITUATION_FILL_CASHFLOW_CLASS}>
+        <span className="mr-1 text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+          Credits
+        </span>
+        {openCredit == null ? "—" : formatUsd2(openCredit, { mask: privacyMasked })}
+      </span>
+      <span className={"text-sm font-bold " + pnlTone(realized, { realized: true })}>
+        <span className="mr-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-200">
+          Net
+        </span>
+        {realized == null ? "—" : formatSignedUsd2(realized, { mask: privacyMasked })}
+      </span>
+    </div>
+  );
+}
+
 function kindDotClass(kind: SituationTreeNode["kind"]): string {
   switch (kind) {
     case "open":
