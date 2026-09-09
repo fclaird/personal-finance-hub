@@ -243,6 +243,7 @@ Single-file DDL (`src/db/schema.sql`) applied on startup, plus inline `ALTER TAB
 | Method | Path |
 |--------|------|
 | GET | `/api/strategy-trades` |
+| GET | `/api/strategy-realized` |
 | POST | `/api/strategy-trades/reclassify` |
 
 #### Terminal (18 route files)

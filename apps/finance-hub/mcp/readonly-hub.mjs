@@ -11,6 +11,7 @@ const KEY = process.env.FINANCE_HUB_API_KEY?.trim() ?? "";
 const ALLOW = new Set([
   "/api/option-risk",
   "/api/option-situations",
+  "/api/strategy-realized",
   "/api/strategy-trades",
   "/api/alerts/events",
   "/api/alerts/rules",

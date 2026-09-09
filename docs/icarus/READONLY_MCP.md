@@ -13,6 +13,7 @@ Allowed paths (GET only):
 
 - `/api/option-risk`
 - `/api/option-situations`
+- `/api/strategy-realized`
 - `/api/strategy-trades`
 - `/api/alerts/events`
 - `/api/alerts/rules`
