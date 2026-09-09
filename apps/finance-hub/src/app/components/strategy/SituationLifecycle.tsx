@@ -302,6 +302,7 @@ function TreeNodeView({
                 </span>
               </>
             ) : null}
+          </div>
           {node.kind === "current" ? (
             <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
               Live structure at the tip of this book. Mark-to-market is on the snapshot legs above.
