@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatUsd2 } from "@/lib/format";
 import { symbolPageTargetFromInstrument } from "@/lib/symbolPage";
-import { posNegClass } from "@/lib/terminal/colors";
+import { SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
 import { strategyLabel } from "@/lib/strategy/strategyCategories";
 import type { StrategyTradeApiRow } from "@/lib/strategy/strategyTradeStats";
 
@@ -149,20 +149,10 @@ export function StrategyTradesTable({
               <td className="px-3 py-2 tabular-nums text-zinc-600 dark:text-zinc-400">
                 {r.exitOrCurrentPrice == null ? "—" : formatUsd2(r.exitOrCurrentPrice, { mask: privacyMasked })}
               </td>
-              <td
-                className={
-                  "px-3 py-2 tabular-nums font-medium " +
-                  (r.pnlDollars == null ? "text-zinc-500" : posNegClass(r.pnlDollars) || "text-zinc-800 dark:text-zinc-200")
-                }
-              >
+              <td className={"px-3 py-2 tabular-nums font-medium " + SITUATION_FILL_CASHFLOW_CLASS}>
                 {r.pnlDollars == null ? "—" : formatUsd2(r.pnlDollars, { mask: privacyMasked })}
               </td>
-              <td
-                className={
-                  "px-3 py-2 tabular-nums " +
-                  (r.pnlPct == null ? "text-zinc-500" : posNegClass(r.pnlPct) || "text-zinc-800 dark:text-zinc-200")
-                }
-              >
+              <td className={"px-3 py-2 tabular-nums " + SITUATION_FILL_CASHFLOW_CLASS}>
                 {r.pnlPct == null ? "—" : `${r.pnlPct.toFixed(2)}%`}
               </td>
               <td className="px-3 py-2 text-zinc-700 dark:text-zinc-300">{r.accountName}</td>

@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { SituationLifecycle, pnlTone } from "@/app/components/strategy/SituationLifecycle";
+import { SituationHeadingTotals, SituationLifecycle } from "@/app/components/strategy/SituationLifecycle";
 import { ShortStrangleRiskChart } from "@/app/components/strategy/ShortStrangleRiskChart";
-import { situationRealizedPnl } from "@/lib/situations/adjustmentEconomics";
 import { clumpPartialFills } from "@/lib/situations/clumpPartialFills";
+import { situationHeadingFigures } from "@/lib/situations/situationTree";
 import type { OptionRiskSummary } from "@/lib/alerts/optionRisk";
 import { formatUsd2 } from "@/lib/format";
 import {
@@ -128,6 +128,9 @@ export function LiveStructureBooks({
             const situation = matchSituation(b, situations);
             const isOpen = expanded.has(b.key);
             const strikes = strikeLabel(b);
+            const heading = situation
+              ? situationHeadingFigures(clumpPartialFills(situation.members), { status: situation.status })
+              : { openCredit: null, realized: null };
 
             return (
               <article
@@ -164,37 +167,11 @@ export function LiveStructureBooks({
                       {isOpen ? " · hide history" : " · show history"}
                     </div>
                   </div>
-                  <div className="flex shrink-0 flex-col items-end gap-0.5 pr-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-300">
-                      Snapshot
-                    </span>
-                    {situation
-                      ? (() => {
-                          const realized = situationRealizedPnl(clumpPartialFills(situation.members));
-                          if (realized == null) {
-                            return (
-                              <span className="text-xs tabular-nums text-zinc-500 dark:text-zinc-300">
-                                Net realized —
-                              </span>
-                            );
-                          }
-                          return (
-                            <span
-                              className={
-                                "text-xs tabular-nums font-medium " +
-                                pnlTone(realized, { realized: true })
-                              }
-                            >
-                              Net realized {formatUsd2(realized, { mask: privacyMasked })}
-                            </span>
-                          );
-                        })()
-                      : (
-                        <span className="text-xs tabular-nums text-zinc-500 dark:text-zinc-300">
-                          Net realized —
-                        </span>
-                      )}
-                  </div>
+                  <SituationHeadingTotals
+                    openCredit={heading.openCredit}
+                    realized={heading.realized}
+                    privacyMasked={privacyMasked}
+                  />
                 </button>
 
                 <ul className="space-y-1 border-t border-zinc-200 px-3 py-2 text-xs dark:border-white/25">

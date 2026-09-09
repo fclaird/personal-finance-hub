@@ -91,6 +91,8 @@ describe("formatSituationFill", () => {
     assert.match(summary.label, /1 DTE → 15 DTE/);
     assert.match(summary.label, /Sep 3/); // secondary trade date
     assert.equal(summary.net, 300);
+    assert.doesNotMatch(summary.label, /REALIZED/i);
+    assert.doesNotMatch(summary.label, /\$/);
   });
 
   it("current tip live DTE from OCC symbols", () => {
@@ -172,5 +174,7 @@ describe("formatSituationFill", () => {
     assert.match(label, /BE adjust 210P\/225C → 210P\/235C/);
     assert.match(label, /1 DTE → 8 DTE/);
     assert.match(label, /Aug 27/);
+    assert.doesNotMatch(label, /REALIZED/i);
+    assert.doesNotMatch(label, /\$/);
   });
 });

@@ -28,6 +28,8 @@ export type SituationTreeNode =
       realizedOnClose: number | null;
       /** Open credit remaining after this adjustment. */
       cumulativeNet: number | null;
+      /** Running realized G/L for the whole book after this step. */
+      realizedCarry: number | null;
       children: SituationTreeNode[];
     }
   | {
@@ -37,6 +39,7 @@ export type SituationTreeNode =
       members: SituationMemberView[];
       stepNet: number | null;
       cumulativeNet: number | null;
+      realizedCarry: number | null;
       children: SituationTreeNode[];
     }
   | {
@@ -46,6 +49,8 @@ export type SituationTreeNode =
       symbols: string[];
       /** Live open premium on tip structure (unrealized). */
       cumulativeNet: number | null;
+      /** Running realized through the last adjustment (null if none yet). */
+      realizedCarry: number | null;
       children: SituationTreeNode[];
     }
   | {
@@ -55,6 +60,7 @@ export type SituationTreeNode =
       member: SituationMemberView;
       stepNet: number | null;
       cumulativeNet: number | null;
+      realizedCarry: number | null;
       children: SituationTreeNode[];
     };
 
@@ -194,6 +200,7 @@ function openCreditSum(lots: CreditLot[]): number | null {
  * Accounting:
  * - stepNet = realized G/L on that adjustment/close/leg (not roll cash).
  * - cumulativeNet = open credit still on lots open after that step (grey in UI).
+ * - realizedCarry = running sum of stepNet after that step (position total, green/red).
  */
 export function buildSituationTree(
   members: SituationMemberView[],
@@ -222,7 +229,14 @@ export function buildSituationTree(
 
   let tip: SituationTreeNode = root;
   let sawClose = false;
+  let realizedCarry: number | null = null;
   let i = 0;
+
+  const addCarry = (step: number | null): number | null => {
+    if (step == null || !Number.isFinite(step)) return realizedCarry;
+    realizedCarry = round2((realizedCarry ?? 0) + step);
+    return realizedCarry;
+  };
   while (i < rest.length) {
     const m = rest[i]!;
 
@@ -255,6 +269,7 @@ export function buildSituationTree(
         stepNet: realized,
         realizedOnClose: realized,
         cumulativeNet: openCredit,
+        realizedCarry: addCarry(realized),
         children: [],
       };
       tip.children.push(node);
@@ -283,6 +298,7 @@ export function buildSituationTree(
         stepNet: null,
         realizedOnClose: null,
         cumulativeNet: openCreditSum(openLots),
+        realizedCarry,
         children: [],
       };
       tip.children.push(node);
@@ -307,6 +323,7 @@ export function buildSituationTree(
         members: closeMembers,
         stepNet: realized,
         cumulativeNet: openCreditSum(openLots),
+        realizedCarry: addCarry(realized),
         children: [],
       });
       priorForRealize.push(...closeMembers);
@@ -324,6 +341,7 @@ export function buildSituationTree(
       member: m,
       stepNet: realized,
       cumulativeNet: openCreditSum(openLots),
+      realizedCarry: addCarry(realized),
       children: [],
     });
     priorForRealize.push(m);
@@ -373,10 +391,64 @@ export function buildSituationTree(
             : "Current · still open",
         symbols: currentSymbols,
         cumulativeNet: openCreditSum(openLots),
+        realizedCarry,
         children: [],
       });
     }
   }
 
   return [root];
+}
+
+/**
+ * Pre-order walk for a single-rail visual timeline.
+ * Parent/child links stay on the nodes; the UI must not indent by depth.
+ */
+export function flattenSituationTree(roots: SituationTreeNode[]): SituationTreeNode[] {
+  const out: SituationTreeNode[] = [];
+  const walk = (n: SituationTreeNode) => {
+    out.push(n);
+    for (const c of n.children) walk(c);
+  };
+  for (const n of roots) walk(n);
+  return out;
+}
+
+/** Book-title figures: remaining open credit + running realized for the whole position. */
+export function situationHeadingFigures(
+  members: SituationMemberView[],
+  options?: { status?: string },
+): { openCredit: number | null; realized: number | null } {
+  const tree = buildSituationTree(members, options);
+  const flat = flattenSituationTree(tree);
+  if (flat.length === 0) return { openCredit: null, realized: null };
+  const last = flat[flat.length - 1]!;
+  let realized: number | null = null;
+  for (let i = flat.length - 1; i >= 0; i--) {
+    const n = flat[i]!;
+    if ("realizedCarry" in n && n.realizedCarry != null) {
+      realized = n.realizedCarry;
+      break;
+    }
+  }
+  return { openCredit: last.cumulativeNet ?? null, realized };
+}
+
+/** Right-column figures for one tree block. UI stacks: credits, fills, realized, net. */
+export function situationBlockFigures(node: SituationTreeNode): {
+  openCredit: number | null;
+  realized: number | null;
+  total: number | null;
+  showRealizedStep: boolean;
+} {
+  const showRealizedStep =
+    node.kind === "close" ||
+    node.kind === "leg" ||
+    (node.kind === "adjustment" && node.closeMembers.length > 0);
+  return {
+    openCredit: node.cumulativeNet,
+    realized: "stepNet" in node ? node.stepNet : null,
+    total: "realizedCarry" in node ? node.realizedCarry : null,
+    showRealizedStep,
+  };
 }
