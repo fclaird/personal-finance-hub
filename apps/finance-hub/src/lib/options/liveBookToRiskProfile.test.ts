@@ -168,4 +168,45 @@ describe("liveBookToRiskProfile", () => {
     assert.ok(model!.points.length > 0);
   });
 
+  it("spotOverride wins over book/OHLCV spot so the graphic can use extended-hours last", () => {
+    const book: LiveStructureBook = {
+      key: "a1|NBIS",
+      kind: "short-strangle",
+      accountId: "a1",
+      accountName: "Brokerage",
+      underlying: "NBIS",
+      expiration: "2026-09-11",
+      dte: 5,
+      legs: [
+        leg({
+          positionId: "p",
+          right: "P",
+          strike: 210,
+          quantity: -2,
+          avgPrice: 4.1,
+          markPrice: 1.5,
+          spot: 223.05,
+          underlying: "NBIS",
+          symbol: "NBIS",
+        }),
+        leg({
+          positionId: "c",
+          right: "C",
+          strike: 260,
+          quantity: -2,
+          avgPrice: 3.2,
+          markPrice: 2.8,
+          spot: 223.05,
+          underlying: "NBIS",
+          symbol: "NBIS",
+        }),
+      ],
+    };
+    const ohlcv = liveBookToRiskProfile(book);
+    assert.equal(ohlcv!.spot, 223.05);
+    const live = liveBookToRiskProfile(book, { spotOverride: 245.2 });
+    assert.equal(live!.spot, 245.2);
+    assert.ok(live!.points.some((p) => p.spot >= 245 && p.spot <= 246));
+  });
+
 });

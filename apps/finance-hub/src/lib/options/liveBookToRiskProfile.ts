@@ -1,5 +1,6 @@
 import type { OptionRiskPosition } from "@/lib/alerts/optionRisk";
 import { sanitizeOptionIv } from "@/lib/alerts/optionRisk";
+import { resolveRiskChartSpot } from "@/lib/options/riskChartSpot";
 import {
   buildShortStrangleRiskProfile,
   type RiskProfileLeg,
@@ -34,18 +35,26 @@ export function optionRiskLegToRiskProfileLeg(leg: OptionRiskPosition): RiskProf
 /**
  * Build a ToS-style risk profile model from a live structure book.
  * Returns null when legs lack strikes/entry needed for an expiration curve.
+ *
+ * `spotOverride` is the graphic-only live quote (extended/overnight when cash is closed).
+ * Hypothesis: T+0 / expiration curves can use that same spot because they exist only for this
+ * chart; option-risk flags, Glance, and the Strategies tree still use `book.legs[].spot`.
  */
-export function liveBookToRiskProfile(book: LiveStructureBook): RiskProfileModel | null {
+export function liveBookToRiskProfile(
+  book: LiveStructureBook,
+  opts?: { spotOverride?: number | null },
+): RiskProfileModel | null {
   const legs: RiskProfileLeg[] = [];
   for (const leg of book.legs) {
     const mapped = optionRiskLegToRiskProfileLeg(leg);
     if (mapped) legs.push(mapped);
   }
   if (legs.length === 0) return null;
-  let spot =
+  const bookSpot =
     book.legs.map((l) => l.spot).find((s): s is number => s != null && Number.isFinite(s) && s > 0) ??
     null;
-  // Prefer real OHLCV/equity spot; if still missing, mid of short put/call strikes so the spot line can draw.
+  let spot = resolveRiskChartSpot(opts?.spotOverride, bookSpot);
+  // Prefer live quote, then book/OHLCV equity spot; if still missing, mid of short put/call strikes.
   if (spot == null) {
     let put: number | null = null;
     let call: number | null = null;
