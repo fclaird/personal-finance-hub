@@ -15,6 +15,7 @@ import {
   type SituationTreeNode,
 } from "@/lib/situations/situationTree";
 import { pnlTone, SITUATION_ACTION_LINE_CLASS, SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
+import { situationActionCashflow } from "@/lib/situations/situationActionCashflow";
 
 export { pnlTone };
 
@@ -74,24 +75,20 @@ function AdjustmentHeadlineParts({ parts }: { parts: AdjustmentHighlightPart[] }
   );
 }
 
-function FillRow({
-  line,
-  net,
-  masked,
-  realized,
-}: {
-  line: string;
-  net: number | null;
-  masked: boolean;
-  realized: boolean;
-}) {
-  const rowClass = realized ? pnlTone(net, { realized: true }) : SITUATION_FILL_CASHFLOW_CLASS;
+function CashflowAmount({ net, masked }: { net: number | null; masked: boolean }) {
   return (
-    <li className={"flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] " + rowClass}>
-      <span className="min-w-0 flex-1">{line}</span>
-      <span className={"shrink-0 tabular-nums font-medium " + pnlTone(net, { realized })}>
-        {usd(net, masked)}
-      </span>
+    <span className={"shrink-0 tabular-nums font-medium " + SITUATION_FILL_CASHFLOW_CLASS}>
+      {usd(net, masked)}
+    </span>
+  );
+}
+
+/** Close/leg/open fill rows: description + debit/credit stay grey. Never posNeg. */
+function CashflowFillRow({ line, net, masked }: { line: string; net: number | null; masked: boolean }) {
+  return (
+    <li className={"flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] " + SITUATION_FILL_CASHFLOW_CLASS}>
+      <span className={"min-w-0 flex-1 " + SITUATION_FILL_CASHFLOW_CLASS}>{line}</span>
+      <CashflowAmount net={net} masked={masked} />
     </li>
   );
 }
@@ -101,12 +98,11 @@ function OpenFillLines({ members, masked }: { members: SituationMemberView[]; ma
   return (
     <ul className="mt-1 space-y-1">
       {members.map((m) => (
-        <FillRow
+        <CashflowFillRow
           key={m.transactionId + ":" + m.role}
           line={formatFillLine(m)}
           net={m.netAmount}
           masked={masked}
-          realized={false}
         />
       ))}
     </ul>
@@ -129,8 +125,8 @@ function AdjustmentFillLines({
           key={"c:" + m.transactionId}
           className={"flex flex-wrap items-baseline gap-x-3 gap-y-0.5 pl-3 text-[10px] " + SITUATION_FILL_CASHFLOW_CLASS}
         >
-          <span className="min-w-0 flex-1">closed · {formatFillLine(m)}</span>
-          <span className="shrink-0 tabular-nums font-medium">{usd(m.netAmount, masked)}</span>
+          <span className={"min-w-0 flex-1 " + SITUATION_FILL_CASHFLOW_CLASS}>closed · {formatFillLine(m)}</span>
+          <CashflowAmount net={m.netAmount} masked={masked} />
         </li>
       ))}
       {openMembers.map((m) => (
@@ -138,8 +134,8 @@ function AdjustmentFillLines({
           key={"o:" + m.transactionId}
           className={"flex flex-wrap items-baseline gap-x-3 gap-y-0.5 pl-3 text-[10px] " + SITUATION_FILL_CASHFLOW_CLASS}
         >
-          <span className="min-w-0 flex-1">opened · {formatFillLine(m)}</span>
-          <span className="shrink-0 tabular-nums">{usd(m.netAmount, masked)}</span>
+          <span className={"min-w-0 flex-1 " + SITUATION_FILL_CASHFLOW_CLASS}>opened · {formatFillLine(m)}</span>
+          <CashflowAmount net={m.netAmount} masked={masked} />
         </li>
       ))}
     </ul>
@@ -152,14 +148,14 @@ function CloseFillLines({ members, masked }: { members: SituationMemberView[]; m
     const m = members[0]!;
     return (
       <ul className="mt-1 space-y-1">
-        <FillRow line={formatFillLine(m)} net={m.netAmount} masked={masked} realized={false} />
+        <CashflowFillRow line={formatFillLine(m)} net={m.netAmount} masked={masked} />
       </ul>
     );
   }
   const combined = sumMemberNets(members);
   return (
     <ul className="mt-1 space-y-1">
-      <FillRow line={members.length + " closes · net"} net={combined} masked={masked} realized={false} />
+      <CashflowFillRow line={members.length + " closes · net"} net={combined} masked={masked} />
       {members.map((m) => (
         <li key={m.transactionId} className={"pl-3 text-[10px] " + SITUATION_FILL_CASHFLOW_CLASS}>
           {formatFillLine(m)} · {usd(m.netAmount, masked)}
@@ -206,6 +202,11 @@ function TreeNodeView({
     node.kind === "leg" ||
     (node.kind === "adjustment" && node.closeMembers.length > 0);
   const stepNetValue = "stepNet" in node ? node.stepNet : null;
+  const headlineTone =
+    showRealizedStep && stepNetValue != null
+      ? pnlTone(stepNetValue, { realized: true })
+      : SITUATION_ACTION_LINE_CLASS;
+  const closeCashflow = situationActionCashflow(node);
 
   return (
     <li className="relative">
@@ -233,7 +234,7 @@ function TreeNodeView({
               {adjustmentParts ? (
                 <AdjustmentHeadlineParts parts={adjustmentParts} />
               ) : (
-                <span className={"ml-2 font-medium " + SITUATION_ACTION_LINE_CLASS}>
+                <span className={"ml-2 font-medium " + headlineTone}>
                   {headline}
                 </span>
               )}
@@ -249,6 +250,7 @@ function TreeNodeView({
                 <span className="mr-1 text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Open credit</span>
                 {usd(node.cumulativeNet, masked)}
               </span>
+              {closeCashflow != null ? <CashflowAmount net={closeCashflow} masked={masked} /> : null}
             </div>
           </div>
           {node.kind === "open" ? <OpenFillLines members={node.members} masked={masked} /> : null}
@@ -262,7 +264,7 @@ function TreeNodeView({
           {node.kind === "close" ? <CloseFillLines members={node.members} masked={masked} /> : null}
           {node.kind === "leg" ? (
             <ul className="mt-1 space-y-1">
-              <FillRow line={formatFillLine(node.member)} net={node.member.netAmount} masked={masked} realized={false} />
+              <CashflowFillRow line={formatFillLine(node.member)} net={node.member.netAmount} masked={masked} />
             </ul>
           ) : null}
           {node.kind === "current" ? (
