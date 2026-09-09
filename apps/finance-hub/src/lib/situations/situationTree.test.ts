@@ -489,5 +489,10 @@ describe("buildSituationTree", () => {
     const heading = situationHeadingFigures(members, { status: "open" });
     assert.equal(heading.openCredit, 4500);
     assert.equal(heading.realized, 0);
+    const current = adj3.children[0]!;
+    assert.equal(current.kind, "current");
+    if (current.kind !== "current") throw new Error("expected current");
+    assert.equal(current.realizedCarry, 0);
+    assert.equal(situationBlockFigures(current).total, 0);
   });
 });

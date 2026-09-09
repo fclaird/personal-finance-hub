@@ -20,7 +20,7 @@ import { pnlTone, SITUATION_ACTION_LINE_CLASS, SITUATION_FILL_CASHFLOW_CLASS } f
 
 export { pnlTone };
 
-/** Book title row: remaining open credits (grey) next to running realized/net (green/red). */
+/** Book title and each adjustment heading: credits (grey) next to gain (green/red, bold). */
 export function SituationHeadingTotals({
   openCredit,
   realized,
@@ -33,15 +33,11 @@ export function SituationHeadingTotals({
   return (
     <div className="flex shrink-0 items-baseline gap-4 tabular-nums">
       <span className={"text-sm font-medium " + SITUATION_FILL_CASHFLOW_CLASS}>
-        <span className="mr-1 text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          Credits
-        </span>
+        <span className="mr-1">credits</span>
         {openCredit == null ? "—" : formatUsd2(openCredit, { mask: privacyMasked })}
       </span>
       <span className={"text-sm font-bold " + pnlTone(realized, { realized: true })}>
-        <span className="mr-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-200">
-          Net
-        </span>
+        <span className="mr-1 font-bold">gain</span>
         {realized == null ? "—" : formatSignedUsd2(realized, { mask: privacyMasked })}
       </span>
     </div>
@@ -85,11 +81,6 @@ function usd(v: number | null | undefined, masked: boolean): string {
   return formatUsd2(v, { mask: masked });
 }
 
-function pnlUsd(v: number | null | undefined, masked: boolean): string {
-  if (v == null || !Number.isFinite(v)) return "—";
-  return formatSignedUsd2(v, { mask: masked });
-}
-
 const ADJUSTMENT_CHANGED_CLASS =
   "rounded px-1 bg-amber-400/20 text-amber-100 ring-1 ring-amber-400/50";
 
@@ -109,50 +100,15 @@ function AdjustmentHeadlineParts({ parts }: { parts: AdjustmentHighlightPart[] }
   );
 }
 
-/** Two-column tree: identity on the left, cashflow + P/L amounts on the right. */
+/** Two-column tree: identity on the left, heading totals + fill cashflow on the right. */
 const TREE_GRID_CLASS = "grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-0.5";
 const TREE_AMOUNT_CLASS = "w-[8.5rem] shrink-0 text-right tabular-nums";
-const TREE_LABEL_CLASS =
-  "w-[5.5rem] shrink-0 text-right text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-400";
 
 function CashflowAmount({ net, masked }: { net: number | null; masked: boolean }) {
   return (
     <span className={TREE_AMOUNT_CLASS + " justify-self-end font-medium " + SITUATION_FILL_CASHFLOW_CLASS}>
       {usd(net, masked)}
     </span>
-  );
-}
-
-function LabeledAmount({
-  label,
-  net,
-  masked,
-  toneClass,
-  emphasize,
-  prominent,
-  title,
-  signed,
-}: {
-  label: string;
-  net: number | null;
-  masked: boolean;
-  toneClass: string;
-  emphasize?: boolean;
-  /** Running position total — bolder than Credits / Realized. */
-  prominent?: boolean;
-  title: string;
-  signed?: boolean;
-}) {
-  const amountWeight = prominent ? "font-bold text-[15px] " : emphasize ? "font-semibold " : "font-medium ";
-  return (
-    <div className="flex shrink-0 items-baseline justify-end gap-2 justify-self-end" title={title}>
-      <span className={TREE_LABEL_CLASS + (prominent ? " font-semibold text-zinc-400 dark:text-zinc-200" : "")}>
-        {label}
-      </span>
-      <span className={TREE_AMOUNT_CLASS + " " + amountWeight + toneClass}>
-        {signed ? pnlUsd(net, masked) : usd(net, masked)}
-      </span>
-    </div>
   );
 }
 
@@ -280,9 +236,6 @@ function TreeNodeView({
   else headline = "Step";
 
   const figures = situationBlockFigures(node);
-  const openCreditTone = pnlTone(figures.openCredit, { realized: false });
-  const realizedTone = pnlTone(figures.realized, { realized: true });
-  const totalTone = pnlTone(figures.total, { realized: true });
 
   return (
     <li className="relative">
@@ -308,17 +261,11 @@ function TreeNodeView({
                 <span className={"ml-2 font-medium " + SITUATION_ACTION_LINE_CLASS}>{headline}</span>
               )}
             </div>
-            {figures.openCredit != null ? (
-              <LabeledAmount
-                label="Credits"
-                net={figures.openCredit}
-                masked={masked}
-                toneClass={openCreditTone}
-                title="Current credits: open premium still on the live remainder"
-              />
-            ) : (
-              <span />
-            )}
+            <SituationHeadingTotals
+              openCredit={figures.openCredit}
+              realized={figures.total}
+              privacyMasked={masked}
+            />
             {node.kind === "open" ? <OpenFillLines members={node.members} masked={masked} /> : null}
             {node.kind === "adjustment" ? (
               <AdjustmentFillLines
@@ -332,34 +279,6 @@ function TreeNodeView({
               <ul className="contents">
                 <CashflowFillRow line={formatFillLine(node.member)} net={node.member.netAmount} masked={masked} />
               </ul>
-            ) : null}
-            {figures.showRealizedStep ? (
-              <>
-                <span aria-hidden />
-                <LabeledAmount
-                  label="Realized"
-                  net={figures.realized}
-                  masked={masked}
-                  toneClass={realizedTone}
-                  emphasize
-                  signed
-                  title="Realized credits or debits locked in by this adjustment"
-                />
-                <span aria-hidden />
-                {figures.total != null ? (
-                  <LabeledAmount
-                    label="Net"
-                    net={figures.total}
-                    masked={masked}
-                    toneClass={totalTone}
-                    prominent
-                    signed
-                    title="Net / total cumulative for the whole position after this adjustment"
-                  />
-                ) : (
-                  <span />
-                )}
-              </>
             ) : null}
           </div>
           {node.kind === "current" ? (
@@ -384,8 +303,6 @@ export function SituationLifecycle({
   const clumped = clumpPartialFills(row.members);
   const tree = buildSituationTree(clumped, { status: row.status });
   const rows = flattenSituationTree(tree);
-  const situationOpen = row.status === "open";
-  const netRealized = !situationOpen;
   return (
     <div className="border-t border-zinc-200 px-3 py-3 dark:border-white/25">
       <div className="mb-3 flex max-w-3xl flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-zinc-600 dark:text-zinc-300">
@@ -396,9 +313,6 @@ export function SituationLifecycle({
             : ""}
           {row.closedOn ? " · closed " + row.closedOn : " · still open"}
           {row.accountName ? " · " + row.accountName : ""}
-        </span>
-        <span className={pnlTone(row.netPremium, { realized: netRealized })}>
-          Net {row.netPremium == null ? "—" : formatUsd2(row.netPremium, { mask: privacyMasked })}
         </span>
       </div>
       {tree.length === 0 ? (

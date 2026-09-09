@@ -49,6 +49,8 @@ export type SituationTreeNode =
       symbols: string[];
       /** Live open premium on tip structure (unrealized). */
       cumulativeNet: number | null;
+      /** Running realized through the last adjustment (null if none yet). */
+      realizedCarry: number | null;
       children: SituationTreeNode[];
     }
   | {
@@ -389,6 +391,7 @@ export function buildSituationTree(
             : "Current · still open",
         symbols: currentSymbols,
         cumulativeNet: openCreditSum(openLots),
+        realizedCarry,
         children: [],
       });
     }
