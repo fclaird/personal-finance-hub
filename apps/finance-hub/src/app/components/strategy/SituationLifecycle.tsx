@@ -20,7 +20,7 @@ import { pnlTone, SITUATION_ACTION_LINE_CLASS, SITUATION_FILL_CASHFLOW_CLASS } f
 
 export { pnlTone };
 
-/** Book title and each adjustment heading: credits (grey) next to gain (green/red, bold). */
+/** Book title and each adjustment heading: credits (grey) next to net (green/red, bold). */
 export function SituationHeadingTotals({
   openCredit,
   realized,
@@ -39,7 +39,7 @@ export function SituationHeadingTotals({
         </span>
       </span>
       <span className={"inline-flex items-baseline gap-1.5 text-base font-bold tabular-nums " + pnlTone(realized, { realized: true })}>
-        <span className="text-base font-bold">gain</span>
+        <span className="text-base font-bold">net</span>
         <span className="text-base font-bold tabular-nums">
           {realized == null ? "—" : formatSignedUsd2(realized, { mask: privacyMasked })}
         </span>
