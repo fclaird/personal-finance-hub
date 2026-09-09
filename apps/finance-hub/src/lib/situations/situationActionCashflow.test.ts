@@ -97,10 +97,12 @@ describe("situationActionCashflow", () => {
     assert.equal(legCol.openCredit, 7776.69);
     assert.equal(legCol.realized, 5743.6);
     assert.equal(legCol.total, 5743.6);
+    assert.equal(legCol.showRealizedStep, true);
     const closeCol = situationBlockFigures(close);
     assert.equal(closeCol.openCredit, 0);
     assert.equal(closeCol.realized, 6333.57);
     assert.equal(closeCol.total, 12077.17);
+    assert.equal(closeCol.showRealizedStep, true);
     assert.match(pnlTone(leg.stepNet, { realized: true }), /emerald/);
     assert.match(pnlTone(close.stepNet, { realized: true }), /emerald/);
     assert.match(pnlTone(leg.realizedCarry, { realized: true }), /emerald/);

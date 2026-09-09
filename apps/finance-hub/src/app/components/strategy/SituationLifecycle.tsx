@@ -75,8 +75,10 @@ function AdjustmentHeadlineParts({ parts }: { parts: AdjustmentHighlightPart[] }
   );
 }
 
-/** Shared width so open credit, fill cashflow, realized, and total form one column. */
+/** Shared width so credits, fill cashflow, realized, and net form one column. */
 const TREE_AMOUNT_CLASS = "w-[8.5rem] shrink-0 text-right tabular-nums";
+const TREE_LABEL_CLASS =
+  "w-[5.5rem] shrink-0 text-right text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-400";
 
 function CashflowAmount({ net, masked }: { net: number | null; masked: boolean }) {
   return (
@@ -92,18 +94,18 @@ function LabeledAmount({
   masked,
   toneClass,
   emphasize,
+  title,
 }: {
   label: string;
   net: number | null;
   masked: boolean;
   toneClass: string;
   emphasize?: boolean;
+  title: string;
 }) {
   return (
-    <div className="flex shrink-0 items-baseline justify-end gap-2">
-      <span className="text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-        {label}
-      </span>
+    <div className="flex shrink-0 items-baseline justify-end gap-2" title={title}>
+      <span className={TREE_LABEL_CLASS}>{label}</span>
       <span className={TREE_AMOUNT_CLASS + " " + (emphasize ? "font-semibold " : "font-medium ") + toneClass}>
         {usd(net, masked)}
       </span>
@@ -271,10 +273,11 @@ function TreeNodeView({
             </div>
             {figures.openCredit != null ? (
               <LabeledAmount
-                label="Open credit"
+                label="Credits"
                 net={figures.openCredit}
                 masked={masked}
                 toneClass={openCreditTone}
+                title="Current credits: open premium still on the live remainder"
               />
             ) : null}
           </div>
@@ -300,14 +303,16 @@ function TreeNodeView({
                 masked={masked}
                 toneClass={realizedTone}
                 emphasize
+                title="Realized credits or debits locked in by this adjustment"
               />
               {figures.total != null ? (
                 <LabeledAmount
-                  label="Total"
+                  label="Net"
                   net={figures.total}
                   masked={masked}
                   toneClass={totalTone}
                   emphasize
+                  title="Net / total cumulative for the whole position after this adjustment"
                 />
               ) : null}
             </div>

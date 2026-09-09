@@ -397,7 +397,7 @@ export function buildSituationTree(
   return [root];
 }
 
-/** Right-column figures for one tree block. UI stacks: open credit, fills, realized, total. */
+/** Right-column figures for one tree block. UI stacks: credits, fills, realized, net. */
 export function situationBlockFigures(node: SituationTreeNode): {
   openCredit: number | null;
   realized: number | null;
