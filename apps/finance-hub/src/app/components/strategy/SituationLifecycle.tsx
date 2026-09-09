@@ -284,7 +284,23 @@ function TreeNodeView({
                 <CashflowFillRow line={formatFillLine(node.member)} net={node.member.netAmount} masked={masked} />
               </ul>
             ) : null}
-          </div>
+            {figures.showRealizedStep ? (
+              <>
+                <span aria-hidden />
+                <span
+                  className={
+                    "inline-flex items-baseline justify-end gap-1.5 justify-self-end text-base font-semibold tabular-nums " +
+                    pnlTone(figures.realized, { realized: true })
+                  }
+                  title="Realized G/L locked in by this step"
+                >
+                  <span className="text-base font-semibold">realized</span>
+                  <span className="text-base font-semibold tabular-nums">
+                    {figures.realized == null ? "—" : formatSignedUsd2(figures.realized, { mask: masked })}
+                  </span>
+                </span>
+              </>
+            ) : null}
           {node.kind === "current" ? (
             <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
               Live structure at the tip of this book. Mark-to-market is on the snapshot legs above.
