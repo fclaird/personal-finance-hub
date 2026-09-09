@@ -147,4 +147,73 @@ describe("proposeSituations N-transaction linking", () => {
     ]);
     assert.equal(rows[0]!.kind, "butterfly");
   });
+
+  it("attaches a LEAP close after the 45-day short-premium window", () => {
+    const rows = proposeSituations([
+      txn({
+        id: "open",
+        accountId: "a1",
+        tradeDate: "2026-01-05",
+        netAmount: -4500,
+        legs: [leg({ right: "C", instruction: "buy_open", strike: 200, expiration: "2027-01-15", quantity: 1 })],
+      }),
+      txn({
+        id: "close",
+        accountId: "a1",
+        tradeDate: "2026-08-10",
+        netAmount: 6200,
+        legs: [
+          leg({
+            right: "C",
+            instruction: "buy_close",
+            strike: 200,
+            expiration: "2027-01-15",
+            opening: false,
+            quantity: 1,
+          }),
+        ],
+      }),
+    ]);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.kind, "leap");
+    assert.equal(rows[0]!.status, "closed");
+    assert.equal(rows[0]!.closedOn, "2026-08-10");
+    assert.equal(rows[0]!.netPremium, 1700);
+    assert.deepEqual(
+      rows[0]!.members.map((m) => `${m.transactionId}:${m.role}`).sort(),
+      ["close:close", "open:open"],
+    );
+  });
+
+  it("attaches a long-option close held past 45 days", () => {
+    const rows = proposeSituations([
+      txn({
+        id: "open",
+        accountId: "a1",
+        tradeDate: "2026-06-01",
+        netAmount: -800,
+        legs: [leg({ right: "C", instruction: "buy_open", strike: 230, expiration: "2026-08-21", quantity: 1 })],
+      }),
+      txn({
+        id: "close",
+        accountId: "a1",
+        tradeDate: "2026-07-22",
+        netAmount: 1200,
+        legs: [
+          leg({
+            right: "C",
+            instruction: "buy_close",
+            strike: 230,
+            expiration: "2026-08-21",
+            opening: false,
+            quantity: 1,
+          }),
+        ],
+      }),
+    ]);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.kind, "long-option");
+    assert.equal(rows[0]!.status, "closed");
+    assert.equal(rows[0]!.netPremium, 400);
+  });
 });

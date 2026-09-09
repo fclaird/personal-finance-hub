@@ -11,7 +11,13 @@ import type {
 
 const STRANGLE_DATE_WINDOW_DAYS = 2;
 const STRANGLE_EXP_WINDOW_DAYS = 7;
+/** Short-premium rolls/closes typically land inside a 45-DTE cycle. */
 const ATTACH_WINDOW_DAYS = 45;
+/**
+ * Long calls/LEAPs are held far past 45 days. A matching close must still
+ * attach or the book stays open forever and the fill is dropped.
+ */
+const LONG_OPTION_ATTACH_WINDOW_DAYS = 1100;
 
 function pairKey(a: string, b: string): string {
   return a < b ? `${a}|${b}` : `${b}|${a}`;
@@ -379,7 +385,12 @@ export function proposeSituations(
       if (book.remaining <= 0) continue;
       if (txn.tradeDate < out[book.index]!.openedOn) continue;
       const gap = daysBetween(book.lastDate, txn.tradeDate);
-      if (gap == null || gap > ATTACH_WINDOW_DAYS) continue;
+      const sitKind = out[book.index]!.kind;
+      const windowDays =
+        sitKind === "leap" || sitKind === "long-option"
+          ? LONG_OPTION_ATTACH_WINDOW_DAYS
+          : ATTACH_WINDOW_DAYS;
+      if (gap == null || gap > windowDays) continue;
       // Prefer exact strike match; skip books that don't hold this strike when we know it.
       if (key) {
         if (!book.openKeys.has(key)) continue;
