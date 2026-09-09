@@ -41,6 +41,15 @@ export function formatUsd2(v: number | null | undefined, opts?: { mask?: boolean
   return `$${USD2.format(n)}`;
 }
 
+/** P/L line items: minus sits on the amount (`-$1,234.56`), not inside `$-`. */
+export function formatSignedUsd2(v: number | null | undefined, opts?: { mask?: boolean }): string {
+  if (opts?.mask) return maskUsd();
+  const n = typeof v === "number" ? v : v == null ? null : Number(v);
+  if (n == null || !Number.isFinite(n)) return "—";
+  const body = USD2.format(Math.abs(n));
+  return n < 0 ? `-$${body}` : `$${body}`;
+}
+
 export function formatUsdCompact(v: number | null | undefined, opts?: { mask?: boolean }): string {
   if (opts?.mask) return maskUsd();
   const n = typeof v === "number" ? v : v == null ? null : Number(v);

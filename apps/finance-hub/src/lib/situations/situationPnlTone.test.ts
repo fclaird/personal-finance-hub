@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { formatSignedUsd2 } from "@/lib/format";
 import {
   pnlTone,
   SITUATION_ACTION_LINE_CLASS,
@@ -37,5 +38,12 @@ describe("situationPnlTone", () => {
 
   it("zero stays grey", () => {
     assert.equal(pnlTone(0, { realized: true }), SITUATION_FILL_CASHFLOW_CLASS);
+  });
+
+  it("realized losses show a minus on the line item, not inside $-", () => {
+    assert.match(formatSignedUsd2(4294.64), /^\$/);
+    assert.doesNotMatch(formatSignedUsd2(4294.64), /^-/);
+    assert.match(formatSignedUsd2(-22261.03), /^-\$/);
+    assert.doesNotMatch(formatSignedUsd2(-22261.03), /^\$/);
   });
 });

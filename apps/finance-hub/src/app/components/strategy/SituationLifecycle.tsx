@@ -1,6 +1,6 @@
 "use client";
 
-import { formatUsd2 } from "@/lib/format";
+import { formatSignedUsd2, formatUsd2 } from "@/lib/format";
 import type { SituationMemberView, SituationView } from "@/lib/situations/apiTypes";
 import { clumpPartialFills } from "@/lib/situations/clumpPartialFills";
 import {
@@ -56,6 +56,11 @@ function usd(v: number | null | undefined, masked: boolean): string {
   return formatUsd2(v, { mask: masked });
 }
 
+function pnlUsd(v: number | null | undefined, masked: boolean): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return formatSignedUsd2(v, { mask: masked });
+}
+
 const ADJUSTMENT_CHANGED_CLASS =
   "rounded px-1 bg-amber-400/20 text-amber-100 ring-1 ring-amber-400/50";
 
@@ -75,14 +80,15 @@ function AdjustmentHeadlineParts({ parts }: { parts: AdjustmentHighlightPart[] }
   );
 }
 
-/** Shared width so credits, fill cashflow, realized, and net form one column. */
+/** Two-column tree: identity on the left, cashflow + P/L amounts on the right. */
+const TREE_GRID_CLASS = "grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-0.5";
 const TREE_AMOUNT_CLASS = "w-[8.5rem] shrink-0 text-right tabular-nums";
 const TREE_LABEL_CLASS =
   "w-[5.5rem] shrink-0 text-right text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-400";
 
 function CashflowAmount({ net, masked }: { net: number | null; masked: boolean }) {
   return (
-    <span className={TREE_AMOUNT_CLASS + " font-medium " + SITUATION_FILL_CASHFLOW_CLASS}>
+    <span className={TREE_AMOUNT_CLASS + " justify-self-end font-medium " + SITUATION_FILL_CASHFLOW_CLASS}>
       {usd(net, masked)}
     </span>
   );
@@ -95,6 +101,7 @@ function LabeledAmount({
   toneClass,
   emphasize,
   title,
+  signed,
 }: {
   label: string;
   net: number | null;
@@ -102,18 +109,19 @@ function LabeledAmount({
   toneClass: string;
   emphasize?: boolean;
   title: string;
+  signed?: boolean;
 }) {
   return (
-    <div className="flex shrink-0 items-baseline justify-end gap-2" title={title}>
+    <div className="flex shrink-0 items-baseline justify-end gap-2 justify-self-end" title={title}>
       <span className={TREE_LABEL_CLASS}>{label}</span>
       <span className={TREE_AMOUNT_CLASS + " " + (emphasize ? "font-semibold " : "font-medium ") + toneClass}>
-        {usd(net, masked)}
+        {signed ? pnlUsd(net, masked) : usd(net, masked)}
       </span>
     </div>
   );
 }
 
-/** Close/leg/open fill rows: description + debit/credit stay grey. Never posNeg. */
+/** Close/leg/open fill rows: description left, debit/credit right. Never posNeg. */
 function CashflowFillRow({
   line,
   net,
@@ -126,8 +134,8 @@ function CashflowFillRow({
   indent?: boolean;
 }) {
   return (
-    <li className={"flex items-start gap-x-3 text-[11px] " + SITUATION_FILL_CASHFLOW_CLASS}>
-      <span className={"min-w-0 flex-1 " + (indent ? "pl-3 " : "") + SITUATION_FILL_CASHFLOW_CLASS}>{line}</span>
+    <li className="contents">
+      <span className={"min-w-0 text-[11px] " + (indent ? "pl-3 " : "") + SITUATION_FILL_CASHFLOW_CLASS}>{line}</span>
       <CashflowAmount net={net} masked={masked} />
     </li>
   );
@@ -136,7 +144,7 @@ function CashflowFillRow({
 function OpenFillLines({ members, masked }: { members: SituationMemberView[]; masked: boolean }) {
   if (members.length === 0) return null;
   return (
-    <ul className="mt-1 space-y-1">
+    <ul className="contents">
       {members.map((m) => (
         <CashflowFillRow
           key={m.transactionId + ":" + m.role}
@@ -159,7 +167,7 @@ function AdjustmentFillLines({
   masked: boolean;
 }) {
   return (
-    <ul className="mt-1 space-y-1">
+    <ul className="contents">
       {closeMembers.map((m) => (
         <CashflowFillRow
           key={"c:" + m.transactionId}
@@ -187,14 +195,14 @@ function CloseFillLines({ members, masked }: { members: SituationMemberView[]; m
   if (members.length === 1) {
     const m = members[0]!;
     return (
-      <ul className="mt-1 space-y-1">
+      <ul className="contents">
         <CashflowFillRow line={formatFillLine(m)} net={m.netAmount} masked={masked} />
       </ul>
     );
   }
   const combined = sumMemberNets(members);
   return (
-    <ul className="mt-1 space-y-1">
+    <ul className="contents">
       <CashflowFillRow line={members.length + " closes · net"} net={combined} masked={masked} />
       {members.map((m) => (
         <CashflowFillRow
@@ -260,8 +268,8 @@ function TreeNodeView({
             (hasKids ? "mb-2" : "mb-1")
           }
         >
-          <div className="flex items-start justify-between gap-3 text-xs">
-            <div className="min-w-0 flex-1">
+          <div className={TREE_GRID_CLASS}>
+            <div className="min-w-0 text-xs">
               <span className="font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">
                 {kindTitle(node.kind)}
               </span>
@@ -279,44 +287,52 @@ function TreeNodeView({
                 toneClass={openCreditTone}
                 title="Current credits: open premium still on the live remainder"
               />
+            ) : (
+              <span />
+            )}
+            {node.kind === "open" ? <OpenFillLines members={node.members} masked={masked} /> : null}
+            {node.kind === "adjustment" ? (
+              <AdjustmentFillLines
+                closeMembers={node.closeMembers}
+                openMembers={node.openMembers}
+                masked={masked}
+              />
+            ) : null}
+            {node.kind === "close" ? <CloseFillLines members={node.members} masked={masked} /> : null}
+            {node.kind === "leg" ? (
+              <ul className="contents">
+                <CashflowFillRow line={formatFillLine(node.member)} net={node.member.netAmount} masked={masked} />
+              </ul>
+            ) : null}
+            {figures.showRealizedStep ? (
+              <>
+                <span aria-hidden />
+                <LabeledAmount
+                  label="Realized"
+                  net={figures.realized}
+                  masked={masked}
+                  toneClass={realizedTone}
+                  emphasize
+                  signed
+                  title="Realized credits or debits locked in by this adjustment"
+                />
+                <span aria-hidden />
+                {figures.total != null ? (
+                  <LabeledAmount
+                    label="Net"
+                    net={figures.total}
+                    masked={masked}
+                    toneClass={totalTone}
+                    emphasize
+                    signed
+                    title="Net / total cumulative for the whole position after this adjustment"
+                  />
+                ) : (
+                  <span />
+                )}
+              </>
             ) : null}
           </div>
-          {node.kind === "open" ? <OpenFillLines members={node.members} masked={masked} /> : null}
-          {node.kind === "adjustment" ? (
-            <AdjustmentFillLines
-              closeMembers={node.closeMembers}
-              openMembers={node.openMembers}
-              masked={masked}
-            />
-          ) : null}
-          {node.kind === "close" ? <CloseFillLines members={node.members} masked={masked} /> : null}
-          {node.kind === "leg" ? (
-            <ul className="mt-1 space-y-1">
-              <CashflowFillRow line={formatFillLine(node.member)} net={node.member.netAmount} masked={masked} />
-            </ul>
-          ) : null}
-          {figures.showRealizedStep ? (
-            <div className="mt-1 space-y-0.5">
-              <LabeledAmount
-                label="Realized"
-                net={figures.realized}
-                masked={masked}
-                toneClass={realizedTone}
-                emphasize
-                title="Realized credits or debits locked in by this adjustment"
-              />
-              {figures.total != null ? (
-                <LabeledAmount
-                  label="Net"
-                  net={figures.total}
-                  masked={masked}
-                  toneClass={totalTone}
-                  emphasize
-                  title="Net / total cumulative for the whole position after this adjustment"
-                />
-              ) : null}
-            </div>
-          ) : null}
           {node.kind === "current" ? (
             <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
               Live structure at the tip of this book. Mark-to-market is on the snapshot legs above.
@@ -341,8 +357,6 @@ function TreeNodeView({
     </li>
   );
 }
-
-
 
 export function SituationLifecycle({
   row,
