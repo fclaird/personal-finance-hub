@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
-import { setSituationLinkStatus } from "@/lib/situations/persistSituations";
+import { rebuildAutoSituations, setSituationLinkStatus } from "@/lib/situations/persistSituations";
 
 type PageProps = { params: Promise<{ id: string }> };
 
@@ -16,6 +16,9 @@ export async function PATCH(req: Request, { params }: PageProps) {
     const db = getDb();
     const ok = setSituationLinkStatus(db, id, body.linkStatus);
     if (!ok) return NextResponse.json({ ok: false, error: "Situation not found" }, { status: 404 });
+    if (body.linkStatus === "rejected") {
+      rebuildAutoSituations(db);
+    }
     return NextResponse.json({ ok: true, id, linkStatus: body.linkStatus });
   } catch (e) {
     logError("option_situation_patch_failed", e);

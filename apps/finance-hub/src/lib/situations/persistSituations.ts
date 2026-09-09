@@ -59,7 +59,12 @@ function coveredCallTxnIds(db: Database.Database, txns: ReturnType<typeof loadLi
   return out;
 }
 
-/** Rebuild auto/proposed situations. Confirmed and rejected rows are left intact. */
+/**
+ * Rebuild auto/proposed situations. Confirmed rows stay locked.
+ * Rejected pairs are left in place for audit but their fills are not locked, so
+ * the linker can split them into singles (option_situation_rejections blocks
+ * the pair). Rejected singles stay locked so dismissals stick.
+ */
 export function rebuildAutoSituations(db: Database.Database): { proposed: number; kept: number } {
   const lockedIds = new Set(
     (
@@ -69,7 +74,14 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
           SELECT m.transaction_id AS id
           FROM option_situation_members m
           JOIN option_situations s ON s.id = m.situation_id
-          WHERE s.link_status IN ('confirmed', 'rejected')
+          WHERE s.link_status = 'confirmed'
+             OR (
+               s.link_status = 'rejected'
+               AND (
+                 SELECT COUNT(*) FROM option_situation_members m2
+                 WHERE m2.situation_id = s.id
+               ) <= 1
+             )
         `,
         )
         .all() as { id: string }[]
@@ -81,11 +93,6 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
       .prepare(`SELECT COUNT(*) AS c FROM option_situations WHERE link_status IN ('confirmed', 'rejected')`)
       .get() as { c: number }
   ).c;
-
-  db.exec(`
-    DELETE FROM option_situations
-    WHERE link_status IN ('auto', 'proposed')
-  `);
 
   const rawTxns = loadLinkableBrokerTransactions(db).filter((t) => !lockedIds.has(t.id));
   const allTxns = clumpLinkablePartials(rawTxns);
@@ -118,6 +125,10 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
   );
 
   const write = db.transaction((rows: ProposedSituation[]) => {
+    db.exec(`
+      DELETE FROM option_situations
+      WHERE link_status IN ('auto', 'proposed')
+    `);
     for (const s of rows) {
       const id = newId("sit");
       insertSit.run({
