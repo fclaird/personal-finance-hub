@@ -20,7 +20,7 @@ import { pnlTone, SITUATION_ACTION_LINE_CLASS, SITUATION_FILL_CASHFLOW_CLASS } f
 
 export { pnlTone };
 
-/** Book title and each adjustment heading: credits (grey) next to net (green/red, bold). */
+/** Book title and each adjustment heading: `net   credits $…   gain $…`. */
 export function SituationHeadingTotals({
   openCredit,
   realized,
@@ -31,7 +31,8 @@ export function SituationHeadingTotals({
   privacyMasked: boolean;
 }) {
   return (
-    <div className="flex shrink-0 items-baseline gap-4">
+    <div className="flex shrink-0 items-baseline gap-4 text-base">
+      <span className={"text-base font-medium " + SITUATION_FILL_CASHFLOW_CLASS}>net</span>
       <span className={"inline-flex items-baseline gap-1.5 text-base font-medium tabular-nums " + SITUATION_FILL_CASHFLOW_CLASS}>
         <span className="text-base font-medium">credits</span>
         <span className="text-base font-medium tabular-nums">
@@ -39,7 +40,7 @@ export function SituationHeadingTotals({
         </span>
       </span>
       <span className={"inline-flex items-baseline gap-1.5 text-base font-bold tabular-nums " + pnlTone(realized, { realized: true })}>
-        <span className="text-base font-bold">net</span>
+        <span className="text-base font-bold">gain</span>
         <span className="text-base font-bold tabular-nums">
           {realized == null ? "—" : formatSignedUsd2(realized, { mask: privacyMasked })}
         </span>
