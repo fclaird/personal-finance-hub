@@ -12,6 +12,7 @@ import {
 } from "@/lib/situations/formatSituationFill";
 import {
   buildSituationTree,
+  flattenSituationTree,
   situationBlockFigures,
   type SituationTreeNode,
 } from "@/lib/situations/situationTree";
@@ -100,6 +101,7 @@ function LabeledAmount({
   masked,
   toneClass,
   emphasize,
+  prominent,
   title,
   signed,
 }: {
@@ -108,13 +110,18 @@ function LabeledAmount({
   masked: boolean;
   toneClass: string;
   emphasize?: boolean;
+  /** Running position total — bolder than Credits / Realized. */
+  prominent?: boolean;
   title: string;
   signed?: boolean;
 }) {
+  const amountWeight = prominent ? "font-bold text-[15px] " : emphasize ? "font-semibold " : "font-medium ";
   return (
     <div className="flex shrink-0 items-baseline justify-end gap-2 justify-self-end" title={title}>
-      <span className={TREE_LABEL_CLASS}>{label}</span>
-      <span className={TREE_AMOUNT_CLASS + " " + (emphasize ? "font-semibold " : "font-medium ") + toneClass}>
+      <span className={TREE_LABEL_CLASS + (prominent ? " font-semibold text-zinc-400 dark:text-zinc-200" : "")}>
+        {label}
+      </span>
+      <span className={TREE_AMOUNT_CLASS + " " + amountWeight + toneClass}>
         {signed ? pnlUsd(net, masked) : usd(net, masked)}
       </span>
     </div>
@@ -220,15 +227,14 @@ function CloseFillLines({ members, masked }: { members: SituationMemberView[]; m
 function TreeNodeView({
   node,
   masked,
+  isFirst,
   isLast,
-  depth,
 }: {
   node: SituationTreeNode;
   masked: boolean;
+  isFirst: boolean;
   isLast: boolean;
-  depth: number;
 }) {
-  const hasKids = node.children.length > 0;
   const adjustmentParts =
     node.kind === "adjustment"
       ? buildAdjustmentHighlightParts(node.closeMembers, node.openMembers)
@@ -254,20 +260,15 @@ function TreeNodeView({
     <li className="relative">
       <div className="flex gap-3">
         <div className="relative flex w-4 flex-col items-center">
-          {depth > 0 ? (
+          {!isFirst ? (
             <span className="absolute -top-2 left-1/2 h-2 w-px -translate-x-1/2 bg-zinc-300 dark:bg-white/25" aria-hidden />
           ) : null}
           <span className={"relative z-[1] mt-1 h-2.5 w-2.5 rounded-full " + kindDotClass(node.kind)} />
-          {hasKids || !isLast ? (
+          {!isLast ? (
             <span className="mt-1 w-px flex-1 bg-zinc-300 dark:bg-white/25" aria-hidden />
           ) : null}
         </div>
-        <div
-          className={
-            "min-w-0 max-w-3xl flex-1 border-b border-zinc-200 pb-2 dark:border-white/25 " +
-            (hasKids ? "mb-2" : "mb-1")
-          }
-        >
+        <div className="min-w-0 flex-1 border-b border-zinc-200 pb-2 pt-0.5 dark:border-white/25">
           <div className={TREE_GRID_CLASS}>
             <div className="min-w-0 text-xs">
               <span className="font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">
@@ -323,7 +324,7 @@ function TreeNodeView({
                     net={figures.total}
                     masked={masked}
                     toneClass={totalTone}
-                    emphasize
+                    prominent
                     signed
                     title="Net / total cumulative for the whole position after this adjustment"
                   />
@@ -338,19 +339,6 @@ function TreeNodeView({
               Live structure at the tip of this book. Mark-to-market is on the snapshot legs above.
               {formatCurrentDteLabel(node.symbols) ? ` · ${formatCurrentDteLabel(node.symbols)}` : ""}
             </p>
-          ) : null}
-          {hasKids ? (
-            <ol className="mt-2 space-y-0">
-              {node.children.map((child, idx) => (
-                <TreeNodeView
-                  key={child.id}
-                  node={child}
-                  masked={masked}
-                  isLast={idx === node.children.length - 1}
-                  depth={depth + 1}
-                />
-              ))}
-            </ol>
           ) : null}
         </div>
       </div>
@@ -367,6 +355,7 @@ export function SituationLifecycle({
 }) {
   const clumped = clumpPartialFills(row.members);
   const tree = buildSituationTree(clumped, { status: row.status });
+  const rows = flattenSituationTree(tree);
   const situationOpen = row.status === "open";
   const netRealized = !situationOpen;
   return (
@@ -388,13 +377,13 @@ export function SituationLifecycle({
         <p className="text-xs text-zinc-600 dark:text-zinc-300">No fills linked on this situation yet.</p>
       ) : (
         <ol className="max-w-3xl space-y-0">
-          {tree.map((node, idx) => (
+          {rows.map((node, idx) => (
             <TreeNodeView
               key={node.id}
               node={node}
               masked={privacyMasked}
-              isLast={idx === tree.length - 1}
-              depth={0}
+              isFirst={idx === 0}
+              isLast={idx === rows.length - 1}
             />
           ))}
         </ol>

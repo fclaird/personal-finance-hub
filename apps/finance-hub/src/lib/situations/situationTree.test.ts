@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import type { SituationMemberView } from "@/lib/situations/apiTypes";
 import { pnlTone, SITUATION_ACTION_LINE_CLASS, SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
-import { buildSituationTree, situationBlockFigures } from "@/lib/situations/situationTree";
+import { buildSituationTree, flattenSituationTree, situationBlockFigures } from "@/lib/situations/situationTree";
 
 function m(
   partial: Partial<SituationMemberView> & Pick<SituationMemberView, "transactionId" | "role" | "tradeDate">,
@@ -465,5 +465,14 @@ describe("buildSituationTree", () => {
     assert.equal(col3.total, 0);
     assert.match(pnlTone(col3.realized, { realized: true }), /emerald/);
     assert.equal(pnlTone(col3.total, { realized: true }), SITUATION_FILL_CASHFLOW_CLASS);
+
+    const flat = flattenSituationTree(tree);
+    assert.deepEqual(
+      flat.map((n) => n.kind),
+      ["open", "adjustment", "adjustment", "adjustment", "current"],
+    );
+    // Data still nests; flatten is display-only.
+    assert.equal(adj1.children[0], adj2);
+    assert.equal(flat.length, 5);
   });
 });

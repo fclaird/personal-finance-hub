@@ -397,6 +397,20 @@ export function buildSituationTree(
   return [root];
 }
 
+/**
+ * Pre-order walk for a single-rail visual timeline.
+ * Parent/child links stay on the nodes; the UI must not indent by depth.
+ */
+export function flattenSituationTree(roots: SituationTreeNode[]): SituationTreeNode[] {
+  const out: SituationTreeNode[] = [];
+  const walk = (n: SituationTreeNode) => {
+    out.push(n);
+    for (const c of n.children) walk(c);
+  };
+  for (const n of roots) walk(n);
+  return out;
+}
+
 /** Right-column figures for one tree block. UI stacks: credits, fills, realized, net. */
 export function situationBlockFigures(node: SituationTreeNode): {
   openCredit: number | null;
