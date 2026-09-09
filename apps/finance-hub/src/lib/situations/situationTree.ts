@@ -10,6 +10,8 @@ export type SituationTreeNode =
       members: SituationMemberView[];
       /** Realized G/L on this step — null for initial open (credits are unrealized). */
       stepNet: number | null;
+      /** Running realized G/L through this step (null until a close/adjust/leg realizes). */
+      realizedToDate: number | null;
       /** Open credit: establishing premium still on open lots after this step. */
       cumulativeNet: number | null;
       children: SituationTreeNode[];
@@ -26,6 +28,8 @@ export type SituationTreeNode =
       stepNet: number | null;
       /** Realized G/L on closed legs vs original open credits. */
       realizedOnClose: number | null;
+      /** Sum of step realized on this book through this adjustment (includes this step). */
+      realizedToDate: number | null;
       /** Open credit remaining after this adjustment. */
       cumulativeNet: number | null;
       children: SituationTreeNode[];
@@ -36,6 +40,8 @@ export type SituationTreeNode =
       label: string;
       members: SituationMemberView[];
       stepNet: number | null;
+      /** Sum of step realized on this book through this close (includes this step). */
+      realizedToDate: number | null;
       cumulativeNet: number | null;
       children: SituationTreeNode[];
     }
@@ -44,6 +50,8 @@ export type SituationTreeNode =
       kind: "current";
       label: string;
       symbols: string[];
+      /** Running realized G/L already booked on prior closes (open credit is still unrealized). */
+      realizedToDate: number | null;
       /** Live open premium on tip structure (unrealized). */
       cumulativeNet: number | null;
       children: SituationTreeNode[];
@@ -54,6 +62,8 @@ export type SituationTreeNode =
       label: string;
       member: SituationMemberView;
       stepNet: number | null;
+      /** Sum of step realized on this book through this leg-out (includes this step). */
+      realizedToDate: number | null;
       cumulativeNet: number | null;
       children: SituationTreeNode[];
     };
@@ -186,6 +196,12 @@ function openCreditSum(lots: CreditLot[]): number | null {
   return any ? round2(sum) : 0;
 }
 
+/** Running realized = prior realizedToDate + this step's realizedOnClosedLegs (skip null steps). */
+function accumulateRealized(prior: number | null, step: number | null): number | null {
+  if (step == null) return prior;
+  return round2((prior ?? 0) + step);
+}
+
 /**
  * Collapse a flat situation member list into a tree:
  * open (root) → adjustment branches (roll_close + roll_open) → close / current tip.
@@ -193,6 +209,8 @@ function openCreditSum(lots: CreditLot[]): number | null {
  *
  * Accounting:
  * - stepNet = realized G/L on that adjustment/close/leg (not roll cash).
+ * - realizedToDate = sum of stepNet on prior realized steps in this book, including this step.
+ *   Same definition as adjustmentEconomics (FIFO closed-leg vs original open credit). Open credit is not realized.
  * - cumulativeNet = open credit still on lots open after that step (grey in UI).
  */
 export function buildSituationTree(
@@ -208,6 +226,7 @@ export function buildSituationTree(
   const openLots: CreditLot[] = [];
   addEstablishingLots(openLots, opens);
   const priorForRealize: SituationMemberView[] = [...opens];
+  let realizedToDate: number | null = null;
 
   const root: SituationTreeNode = {
     id: `open:${opens.map((m) => m.transactionId).join(",") || "none"}`,
@@ -216,6 +235,7 @@ export function buildSituationTree(
     members: opens,
     // Initial open: credits are unrealized — no realized step.
     stepNet: null,
+    realizedToDate: null,
     cumulativeNet: openCreditSum(openLots),
     children: [],
   };
@@ -245,6 +265,7 @@ export function buildSituationTree(
       // Tag open members as roll_open for lot booking (they already are).
       addEstablishingLots(openLots, openMembers);
       const openCredit = openCreditSum(openLots);
+      realizedToDate = accumulateRealized(realizedToDate, realized);
       const node: SituationTreeNode = {
         id: `adj:${closeMembers.map((x) => x.transactionId).join(",")}`,
         kind: "adjustment",
@@ -254,6 +275,7 @@ export function buildSituationTree(
         priorMembers: [...priorForRealize],
         stepNet: realized,
         realizedOnClose: realized,
+        realizedToDate,
         cumulativeNet: openCredit,
         children: [],
       };
@@ -279,9 +301,10 @@ export function buildSituationTree(
         closeMembers: [],
         openMembers,
         priorMembers: [...priorForRealize],
-        // No close → no realized step.
+        // No close → no realized step; heading still carries prior running total.
         stepNet: null,
         realizedOnClose: null,
+        realizedToDate,
         cumulativeNet: openCreditSum(openLots),
         children: [],
       };
@@ -300,12 +323,14 @@ export function buildSituationTree(
       }
       const realized = realizedOnClosedLegs(closeMembers, priorForRealize);
       consumeClosedLots(openLots, closeMembers);
+      realizedToDate = accumulateRealized(realizedToDate, realized);
       tip.children.push({
         id: `close:${closeMembers.map((x) => x.transactionId).join(",")}`,
         kind: "close",
         label: `Close · ${closeMembers.map(memberLabel).join(" + ")}`,
         members: closeMembers,
         stepNet: realized,
+        realizedToDate,
         cumulativeNet: openCreditSum(openLots),
         children: [],
       });
@@ -317,12 +342,14 @@ export function buildSituationTree(
     // leg / unknown — realized on that leg; open credit updates
     const realized = realizedOnClosedLegs([m], priorForRealize);
     consumeClosedLots(openLots, [m]);
+    realizedToDate = accumulateRealized(realizedToDate, realized);
     tip.children.push({
       id: `leg:${m.transactionId}`,
       kind: "leg",
       label: `Leg · ${memberLabel(m)}`,
       member: m,
       stepNet: realized,
+      realizedToDate,
       cumulativeNet: openCreditSum(openLots),
       children: [],
     });
@@ -372,6 +399,7 @@ export function buildSituationTree(
             ? `Current · ${currentSymbols.join(" + ")}`
             : "Current · still open",
         symbols: currentSymbols,
+        realizedToDate,
         cumulativeNet: openCreditSum(openLots),
         children: [],
       });

@@ -232,6 +232,11 @@ function TreeNodeView({
     (node.kind === "adjustment" && node.closeMembers.length > 0);
   const stepNetValue = "stepNet" in node ? node.stepNet : null;
   const stepForColor = showRealizedStep ? stepNetValue : null;
+  // Running total on realized-step headings (adjust / close / leg-out). Not open-credit lines.
+  const realizedToDate = node.realizedToDate;
+  const showToDate =
+    (node.kind === "adjustment" || node.kind === "close" || node.kind === "leg") &&
+    realizedToDate != null;
 
   return (
     <li className="relative">
@@ -276,6 +281,17 @@ function TreeNodeView({
                 <span className={pnlTone(stepNetValue, { realized: true })}>
                   <span className="mr-1 text-[10px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Realized</span>
                   {usd(stepNetValue, masked)}
+                </span>
+              ) : null}
+              {showToDate ? (
+                <span
+                  className={"tabular-nums font-medium " + pnlTone(realizedToDate, { realized: true })}
+                  title="Cumulative realized G/L through this step"
+                >
+                  <span className="mr-1 text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    To date
+                  </span>
+                  {usd(realizedToDate, masked)}
                 </span>
               ) : null}
               <span className={"font-semibold " + pnlTone(node.cumulativeNet, { realized: false })}>
