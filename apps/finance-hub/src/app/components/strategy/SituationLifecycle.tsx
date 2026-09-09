@@ -14,7 +14,7 @@ import {
   buildSituationTree,
   type SituationTreeNode,
 } from "@/lib/situations/situationTree";
-import { pnlTone, SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
+import { pnlTone, SITUATION_ACTION_LINE_CLASS, SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
 
 export { pnlTone };
 
@@ -60,7 +60,7 @@ const ADJUSTMENT_CHANGED_CLASS =
 
 function AdjustmentHeadlineParts({ parts }: { parts: AdjustmentHighlightPart[] }) {
   return (
-    <span className="ml-2 font-medium text-zinc-800 dark:text-zinc-100">
+    <span className={"ml-2 font-medium " + SITUATION_ACTION_LINE_CLASS}>
       {parts.map((p, i) =>
         p.kind === "token" && p.changed ? (
           <span key={i} className={ADJUSTMENT_CHANGED_CLASS}>
@@ -206,7 +206,6 @@ function TreeNodeView({
     node.kind === "leg" ||
     (node.kind === "adjustment" && node.closeMembers.length > 0);
   const stepNetValue = "stepNet" in node ? node.stepNet : null;
-  const stepForColor = showRealizedStep ? stepNetValue : null;
 
   return (
     <li className="relative">
@@ -234,14 +233,7 @@ function TreeNodeView({
               {adjustmentParts ? (
                 <AdjustmentHeadlineParts parts={adjustmentParts} />
               ) : (
-                <span
-                  className={
-                    "ml-2 font-medium " +
-                    (stepForColor != null
-                      ? pnlTone(stepForColor, { realized: true })
-                      : "text-zinc-800 dark:text-zinc-100")
-                  }
-                >
+                <span className={"ml-2 font-medium " + SITUATION_ACTION_LINE_CLASS}>
                   {headline}
                 </span>
               )}

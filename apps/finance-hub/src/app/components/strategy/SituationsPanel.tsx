@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { SituationLifecycle } from "@/app/components/strategy/SituationLifecycle";
 import { formatUsd2 } from "@/lib/format";
-import { posNegClass } from "@/lib/terminal/colors";
+import { pnlTone } from "@/lib/situations/situationPnlTone";
 import { situationKindMatchesTab, type SituationView } from "@/lib/situations/apiTypes";
 
 type KindFilter = "all" | "short-strangles" | "butterflies";
@@ -232,7 +232,7 @@ export function SituationsPanel({
           <span className="text-zinc-600 dark:text-zinc-300">{pending} unconfirmed</span>
         ) : null}
         {netAny ? (
-          <span className={"ml-auto font-medium tabular-nums " + (posNegClass(net) || "text-zinc-700")}>
+          <span className={"ml-auto font-medium tabular-nums " + pnlTone(net, { realized: statusFilter === "closed" })}>
             Book net {formatUsd2(net, { mask: privacyMasked })}
           </span>
         ) : null}
@@ -283,7 +283,7 @@ export function SituationsPanel({
                 <span
                   className={
                     "tabular-nums text-sm font-medium " +
-                    (r.netPremium == null ? "text-zinc-600 dark:text-zinc-300" : posNegClass(r.netPremium) || "")
+                    pnlTone(r.netPremium, { realized: r.status === "closed" })
                   }
                 >
                   {r.netPremium == null ? "—" : formatUsd2(r.netPremium, { mask: privacyMasked })}

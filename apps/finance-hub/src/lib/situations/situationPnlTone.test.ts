@@ -1,13 +1,27 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { pnlTone, SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
+import {
+  pnlTone,
+  SITUATION_ACTION_LINE_CLASS,
+  SITUATION_FILL_CASHFLOW_CLASS,
+} from "@/lib/situations/situationPnlTone";
 
 describe("situationPnlTone", () => {
   it("close-fill BTC debit stays grey (cashflow, not P/L)", () => {
     // NVDA 230C child fill $-1,106.27 must not scream red.
     assert.equal(pnlTone(-1106.27, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
     assert.equal(pnlTone(-366.27, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
+  });
+
+  it("CLOSE / LEG OUT action-line cashflow is grey, never debit-as-loss (AVGO-shaped)", () => {
+    // ~$423 leg-out and ~$1400 final close are BTC premiums, not realized losses.
+    assert.equal(pnlTone(-423, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
+    assert.equal(pnlTone(-1400, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
+    assert.doesNotMatch(SITUATION_ACTION_LINE_CLASS, /emerald|red/);
+    assert.doesNotMatch(SITUATION_FILL_CASHFLOW_CLASS, /emerald|red/);
+    // Do not paint the action line from the debit even if someone passes realized:true by mistake —
+    // the CLOSE/LEG OUT headline uses SITUATION_ACTION_LINE_CLASS, not pnlTone(debit).
   });
 
   it("open-credit fills stay grey even when the credit is positive", () => {
@@ -21,6 +35,7 @@ describe("situationPnlTone", () => {
     assert.match(loss, /red/);
     assert.notEqual(gain, SITUATION_FILL_CASHFLOW_CLASS);
     assert.notEqual(loss, SITUATION_FILL_CASHFLOW_CLASS);
+    assert.notEqual(gain, SITUATION_ACTION_LINE_CLASS);
   });
 
   it("zero stays grey", () => {

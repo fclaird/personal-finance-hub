@@ -2,7 +2,7 @@
 
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatUsd2 } from "@/lib/format";
-import { posNegClass } from "@/lib/terminal/colors";
+import { SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
 import type { StrategyStats } from "@/lib/strategy/strategyTradeStats";
 
 function pct2(n: number | null | undefined): string {
@@ -40,13 +40,13 @@ export function StrategyStatsPanel({
       </div>
       <div className="rounded-xl border border-zinc-300 bg-white p-4 shadow-sm dark:border-white/20 dark:bg-zinc-950">
         <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Total P&amp;L</div>
-        <div className={"mt-1 text-2xl font-semibold tabular-nums " + (posNegClass(stats.totalPnl) || "text-zinc-900 dark:text-zinc-100")}>
+        <div className={"mt-1 text-2xl font-semibold tabular-nums " + SITUATION_FILL_CASHFLOW_CLASS}>
           {stats.totalPnl == null ? "—" : formatUsd2(stats.totalPnl, { mask: privacyMasked })}
         </div>
       </div>
       <div className="rounded-xl border border-zinc-300 bg-white p-4 shadow-sm dark:border-white/20 dark:bg-zinc-950">
         <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Avg P&amp;L / trade</div>
-        <div className={"mt-1 text-2xl font-semibold tabular-nums " + (posNegClass(stats.avgPnlPerTrade) || "text-zinc-900 dark:text-zinc-100")}>
+        <div className={"mt-1 text-2xl font-semibold tabular-nums " + SITUATION_FILL_CASHFLOW_CLASS}>
           {stats.avgPnlPerTrade == null ? "—" : formatUsd2(stats.avgPnlPerTrade, { mask: privacyMasked })}
         </div>
       </div>
@@ -60,7 +60,7 @@ export function StrategyStatsPanel({
           {stats.largestWinner ? (
             <>
               <SymbolLink symbol={stats.largestWinner.symbol}>{stats.largestWinner.symbol}</SymbolLink>{" "}
-              <span className="tabular-nums text-emerald-600 dark:text-emerald-400">
+              <span className={"tabular-nums " + SITUATION_FILL_CASHFLOW_CLASS}>
                 {formatUsd2(stats.largestWinner.pnl, { mask: privacyMasked })}
               </span>
             </>
@@ -75,7 +75,7 @@ export function StrategyStatsPanel({
           {stats.largestLoser ? (
             <>
               <SymbolLink symbol={stats.largestLoser.symbol}>{stats.largestLoser.symbol}</SymbolLink>{" "}
-              <span className="tabular-nums text-red-600 dark:text-red-400">
+              <span className={"tabular-nums " + SITUATION_FILL_CASHFLOW_CLASS}>
                 {formatUsd2(stats.largestLoser.pnl, { mask: privacyMasked })}
               </span>
             </>

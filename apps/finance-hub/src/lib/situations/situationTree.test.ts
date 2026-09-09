@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { SituationMemberView } from "@/lib/situations/apiTypes";
-import { pnlTone, SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
+import { pnlTone, SITUATION_ACTION_LINE_CLASS, SITUATION_FILL_CASHFLOW_CLASS } from "@/lib/situations/situationPnlTone";
 import { buildSituationTree } from "@/lib/situations/situationTree";
 
 function m(
@@ -228,7 +228,9 @@ describe("buildSituationTree", () => {
     if (callClose?.kind !== "close") throw new Error("expected close");
     assert.equal(callClose.members[0]!.netAmount, -1106.27);
     assert.equal(callClose.stepNet, 2257.34);
+    // Action line / fill: debit stays grey. REALIZED header: green on the locked gain.
     assert.equal(pnlTone(callClose.members[0]!.netAmount, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
+    assert.doesNotMatch(SITUATION_ACTION_LINE_CLASS, /emerald|red/);
     assert.match(pnlTone(callClose.stepNet, { realized: true }), /emerald/);
 
     const putClose = root.children.find((c) => c.kind === "leg");
@@ -286,5 +288,61 @@ describe("buildSituationTree", () => {
     const debitSum = close.members.reduce((s, m) => s + (m.netAmount ?? 0), 0);
     assert.equal(Math.round(debitSum * 100) / 100, -1472.54);
     assert.equal(pnlTone(debitSum, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
+  });
+
+  it("CLOSE + LEG OUT action cashflow is the debit; REALIZED is stepNet (any ticker)", () => {
+    // AVGO-shaped example (~$423 leg-out, ~$1400 close) — not ticker-specific.
+    const tree = buildSituationTree(
+      [
+        m({
+          transactionId: "oC",
+          role: "open",
+          tradeDate: "2026-07-01",
+          symbol: "XYZ 200C",
+          quantity: -10,
+          netAmount: 4000,
+        }),
+        m({
+          transactionId: "oP",
+          role: "open",
+          tradeDate: "2026-07-01",
+          symbol: "XYZ 180P",
+          quantity: -10,
+          netAmount: 3500,
+        }),
+        m({
+          transactionId: "cC",
+          role: "leg",
+          tradeDate: "2026-08-01",
+          symbol: "XYZ 200C",
+          quantity: 10,
+          netAmount: -423,
+        }),
+        m({
+          transactionId: "cP",
+          role: "close",
+          tradeDate: "2026-08-15",
+          symbol: "XYZ 180P",
+          quantity: 10,
+          netAmount: -1400,
+        }),
+      ],
+      { status: "closed" },
+    );
+    const root = tree[0]!;
+    const leg = root.children.find((c) => c.kind === "leg");
+    const close = root.children.find((c) => c.kind === "close");
+    assert.equal(leg?.kind, "leg");
+    assert.equal(close?.kind, "close");
+    if (leg?.kind !== "leg" || close?.kind !== "close") throw new Error("expected leg + close");
+    assert.equal(leg.member.netAmount, -423);
+    assert.equal(close.members[0]!.netAmount, -1400);
+    assert.equal(pnlTone(leg.member.netAmount, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
+    assert.equal(pnlTone(close.members[0]!.netAmount, { realized: false }), SITUATION_FILL_CASHFLOW_CLASS);
+    assert.doesNotMatch(SITUATION_ACTION_LINE_CLASS, /emerald|red/);
+    assert.equal(leg.stepNet, 3577); // 4000 + (-423)
+    assert.equal(close.stepNet, 2100); // 3500 + (-1400)
+    assert.match(pnlTone(leg.stepNet, { realized: true }), /emerald/);
+    assert.match(pnlTone(close.stepNet, { realized: true }), /emerald/);
   });
 });
