@@ -31,14 +31,18 @@ export function SituationHeadingTotals({
   privacyMasked: boolean;
 }) {
   return (
-    <div className="flex shrink-0 items-baseline gap-4 tabular-nums">
-      <span className={"text-sm font-medium " + SITUATION_FILL_CASHFLOW_CLASS}>
-        <span className="mr-1">credits</span>
-        {openCredit == null ? "—" : formatUsd2(openCredit, { mask: privacyMasked })}
+    <div className="flex shrink-0 items-baseline gap-4">
+      <span className={"inline-flex items-baseline gap-1.5 text-base font-medium tabular-nums " + SITUATION_FILL_CASHFLOW_CLASS}>
+        <span className="text-base font-medium">credits</span>
+        <span className="text-base font-medium tabular-nums">
+          {openCredit == null ? "—" : formatUsd2(openCredit, { mask: privacyMasked })}
+        </span>
       </span>
-      <span className={"text-sm font-bold " + pnlTone(realized, { realized: true })}>
-        <span className="mr-1 font-bold">gain</span>
-        {realized == null ? "—" : formatSignedUsd2(realized, { mask: privacyMasked })}
+      <span className={"inline-flex items-baseline gap-1.5 text-base font-bold tabular-nums " + pnlTone(realized, { realized: true })}>
+        <span className="text-base font-bold">gain</span>
+        <span className="text-base font-bold tabular-nums">
+          {realized == null ? "—" : formatSignedUsd2(realized, { mask: privacyMasked })}
+        </span>
       </span>
     </div>
   );
