@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { StrategyStatsPanel } from "@/app/components/strategy/StrategyStatsPanel";
 import { EditablePageHeading } from "@/app/components/EditableHeading";
+import { RealizedPnlPanel } from "@/app/components/strategy/RealizedPnlPanel";
 import { SituationsPanel } from "@/app/components/strategy/SituationsPanel";
 import { StrategyTabBar } from "@/app/components/strategy/StrategyTabBar";
 import { StructureBookPanel } from "@/app/components/strategy/StructureBookPanel";
@@ -39,8 +40,11 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
   const [storedTradeRowCount, setStoredTradeRowCount] = useState<number | null>(null);
   const [tradeDataSource, setTradeDataSource] = useState<"ledger" | "positions_preview">("ledger");
 
+  const skipLedger = category === "situations" || category === "realized";
+
   const load = useCallback(async () => {
-    if (category === "situations") {
+    if (skipLedger) {
+      setError(null);
       setLoading(false);
       return;
     }
@@ -64,7 +68,7 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
     } finally {
       setLoading(false);
     }
-  }, [category]);
+  }, [category, skipLedger]);
 
   useEffect(() => {
     void load();
@@ -137,8 +141,9 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
       <StrategyTabBar category={category} />
 
       {category === "situations" ? <SituationsPanel privacyMasked={privacy.masked} /> : null}
+      {category === "realized" ? <RealizedPnlPanel privacyMasked={privacy.masked} /> : null}
 
-      {category === "situations" ? null : (
+      {skipLedger ? null : (
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           {isStructure ? null : (
@@ -177,11 +182,11 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
       </div>
       )}
 
-      {error ? (
+      {error && !skipLedger ? (
         <div className="rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">{error}</div>
       ) : null}
 
-      {category !== "situations" && !loading && tradeDataSource === "positions_preview" ? (
+      {!skipLedger && !loading && tradeDataSource === "positions_preview" ? (
         <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950 dark:border-sky-900/50 dark:bg-sky-950/30 dark:text-sky-100">
           <p className="font-medium">Preview: open option positions</p>
           <p className="mt-2 text-sky-900/90 dark:text-sky-100/85">
@@ -192,7 +197,7 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
         </div>
       ) : null}
 
-      {category !== "situations" && !loading && trades.length === 0 && storedTradeRowCount === 0 ? (
+      {!skipLedger && !loading && trades.length === 0 && storedTradeRowCount === 0 ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/25 dark:text-amber-100">
           <p className="font-medium">No trade history in your local database yet</p>
           <p className="mt-2 text-amber-900/90 dark:text-amber-100/85">
@@ -218,13 +223,13 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
         </div>
       ) : null}
 
-      {category !== "situations" && !isStructure && !loading && trades.length === 0 && storedTradeRowCount !== null && storedTradeRowCount > 0 ? (
+      {!skipLedger && !isStructure && !loading && trades.length === 0 && storedTradeRowCount !== null && storedTradeRowCount > 0 ? (
         <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-800 dark:border-white/15 dark:bg-white/5 dark:text-zinc-200">
           No trades match this classification tab. Try the <strong>All</strong> tab to see every stored row.
         </div>
       ) : null}
 
-      {category === "situations" ? null : isStructure ? (
+      {skipLedger ? null : isStructure ? (
         <StructureBookPanel
           kind={category}
           privacyMasked={privacy.masked}

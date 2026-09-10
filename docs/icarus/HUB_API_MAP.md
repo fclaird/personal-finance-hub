@@ -10,6 +10,7 @@ Base: `https://127.0.0.1:3000` (or Electron `3049`). When `FINANCE_HUB_API_KEY` 
 |---|---|
 | `/api/option-risk` | Live undefined-risk / naked / Δ / DTE / assignment / margin |
 | `/api/option-situations` | Linked situations + net premium (`?format=csv`) |
+| `/api/strategy-realized` | Closed-book realized G/L by strategy + underlying (`?period=all\|ytd\|YYYY&format=csv`) |
 | `/api/strategy-trades` | Classified TRADE ledger (`?category=&format=csv`) |
 | `/api/alerts/events` | Persisted alert events |
 | `/api/alerts/rules` | Rule list (GET) |

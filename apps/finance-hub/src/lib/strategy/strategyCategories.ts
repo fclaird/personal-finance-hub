@@ -16,11 +16,12 @@ export const STRATEGY_SLUGS = [
 export type StrategySlug = (typeof STRATEGY_SLUGS)[number];
 
 /** Routes and API only; not a stored classification bucket. Buy-and-hold is classified in DB but has no tab. */
-export type StrategyTabSlug = "all" | "situations" | Exclude<StrategySlug, "buy-and-hold">;
+export type StrategyTabSlug = "all" | "situations" | "realized" | Exclude<StrategySlug, "buy-and-hold">;
 
 export const STRATEGY_TAB_META: { slug: StrategyTabSlug; label: string }[] = [
   { slug: "all", label: "All" },
   { slug: "situations", label: "Situations" },
+  { slug: "realized", label: "Realized G/L" },
   { slug: "covered-calls", label: "Covered Calls" },
   { slug: "naked-calls", label: "Naked Calls" },
   { slug: "earnings", label: "Earnings" },
@@ -42,7 +43,7 @@ export function isStrategySlug(s: string): s is StrategySlug {
 }
 
 export function isStrategyTabSlug(s: string): s is StrategyTabSlug {
-  return s === "all" || s === "situations" || (isStrategySlug(s) && s !== "buy-and-hold");
+  return s === "all" || s === "situations" || s === "realized" || (isStrategySlug(s) && s !== "buy-and-hold");
 }
 
 export function strategyLabel(slug: string | null | undefined): string {
@@ -60,6 +61,7 @@ export function dualReadSourceCategories(tab: StrategyTabSlug): string[] | null 
   switch (tab) {
     case "all":
     case "situations":
+    case "realized":
       return null;
     case "naked-calls":
       return ["naked-calls", "covered-calls"];

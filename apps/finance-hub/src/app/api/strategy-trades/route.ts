@@ -194,7 +194,7 @@ export async function GET(req: Request) {
         {
           ok: false,
           error:
-            "Invalid category. Use one of: all, situations, covered-calls, naked-calls, earnings, options-sales, short-strangles, butterflies, leaps, long-calls, long-puts, spreads, uncategorized",
+            "Invalid category. Use one of: all, situations, realized, covered-calls, naked-calls, earnings, options-sales, short-strangles, butterflies, leaps, long-calls, long-puts, spreads, uncategorized",
         },
         { status: 400 },
       );
@@ -210,7 +210,7 @@ export async function GET(req: Request) {
 
     const dualCats = dualReadSourceCategories(category);
     const categoryFilterSql =
-      category === "all" || category === "situations" || dualCats == null
+      category === "all" || category === "situations" || category === "realized" || dualCats == null
         ? ""
         : `AND b.strategy_category IN (${dualCats.map((_, i) => `@c${i}`).join(", ")})`;
     const categoryBinds: Record<string, string> =
@@ -246,7 +246,7 @@ export async function GET(req: Request) {
       .all(categoryBinds) as DbTx[];
 
     let trades = rows.map((r) => withEffectiveCategory(db, r));
-    if (category !== "all" && category !== "situations") {
+    if (category !== "all" && category !== "situations" && category !== "realized") {
       trades = trades.filter((t) => t.strategyCategory === category);
     }
     let tradeDataSource: "ledger" | "positions_preview" = "ledger";
