@@ -14,6 +14,8 @@ import type { StrategyTabSlug } from "@/lib/strategy/strategyCategories";
 import { STRATEGY_TAB_META } from "@/lib/strategy/strategyCategories";
 import { MAX_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
 import type { StrategyStats, StrategyTradeApiRow } from "@/lib/strategy/strategyTradeStats";
+import { strategyTabShowsLiveRiskChart } from "@/lib/situations/liveStructures";
+import { LiveStructureBooks } from "@/app/components/strategy/LiveStructureBooks";
 
 type ApiOk = {
   ok: true;
@@ -111,6 +113,7 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
   const csvHref = `/api/strategy-trades?category=${encodeURIComponent(category)}&format=csv`;
 
   const isStructure = category === "short-strangles" || category === "butterflies";
+  const showLiveRiskChart = strategyTabShowsLiveRiskChart(category);
 
   return (
     <div className="flex flex-col gap-5">
@@ -231,6 +234,9 @@ export function StrategyCategoryPage({ category }: { category: StrategyTabSlug }
         />
       ) : (
         <>
+          {showLiveRiskChart ? (
+            <LiveStructureBooks kind={category} situations={[]} privacyMasked={privacy.masked} />
+          ) : null}
           <StrategyStatsPanel stats={stats} privacyMasked={privacy.masked} />
           <StrategyTradesTable
             rows={trades}

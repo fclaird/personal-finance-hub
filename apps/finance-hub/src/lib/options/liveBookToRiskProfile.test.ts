@@ -168,4 +168,72 @@ describe("liveBookToRiskProfile", () => {
     assert.ok(model!.points.length > 0);
   });
 
+  it("spotOverride wins over book/OHLCV spot for any underlying (not ticker-specific)", () => {
+    const book: LiveStructureBook = {
+      key: "a1|XYZ",
+      kind: "short-strangle",
+      accountId: "a1",
+      accountName: "Brokerage",
+      underlying: "XYZ",
+      expiration: "2026-09-11",
+      dte: 5,
+      legs: [
+        leg({
+          positionId: "p",
+          right: "P",
+          strike: 210,
+          quantity: -2,
+          avgPrice: 4.1,
+          markPrice: 1.5,
+          spot: 223.05,
+          underlying: "XYZ",
+          symbol: "XYZ",
+        }),
+        leg({
+          positionId: "c",
+          right: "C",
+          strike: 260,
+          quantity: -2,
+          avgPrice: 3.2,
+          markPrice: 2.8,
+          spot: 223.05,
+          underlying: "XYZ",
+          symbol: "XYZ",
+        }),
+      ],
+    };
+    const ohlcv = liveBookToRiskProfile(book);
+    assert.equal(ohlcv!.spot, 223.05);
+    const live = liveBookToRiskProfile(book, { spotOverride: 245.2 });
+    assert.equal(live!.spot, 245.2);
+    assert.ok(live!.points.some((p) => p.spot >= 245 && p.spot <= 246));
+  });
+
+  it("spotOverride applies to a single-leg naked call book", () => {
+    const book: LiveStructureBook = {
+      key: "a1|QQQ|naked-call",
+      kind: "naked-call",
+      accountId: "a1",
+      accountName: "Brokerage",
+      underlying: "QQQ",
+      expiration: "2026-09-11",
+      dte: 5,
+      legs: [
+        leg({
+          positionId: "c",
+          right: "C",
+          strike: 500,
+          quantity: -1,
+          avgPrice: 2.1,
+          markPrice: 1.4,
+          spot: 480,
+          underlying: "QQQ",
+          symbol: "QQQ",
+        }),
+      ],
+    };
+    assert.equal(liveBookToRiskProfile(book)!.spot, 480);
+    assert.equal(liveBookToRiskProfile(book, { spotOverride: 492.5 })!.spot, 492.5);
+  });
+
 });

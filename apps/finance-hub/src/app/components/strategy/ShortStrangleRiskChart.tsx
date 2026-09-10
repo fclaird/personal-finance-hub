@@ -93,11 +93,17 @@ function modelToRows(model: RiskProfileModel): ChartRow[] {
 export function ShortStrangleRiskChart({
   book,
   privacyMasked = false,
+  liveSpot = null,
 }: {
   book: LiveStructureBook | null;
   privacyMasked?: boolean;
+  /** Best-available live/extended quote for this book's underlying (any ticker). */
+  liveSpot?: number | null;
 }) {
-  const model = useMemo(() => (book ? liveBookToRiskProfile(book) : null), [book]);
+  const model = useMemo(
+    () => (book ? liveBookToRiskProfile(book, { spotOverride: liveSpot }) : null),
+    [book, liveSpot],
+  );
   const rows = useMemo(() => (model ? modelToRows(model) : []), [model]);
   const hasT0 = rows.some((r) => r.t0Pnl != null);
 
