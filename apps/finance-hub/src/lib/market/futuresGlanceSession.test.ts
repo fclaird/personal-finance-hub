@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   cmeEquityIndexFuturesPhase,
   cmeFuturesSessionStartMs,
+  cmePreviousSessionLastClose,
   futuresGlanceKindForInstrument,
   isCmeEquityIndexFuturesTradable,
   isFuturesInstrumentTradable,
@@ -50,4 +51,16 @@ test("splitTimedPointsForFuturesGlance puts Globex bars in regular series", () =
   assert.equal(split.regular.length, 3);
   assert.equal(split.extended.length, 0);
   assert.equal(split.last, 5910);
+});
+
+test("cmePreviousSessionLastClose is the last tradable print before current Globex open", () => {
+  const now = new Date("2026-09-11T09:00:00-04:00");
+  const sessionStart = cmeFuturesSessionStartMs(now);
+  const points = [
+    { tsMs: sessionStart - 65 * 60 * 1000, close: 7598.5 },
+    { tsMs: sessionStart - 5 * 60 * 1000, close: 7601.0 }, // 5:55pm halt window — not tradable
+    { tsMs: sessionStart + 5 * 60 * 1000, close: 7602.5 },
+    { tsMs: now.getTime(), close: 7666.5 },
+  ];
+  assert.equal(cmePreviousSessionLastClose(points, now), 7598.5);
 });

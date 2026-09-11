@@ -22,6 +22,7 @@ import {
   GLANCE_RTH_CLOSE_MIN,
   lastGlanceChartDataTsMs,
   resolveGlanceTileChartAxisDomain,
+  resolveGlanceTileYDomain,
   resolvePortfolioGlanceChartAxisDomain,
   type GlanceTileChartWindowCtx,
 } from "@/lib/market/glanceTileChartWindow";
@@ -832,10 +833,15 @@ export function MarketGlanceCard({
     if (plotAxis?.compress) return enrichGlanceRowsWithPlotMs(baselineChartData, chartWindowCtx, plotAxis);
     return baselineChartData.filter((row) => row.tsMs != null && Number.isFinite(row.tsMs));
   }, [baselineChartData, useFixedTimeAxis, plotAxis, chartWindowCtx]);
-  const yDomain = useMemo(() => {
-    if (chartYDomain) return chartYDomain;
-    return sparklineYDomainFromChartData(plotData, referenceBand);
-  }, [chartYDomain, plotData, referenceBand]);
+  const yDomain = useMemo(
+    () =>
+      resolveGlanceTileYDomain(
+        item,
+        chartYDomain,
+        sparklineYDomainFromChartData(plotData, referenceBand),
+      ),
+    [item, chartYDomain, plotData, referenceBand],
+  );
   const lastIdx = baselineChartData.length - 1;
   const plotLastIdx = Math.max(0, plotData.length - 1);
   const extendedShade = useMemo(() => {

@@ -1,4 +1,7 @@
 import { fetchStooqQuote } from "@/lib/market/stooqQuoteFetch";
+import { extractYahooTimedCloses } from "@/lib/market/glanceExtendedHours";
+import { resolveFuturesGlancePreviousClose } from "@/lib/market/futuresGlancePreviousClose";
+import { futuresGlanceKindForInstrument } from "@/lib/market/futuresGlanceSession";
 import type { RegionalMarketInstrument } from "@/lib/market/regionalMarketInstruments";
 import { fetchYahooIntradayChart } from "@/lib/market/yahooChartFetch";
 
@@ -91,11 +94,16 @@ export async function fetchReconciledOpenQuote(
     null;
   const yahooBar = yahooLastBarClose(yahoo.result);
   const stooqLast = stooq?.close ?? null;
-  const previousClose =
-    asNum(meta?.chartPreviousClose) ??
-    asNum(meta?.previousClose) ??
-    asNum(meta?.regularMarketPreviousClose) ??
-    null;
+  const previousClose = instrument.yahooSymbol.toUpperCase().endsWith("=F")
+    ? resolveFuturesGlancePreviousClose({
+        meta,
+        timed: extractYahooTimedCloses(yahoo.result),
+        kind: futuresGlanceKindForInstrument(instrument),
+        now: new Date(),
+      })
+    : asNum(meta?.chartPreviousClose) ??
+      asNum(meta?.previousClose) ??
+      asNum(meta?.regularMarketPreviousClose);
 
   const candidates = [yahooMeta, yahooBar, stooqLast].filter((v): v is number => v != null);
   const last = yahooMeta ?? yahooBar ?? stooqLast;

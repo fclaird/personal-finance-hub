@@ -9,6 +9,7 @@ import {
 } from "@/app/components/terminal/MarketGlanceCard";
 import { MarketGlanceCombinedChart } from "@/app/components/terminal/MarketGlanceCombinedChart";
 import { resolveMarketsSlotInstrumentId } from "@/lib/market/glanceMarketsTileResolve";
+import { isUsEquityGlanceItem } from "@/lib/market/glanceTileChartWindow";
 import {
   buildGlanceCardLookup,
   collectGlanceCards,
@@ -356,7 +357,7 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
                     chartYmd={usMarkets.session.chartYmd}
                     showingPriorSession={usMarkets.session.showingPriorSession}
                     updatedAt={usMarkets.updatedAt}
-                    chartYDomain={sharedChartYDomain}
+                    chartYDomain={isUsEquityGlanceItem(item) ? sharedChartYDomain : undefined}
                     alternateTitleSelector={titleSelectorForSpec(spec)}
                   />
                 );

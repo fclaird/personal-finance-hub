@@ -131,6 +131,25 @@ export function cmeFuturesSessionEndMs(now: Date = new Date()): number {
   return cmeLastCompletedSessionEndMs(now);
 }
 
+/**
+ * Last Globex print before the current session open (typically the prior weekday 5pm ET halt).
+ * This is a fallback when Yahoo's official daily settle is missing — not the 5d chart baseline.
+ */
+export function cmePreviousSessionLastClose(points: TimedClosePoint[], now: Date): number | null {
+  const sessionStart = cmeFuturesSessionStartMs(now);
+  let last: number | null = null;
+  let lastTs = -Infinity;
+  for (const p of points) {
+    if (p.tsMs >= sessionStart) continue;
+    if (cmeEquityIndexFuturesPhase(p.tsMs) !== "tradable") continue;
+    if (p.tsMs >= lastTs) {
+      lastTs = p.tsMs;
+      last = p.close;
+    }
+  }
+  return last;
+}
+
 function tzMinutesSinceMidnight(tsMs: number, timeZone: string): number {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
