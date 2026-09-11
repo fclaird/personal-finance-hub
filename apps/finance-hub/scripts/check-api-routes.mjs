@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const expected = Number(process.env.FINANCE_HUB_EXPECTED_API_ROUTES ?? "98");
+const expected = Number(process.env.FINANCE_HUB_EXPECTED_API_ROUTES ?? "99");
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const apiRoot = path.join(appRoot, "src", "app", "api");
 
