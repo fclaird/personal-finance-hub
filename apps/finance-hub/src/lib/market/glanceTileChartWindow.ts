@@ -122,6 +122,16 @@ function isUsEquityGlanceItem(item: Pick<UsMarketGlanceItem, "futuresKind" | "in
 
 export { isUsEquityGlanceItem };
 
+/** Equity tiles share a Y scale; futures/cash-index tiles keep their own prior-settle scale. */
+export function resolveGlanceTileYDomain(
+  item: Pick<UsMarketGlanceItem, "futuresKind" | "instrumentKind">,
+  sharedDomain: [number, number] | undefined,
+  ownDomain: [number, number],
+): [number, number] {
+  if (isUsEquityGlanceItem(item) && sharedDomain) return sharedDomain;
+  return ownDomain;
+}
+
 /** Which intraday slice to show on US equity quick-glance sparklines. */
 export function resolveGlanceTileChartWindow(
   item: Pick<UsMarketGlanceItem, "futuresKind" | "instrumentKind" | "extendedPhase" | "extendedSeries">,

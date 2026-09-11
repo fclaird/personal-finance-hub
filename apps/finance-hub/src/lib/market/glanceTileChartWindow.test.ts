@@ -12,6 +12,7 @@ import {
   resolveGlanceExtendedShadeX,
   resolveGlanceTileChartAxisDomain,
   resolveGlanceTileChartWindow,
+  resolveGlanceTileYDomain,
   glanceItemForTileChart,
   resolveGlanceTrimAnchorMs,
   resolvePortfolioGlanceChartAxisDomain,
@@ -115,6 +116,23 @@ test("resolveGlanceTileChartWindow skips futures tiles", () => {
     { marketOpen: false, sessionYmd: SESSION },
   );
   assert.equal(win, null);
+});
+
+test("resolveGlanceTileYDomain does not apply equity/portfolio domain to ES/NQ tiles", () => {
+  const shared: [number, number] = [98.2, 100.4];
+  const own: [number, number] = [99.7, 101.1];
+  assert.deepEqual(
+    resolveGlanceTileYDomain(
+      { futuresKind: "cme_equity_index", instrumentKind: "future" },
+      shared,
+      own,
+    ),
+    own,
+  );
+  assert.deepEqual(
+    resolveGlanceTileYDomain({ futuresKind: undefined, instrumentKind: undefined }, shared, own),
+    shared,
+  );
 });
 
 test("resolveGlanceTileChartAxisDomain rth live spans 09:30 to 16:00 ET", () => {
