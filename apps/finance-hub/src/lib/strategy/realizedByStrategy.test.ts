@@ -101,6 +101,54 @@ describe("closedBookRealized", () => {
     assert.equal(realizedEventDate(book), "2026-06-15");
   });
 
+  it("scale-in then scale-out same OCC does not double-count the first credit", () => {
+    const book: RealizedBookInput = {
+      id: "sit-scale",
+      underlying: "SPY",
+      kind: "short-put",
+      status: "closed",
+      linkStatus: "auto",
+      closedOn: "2026-04-10",
+      members: [
+        m({
+          transactionId: "o1",
+          role: "open",
+          tradeDate: "2026-03-01",
+          symbol: "SPY  260417P00500000",
+          quantity: -1,
+          netAmount: 500,
+        }),
+        m({
+          transactionId: "o2",
+          role: "open",
+          tradeDate: "2026-03-01",
+          symbol: "SPY  260417P00500000",
+          quantity: -1,
+          netAmount: 300,
+        }),
+        m({
+          transactionId: "c1",
+          role: "close",
+          tradeDate: "2026-04-01",
+          symbol: "SPY  260417P00500000",
+          quantity: 1,
+          netAmount: -400,
+        }),
+        m({
+          transactionId: "c2",
+          role: "close",
+          tradeDate: "2026-04-10",
+          symbol: "SPY  260417P00500000",
+          quantity: 1,
+          netAmount: -100,
+        }),
+      ],
+    };
+    assert.equal(closedBookRealized(book), 300);
+    const summary = aggregateClosedRealized([book], { type: "all" });
+    assert.equal(summary.grandTotal, 300);
+  });
+
   it("does not treat leftover open credit as realized", () => {
     const openOnly: RealizedBookInput = {
       id: "open",
