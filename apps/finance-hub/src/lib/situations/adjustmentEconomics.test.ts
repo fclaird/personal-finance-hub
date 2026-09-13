@@ -105,4 +105,92 @@ describe("adjustmentEconomics", () => {
     // put +1200, call -500 → +700
     assert.equal(situationRealizedPnl(members), 700);
   });
+
+  it("FIFO-consumes same-symbol scale-ins so later closes do not rematch the first lot", () => {
+    const open1 = m({
+      transactionId: "o1",
+      role: "open",
+      tradeDate: "2026-03-01",
+      symbol: "SPY  260417P00500000",
+      quantity: -1,
+      netAmount: 500,
+    });
+    const open2 = m({
+      transactionId: "o2",
+      role: "open",
+      tradeDate: "2026-03-01",
+      symbol: "SPY  260417P00500000",
+      quantity: -1,
+      netAmount: 300,
+    });
+    const close1 = m({
+      transactionId: "c1",
+      role: "close",
+      tradeDate: "2026-04-01",
+      symbol: "SPY  260417P00500000",
+      quantity: 1,
+      netAmount: -400,
+    });
+    const close2 = m({
+      transactionId: "c2",
+      role: "close",
+      tradeDate: "2026-04-10",
+      symbol: "SPY  260417P00500000",
+      quantity: 1,
+      netAmount: -100,
+    });
+    // Close1 vs first lot 500−400=+100; close2 vs second lot 300−100=+200.
+    // Without consuming prior closes, close2 rematches the 500 lot → +400 and book +500.
+    assert.equal(situationRealizedPnl([open1, open2, close1, close2]), 300);
+    assert.equal(realizedOnClosedLegs([close1, close2], [open1, open2]), 300);
+    const per = realizedPerClosedLeg([close2], [open1, open2, close1]);
+    assert.equal(per[0]!.realized, 200);
+  });
+
+  it("does not rematch a lot already closed on an earlier roll when realizing the remainder", () => {
+    const members = [
+      m({
+        transactionId: "o1",
+        role: "open",
+        tradeDate: "2026-01-02",
+        symbol: "TSLA 200P",
+        quantity: -1,
+        netAmount: 500,
+      }),
+      m({
+        transactionId: "o2",
+        role: "open",
+        tradeDate: "2026-01-02",
+        symbol: "TSLA 200P",
+        quantity: -1,
+        netAmount: 300,
+      }),
+      m({
+        transactionId: "rc",
+        role: "roll_close",
+        tradeDate: "2026-02-02",
+        symbol: "TSLA 200P",
+        quantity: 1,
+        netAmount: -400,
+      }),
+      m({
+        transactionId: "ro",
+        role: "roll_open",
+        tradeDate: "2026-02-02",
+        symbol: "TSLA 180P",
+        quantity: -1,
+        netAmount: 350,
+      }),
+      m({
+        transactionId: "c",
+        role: "close",
+        tradeDate: "2026-03-02",
+        symbol: "TSLA 200P",
+        quantity: 1,
+        netAmount: -100,
+      }),
+    ];
+    // Roll vs first 500 lot → +100; leftover original vs second 300 lot → +200; book +300.
+    assert.equal(situationRealizedPnl(members), 300);
+  });
 });

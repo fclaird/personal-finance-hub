@@ -14,19 +14,72 @@ type Lot = {
   creditPerContract: number;
 };
 
-/** FIFO lots from open / roll_open fills (credits booked when structure was established). */
+function addEstablishingLot(lots: Lot[], m: SituationMemberView): void {
+  if (m.role !== "open" && m.role !== "roll_open") return;
+  const qty = absQty(m.quantity);
+  if (qty <= 0) return;
+  const net = m.netAmount != null && Number.isFinite(m.netAmount) ? m.netAmount : 0;
+  lots.push({
+    symbol: (m.symbol ?? "").trim(),
+    qtyRemaining: qty,
+    creditPerContract: net / qty,
+  });
+}
+
+/** Match same OCC symbol first (FIFO); leftover qty consumes FIFO across any symbol. */
+function consumeCloseQty(
+  lots: Lot[],
+  close: SituationMemberView,
+): { matchedOpenCredit: number; closedQty: number; matchedAny: boolean } {
+  const closeQty = absQty(close.quantity);
+  if (closeQty <= 0 || !lots.length) {
+    return { matchedOpenCredit: 0, closedQty: 0, matchedAny: false };
+  }
+  let qtyLeft = closeQty;
+  const closeSym = (close.symbol ?? "").trim();
+  let matchedOpenCredit = 0;
+  let matchedAny = false;
+
+  const consume = (lot: Lot, take: number): number => {
+    if (take <= 0 || lot.qtyRemaining <= 0) return 0;
+    const used = Math.min(take, lot.qtyRemaining);
+    matchedOpenCredit += lot.creditPerContract * used;
+    lot.qtyRemaining -= used;
+    return used;
+  };
+
+  if (closeSym) {
+    for (const lot of lots) {
+      if (qtyLeft <= 0) break;
+      if (lot.symbol !== closeSym || lot.qtyRemaining <= 0) continue;
+      qtyLeft -= consume(lot, qtyLeft);
+      matchedAny = true;
+    }
+  }
+  for (const lot of lots) {
+    if (qtyLeft <= 0) break;
+    if (lot.qtyRemaining <= 0) continue;
+    qtyLeft -= consume(lot, qtyLeft);
+    matchedAny = true;
+  }
+
+  return { matchedOpenCredit, closedQty: closeQty - qtyLeft, matchedAny };
+}
+
+/**
+ * FIFO lots still open after walking prior members. Prior closes / roll_closes / legs
+ * consume quantity so a later close cannot rematch the first lot at full original size.
+ */
 function buildOpenLots(priorMembers: SituationMemberView[]): Lot[] {
   const lots: Lot[] = [];
   for (const m of priorMembers) {
-    if (m.role !== "open" && m.role !== "roll_open") continue;
-    const qty = absQty(m.quantity);
-    if (qty <= 0) continue;
-    const net = m.netAmount != null && Number.isFinite(m.netAmount) ? m.netAmount : 0;
-    lots.push({
-      symbol: (m.symbol ?? "").trim(),
-      qtyRemaining: qty,
-      creditPerContract: net / qty,
-    });
+    if (m.role === "open" || m.role === "roll_open") {
+      addEstablishingLot(lots, m);
+      continue;
+    }
+    if (m.role === "roll_close" || m.role === "close" || m.role === "leg") {
+      consumeCloseQty(lots, m);
+    }
   }
   return lots;
 }
@@ -45,41 +98,9 @@ export function realizedPerClosedLeg(
 
   for (const close of closeMembers) {
     const closeQty = absQty(close.quantity);
-    if (closeQty <= 0 || !lots.length) {
-      out.push({ transactionId: close.transactionId, realized: null });
-      continue;
-    }
-    let qtyLeft = closeQty;
     const closeNet = close.netAmount != null && Number.isFinite(close.netAmount) ? close.netAmount : 0;
-    const closeSym = (close.symbol ?? "").trim();
-    let matchedOpenCredit = 0;
-    let matchedAny = false;
-
-    const consume = (lot: Lot, take: number): number => {
-      if (take <= 0 || lot.qtyRemaining <= 0) return 0;
-      const used = Math.min(take, lot.qtyRemaining);
-      matchedOpenCredit += lot.creditPerContract * used;
-      lot.qtyRemaining -= used;
-      return used;
-    };
-
-    if (closeSym) {
-      for (const lot of lots) {
-        if (qtyLeft <= 0) break;
-        if (lot.symbol !== closeSym || lot.qtyRemaining <= 0) continue;
-        qtyLeft -= consume(lot, qtyLeft);
-        matchedAny = true;
-      }
-    }
-    for (const lot of lots) {
-      if (qtyLeft <= 0) break;
-      if (lot.qtyRemaining <= 0) continue;
-      qtyLeft -= consume(lot, qtyLeft);
-      matchedAny = true;
-    }
-
-    const closedQty = closeQty - qtyLeft;
-    if (!matchedAny || closedQty <= 0) {
+    const { matchedOpenCredit, closedQty, matchedAny } = consumeCloseQty(lots, close);
+    if (!matchedAny || closedQty <= 0 || closeQty <= 0) {
       out.push({ transactionId: close.transactionId, realized: null });
       continue;
     }
