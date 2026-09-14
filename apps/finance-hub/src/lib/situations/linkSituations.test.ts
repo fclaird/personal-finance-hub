@@ -147,4 +147,92 @@ describe("proposeSituations N-transaction linking", () => {
     ]);
     assert.equal(rows[0]!.kind, "butterfly");
   });
+
+  it("attaches a same-activity two-leg close onto the open strangle instead of a new book", () => {
+    const rows = proposeSituations([
+      txn({
+        id: "open",
+        accountId: "a1",
+        tradeDate: "2026-06-01",
+        netAmount: 420,
+        legs: [
+          leg({ right: "P", instruction: "sell_open", strike: 180, expiration: "2026-07-17" }),
+          leg({ right: "C", instruction: "sell_open", strike: 230, expiration: "2026-07-17" }),
+        ],
+      }),
+      txn({
+        id: "close",
+        accountId: "a1",
+        tradeDate: "2026-06-20",
+        netAmount: -80,
+        legs: [
+          leg({
+            right: "P",
+            instruction: "buy_close",
+            strike: 180,
+            expiration: "2026-07-17",
+            opening: false,
+          }),
+          leg({
+            right: "C",
+            instruction: "buy_close",
+            strike: 230,
+            expiration: "2026-07-17",
+            opening: false,
+          }),
+        ],
+      }),
+    ]);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.kind, "short-strangle");
+    assert.equal(rows[0]!.status, "closed");
+    assert.equal(rows[0]!.closedOn, "2026-06-20");
+    assert.equal(rows[0]!.netPremium, 340);
+    const roles = rows[0]!.members.map((m) => `${m.transactionId}:${m.role}`).sort();
+    assert.deepEqual(roles, ["close:close", "open:open"]);
+  });
+
+  it("does not seed a same-activity wing roll as a new spread book", () => {
+    const rows = proposeSituations([
+      txn({
+        id: "open",
+        accountId: "a1",
+        tradeDate: "2026-06-01",
+        netAmount: 420,
+        legs: [
+          leg({ right: "P", instruction: "sell_open", strike: 180, expiration: "2026-07-17" }),
+          leg({ right: "C", instruction: "sell_open", strike: 230, expiration: "2026-07-17" }),
+        ],
+      }),
+      txn({
+        id: "roll",
+        accountId: "a1",
+        tradeDate: "2026-06-15",
+        netAmount: 40,
+        legs: [
+          leg({
+            right: "P",
+            instruction: "buy_close",
+            strike: 180,
+            expiration: "2026-07-17",
+            opening: false,
+          }),
+          leg({
+            right: "P",
+            instruction: "sell_open",
+            strike: 175,
+            expiration: "2026-08-21",
+            opening: true,
+          }),
+        ],
+      }),
+    ]);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.kind, "short-strangle");
+    assert.equal(rows[0]!.members.some((m) => m.transactionId === "roll"), true);
+    assert.equal(
+      rows.some((r) => r.kind === "spread" || r.members.every((m) => m.transactionId === "roll")),
+      false,
+    );
+  });
 });

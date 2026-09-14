@@ -186,6 +186,10 @@ export function proposeSituations(
     if (used.has(txn.id)) continue;
     const legs = optionLegsOf(txn);
     if (legs.length < 2) continue;
+    // Same-activity rolls / full closes are not new books. Seeding them here
+    // marks the txn used, so the original open never receives the close and
+    // Realized G/L never sees a close/roll_close member.
+    if (legs.some((l) => isCloseInstruction(l.instruction) || l.opening === false)) continue;
     const und = primaryUnderlying(txn);
     if (!und) continue;
     const structure = detectOptionStructure(legs);
@@ -589,9 +593,15 @@ export function proposeSituations(
       });
 
     const key = strikeKey(leg.right, leg.strike);
+    const closeKeysThisTxn = new Set(
+      optionLegsOf(txn)
+        .filter((l) => isCloseInstruction(l.instruction) || l.opening === false)
+        .map((l) => strikeKey(l.right, l.strike))
+        .filter((k): k is string => k != null),
+    );
     const otherWingsRemain =
       key != null &&
-      [...book.openKeys].some((k) => k !== key) &&
+      [...book.openKeys].some((k) => !closeKeysThisTxn.has(k)) &&
       out[book.index]!.kind === "short-strangle";
 
     const role: SituationMemberRole =
