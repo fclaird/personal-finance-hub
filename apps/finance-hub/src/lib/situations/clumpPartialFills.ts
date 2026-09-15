@@ -4,7 +4,9 @@ function groupKey(m: SituationMemberView): string {
   const orderId = (m.orderId ?? "").trim();
   if (!orderId) {
     // Missing orderId: never clump across fills (intentional separate orders).
-    return `solo:${m.transactionId}|${m.role}`;
+    // Include symbol so listSituations' per-leg expansion of one TRADE
+    // (same transactionId, same role, different OCC) is not re-pooled.
+    return `solo:${m.transactionId}|${m.symbol ?? ""}|${m.role}`;
   }
   return `${orderId}|${m.symbol ?? ""}|${m.role}`;
 }
