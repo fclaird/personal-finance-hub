@@ -107,6 +107,54 @@ describe("proposeSituations N-transaction linking", () => {
     assert.deepEqual(roles, ["btc:roll_close", "close:close", "open:open", "sto2:roll_open"]);
   });
 
+  it("does not drop a same-day extra short sold after a same-order put roll", () => {
+    // Naked put, then BTC+STO as one Schwab order, then a separate STO call the same day
+    // (convert to a strangle). Remaining-opens skips every same-day short while the BTC
+    // is still unused, so the call never becomes a book unless leftovers are seeded later.
+    const rows = proposeSituations([
+      txn({
+        id: "open-put",
+        accountId: "a1",
+        tradeDate: "2026-05-01",
+        netAmount: 300,
+        orderId: "1",
+        legs: [leg({ right: "P", instruction: "sell_open", strike: 180, expiration: "2026-06-20" })],
+      }),
+      txn({
+        id: "btc",
+        accountId: "a1",
+        tradeDate: "2026-05-20",
+        netAmount: -80,
+        orderId: "2",
+        legs: [leg({ right: "P", instruction: "buy_close", strike: 180, expiration: "2026-06-20", opening: false })],
+      }),
+      txn({
+        id: "sto2",
+        accountId: "a1",
+        tradeDate: "2026-05-20",
+        netAmount: 220,
+        orderId: "2",
+        legs: [leg({ right: "P", instruction: "sell_open", strike: 175, expiration: "2026-07-17" })],
+      }),
+      txn({
+        id: "sto-call",
+        accountId: "a1",
+        tradeDate: "2026-05-20",
+        netAmount: 150,
+        orderId: "3",
+        legs: [leg({ right: "C", instruction: "sell_open", strike: 230, expiration: "2026-07-17" })],
+      }),
+    ]);
+    const ids = rows.flatMap((r) => r.members.map((m) => m.transactionId));
+    assert.ok(ids.includes("open-put"));
+    assert.ok(ids.includes("btc"));
+    assert.ok(ids.includes("sto2"));
+    assert.ok(ids.includes("sto-call"), `same-day short call missing from ${JSON.stringify(rows)}`);
+    const callBook = rows.find((r) => r.members.some((m) => m.transactionId === "sto-call"));
+    assert.equal(callBook?.kind, "short-call");
+    assert.equal(callBook?.netPremium, 150);
+  });
+
   it("does not re-pair a rejected put/call pair", () => {
     const rows = proposeSituations(
       [

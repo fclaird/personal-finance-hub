@@ -159,4 +159,29 @@ describe("clumpPartialFills", () => {
     ];
     assert.equal(clumpPartialFills(members).length, 2);
   });
+
+  it("does not merge expanded same-ticket wings that share a transactionId", () => {
+    const members = [
+      m({
+        transactionId: "strangle",
+        role: "open",
+        tradeDate: "2026-03-01",
+        symbol: "AVGO  260417P00180000",
+        quantity: -1,
+        netAmount: 800,
+      }),
+      m({
+        transactionId: "strangle",
+        role: "open",
+        tradeDate: "2026-03-01",
+        symbol: "AVGO  260417C00220000",
+        quantity: -1,
+        netAmount: 600,
+      }),
+    ];
+    const clumped = clumpPartialFills(members);
+    assert.equal(clumped.length, 2);
+    assert.equal(clumped[0]!.netAmount, 800);
+    assert.equal(clumped[1]!.netAmount, 600);
+  });
 });

@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 
 import { newId } from "@/lib/id";
+import { expandSituationMember } from "@/lib/situations/expandOptionLegs";
 import { clumpLinkablePartials, loadLinkableBrokerTransactions } from "@/lib/situations/fromBrokerTx";
 import { proposeSituations } from "@/lib/situations/linkSituations";
 import type { ProposedSituation, SituationLinkStatus, SituationMemberRole } from "@/lib/situations/types";
@@ -183,7 +184,8 @@ export function listSituations(db: Database.Database): SituationListRow[] {
         b.net_amount AS netAmount,
         b.instruction AS instruction,
         b.description AS description,
-        CAST(json_extract(b.raw_json, '$.orderId') AS TEXT) AS orderId
+        CAST(json_extract(b.raw_json, '$.orderId') AS TEXT) AS orderId,
+        b.raw_json AS rawJson
       FROM option_situation_members m
       JOIN broker_transactions b ON b.id = m.transaction_id
       ORDER BY b.trade_date ASC, b.id ASC
@@ -207,6 +209,7 @@ export function listSituations(db: Database.Database): SituationListRow[] {
     instruction: string | null;
     description: string | null;
     orderId: string | number | null;
+    rawJson: string | null;
   }>;
 
   const bySit = new Map<string, SituationListRow["members"]>();
@@ -220,16 +223,7 @@ export function listSituations(db: Database.Database): SituationListRow[] {
         : String(m.orderId);
     const expiration = typeof m.expiration === "string" ? m.expiration.slice(0, 10) : null;
     const tradeTime = typeof m.tradeTime === "string" ? m.tradeTime : null;
-    const deltaAtFill = deltaAtFillFromDb(db, {
-      underlying: m.underlying,
-      right,
-      strike: m.strike,
-      expiration,
-      price: m.price,
-      tradeDate: m.tradeDate,
-      tradeTime,
-    });
-    list.push({
+    const base = {
       transactionId: m.transactionId,
       role: m.role,
       tradeDate: m.tradeDate,
@@ -246,8 +240,23 @@ export function listSituations(db: Database.Database): SituationListRow[] {
       instruction: m.instruction,
       description: m.description,
       orderId,
-      deltaAtFill,
-    });
+      deltaAtFill: null,
+    };
+    const expanded = expandSituationMember(base, m.rawJson);
+    for (const row of expanded) {
+      list.push({
+        ...row,
+        deltaAtFill: deltaAtFillFromDb(db, {
+          underlying: row.underlying,
+          right: row.right,
+          strike: row.strike,
+          expiration: row.expiration,
+          price: row.price,
+          tradeDate: row.tradeDate,
+          tradeTime: row.tradeTime,
+        }),
+      });
+    }
     bySit.set(m.situationId, list);
   }
 
