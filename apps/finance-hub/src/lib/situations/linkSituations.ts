@@ -457,12 +457,50 @@ export function proposeSituations(
     }
   }
 
+  function seedOpeningBook(txn: LinkableTxn): boolean {
+    if (used.has(txn.id)) return false;
+    const leg = optionLegsOf(txn)[0];
+    if (!leg) return false;
+    if (!(leg.opening && (isShortPremiumInstruction(leg.instruction) || leg.instruction === "buy_open"))) {
+      return false;
+    }
+    const und = primaryUnderlying(txn);
+    if (!und) return false;
+    const kind = kindFromSingle(leg, txn.tradeDate, covered.has(txn.id) && leg.right === "C");
+    const sit = buildSituation(sorted, {
+      accountId: txn.accountId,
+      underlying: und,
+      kind,
+      linkStatus: "auto",
+      members: [{ transactionId: txn.id, role: "open" }],
+      openedOn: txn.tradeDate,
+      closedOn: null,
+      status: "open",
+    });
+    out.push(sit);
+    used.add(txn.id);
+    const newBook: OpenBook = {
+      index: out.length - 1,
+      accountId: txn.accountId,
+      underlying: und,
+      rights: new Set(leg.right ? [leg.right] : []),
+      openKeys: new Set(),
+      lastDate: txn.tradeDate,
+      remaining: Math.abs(leg.quantity ?? 1),
+    };
+    rebuildBookKeys(newBook);
+    books.push(newBook);
+    return true;
+  }
+
   // Same-order multi-leg adjustments BEFORE inventing new books from roll opens.
   attachSameOrderRolls();
 
   const leftover = sorted.filter((t) => !used.has(t.id) && optionLegsOf(t).length > 0);
 
   // Remaining opens (no same-order close attached above) become new books.
+  // Skip shorts while a same-day close can still attach as a roll — but only those
+  // waits; leftover unused opens are seeded after pairing so they are not dropped.
   for (const txn of leftover) {
     if (used.has(txn.id)) continue;
     const leg = optionLegsOf(txn)[0];
@@ -489,32 +527,7 @@ export function proposeSituations(
         if (findBookForAnyClose(sameOrderCloses)) continue;
       }
     }
-    const und = primaryUnderlying(txn);
-    if (!und) continue;
-    const kind = kindFromSingle(leg, txn.tradeDate, covered.has(txn.id) && leg.right === "C");
-    const sit = buildSituation(sorted, {
-      accountId: txn.accountId,
-      underlying: und,
-      kind,
-      linkStatus: "auto",
-      members: [{ transactionId: txn.id, role: "open" }],
-      openedOn: txn.tradeDate,
-      closedOn: null,
-      status: "open",
-    });
-    out.push(sit);
-    used.add(txn.id);
-    const newBook: OpenBook = {
-      index: out.length - 1,
-      accountId: txn.accountId,
-      underlying: und,
-      rights: new Set(leg.right ? [leg.right] : []),
-      openKeys: new Set(),
-      lastDate: txn.tradeDate,
-      remaining: Math.abs(leg.quantity ?? 1),
-    };
-    rebuildBookKeys(newBook);
-    books.push(newBook);
+    seedOpeningBook(txn);
   }
 
   // Catch same-order rolls that only became attachable after a new book opened (rare).
@@ -609,6 +622,13 @@ export function proposeSituations(
       out[book.index]!.closedOn = txn.tradeDate;
     }
     used.add(txn.id);
+  }
+
+  // Remaining-opens skipped extra same-day shorts so a roll close could attach.
+  // Pairing consumes one open per close; seed whatever opening fills are still unused
+  // so they are not dropped from Strategies / Realized G/L entirely.
+  for (const txn of sorted) {
+    seedOpeningBook(txn);
   }
 
   return out;
