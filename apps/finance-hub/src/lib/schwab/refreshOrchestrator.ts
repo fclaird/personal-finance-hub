@@ -1,7 +1,8 @@
 import type Database from "better-sqlite3";
 
 import { getDb } from "@/lib/db";
-import { logError, logLine } from "@/lib/log";
+import { capDiagnosticText } from "@/lib/diagnosticText";
+import { logLine } from "@/lib/log";
 import type { DataMode } from "@/lib/dataMode";
 import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import { runSchwabHoldingsSync } from "@/lib/schwab/holdingsSync";
@@ -55,6 +56,11 @@ export function schwabRefreshPlan(bundle: SchwabRefreshBundle): {
   };
 }
 
+function capStoredError(error: string | undefined): string | undefined {
+  if (!error) return undefined;
+  return capDiagnosticText(error);
+}
+
 async function runStep(
   step: string,
   fn: () => Promise<{ ok: boolean; error?: string } & Record<string, unknown>>,
@@ -67,7 +73,7 @@ async function runStep(
       step,
       ok: ok !== false,
       ms: Date.now() - t0,
-      error: error ?? undefined,
+      error: capStoredError(error),
       detail: Object.keys(detail).length ? detail : undefined,
     };
   } catch (e) {
@@ -75,7 +81,7 @@ async function runStep(
       step,
       ok: false,
       ms: Date.now() - t0,
-      error: e instanceof Error ? e.message : String(e),
+      error: capStoredError(e instanceof Error ? e.message : String(e)),
     };
   }
 }

@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 /**
- * Production Next listen helper. Defaults to 127.0.0.1.
+ * Production Next listen helper. Defaults to 127.0.0.1. Plain HTTP, not the https dev server.
+ * SCHWAB_REDIRECT_URI must be http://127.0.0.1:<port>/api/schwab/callback (and the same URL
+ * in the Schwab developer portal). This script does not rewrite .env.local.
+ * If http://127.0.0.1:$PORT/api/health is already 200, exit without a second process.
  * VPN/LAN: FINANCE_HUB_BIND_HOST=0.0.0.0 (or a Tailscale IP) plus FINANCE_HUB_API_KEY.
+ * Leave FINANCE_HUB_ALLOW_BROKER_ORDERS unset.
  */
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { loopbackHealthOk } from "./loopbackHealth.mjs";
 import { loadEnvLocal } from "./loadEnvLocal.mjs";
 
 const root = path.join(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -31,6 +36,11 @@ if (!isLoopback(bindHost) && !process.env.FINANCE_HUB_API_KEY?.trim()) {
       `See docs/remote-desktop-vpn.md.`,
   );
   process.exit(1);
+}
+
+if (await loopbackHealthOk(port)) {
+  console.log(`Finance Hub is already running at http://127.0.0.1:${port}/`);
+  process.exit(0);
 }
 
 console.log(`Finance Hub (next start) http://${bindHost}:${port}/`);

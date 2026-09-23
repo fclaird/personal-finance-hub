@@ -2,6 +2,7 @@ import { getSecretsPassphrase } from "@/lib/env";
 import { marketDataQueueForPath, withMarketDataRateLimit } from "@/lib/schwab/marketDataRateLimit";
 import { SCHWAB_MARKETDATA_API_BASE, SCHWAB_TRADER_API_BASE } from "@/lib/schwab/config";
 import { assertSchwabTraderCallAllowed } from "@/lib/schwab/tradeWall";
+import { schwabHttpError } from "@/lib/schwab/httpError";
 import { isSchwabRefreshTokenRejectedMessage, refreshToken } from "@/lib/schwab/oauth";
 import { clearSchwabToken, getSchwabToken, setSchwabToken, type SchwabToken } from "@/lib/schwab/token";
 
@@ -104,7 +105,7 @@ export async function schwabFetch<T>(
   });
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    throw new Error(`Schwab API error (${url.toString()}): ${resp.status} ${resp.statusText} ${text}`);
+    throw new Error(schwabHttpError("Schwab API error", resp.status, resp.statusText, text, url.toString()));
   }
   return (await resp.json()) as T;
 }
@@ -124,7 +125,9 @@ export async function schwabMarketFetch<T>(path: string, init?: RequestInit): Pr
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
-      throw new Error(`Schwab Market Data API error (${url.toString()}): ${resp.status} ${resp.statusText} ${text}`);
+      throw new Error(
+        schwabHttpError("Schwab Market Data API error", resp.status, resp.statusText, text, url.toString()),
+      );
     }
     return (await resp.json()) as T;
   });
