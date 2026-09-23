@@ -9,6 +9,11 @@ import { latestSnapshotIds as latestSyncedSnapshotIds, latestSnapshotScopeForMod
 import { isAccountInFlavor } from "@/lib/flavors/accounts";
 import { resolveViewScope } from "@/lib/viewScope";
 import { resolvePositionAveragePrice } from "@/lib/holdings/positionAveragePrice";
+import {
+  optionMarkFromMarketValue,
+  optionMarketValueFromMark,
+  resolveOptionContractMultiplier,
+} from "@/lib/options/optionContractMultiplier";
 import { ensureFreshOptionData } from "@/lib/schwab/ensureOptionGreeks";
 import { schwabCurrentDayProfitLoss } from "@/lib/schwab/schwabPositionDayPl";
 import { buildLiveEquityMarkMap, resolveEquityMarkPx } from "@/lib/market/liveEquityMarks";
@@ -300,7 +305,7 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
         effectiveUnderlyingSymbol: sym,
         price,
         marketValue,
-        averagePrice: price,
+        averagePrice: resolvePositionAveragePrice(r.price, r.metadataJson),
         optionExpiration: null,
         optionRight: null,
         optionStrike: null,
@@ -321,14 +326,17 @@ async function buildPositionsForSnapshots(db: ReturnType<typeof getDb>, snaps: s
     const qpx = sym ? pricePoints.get(sym) ?? null : null;
     const averagePrice = resolvePositionAveragePrice(r.price, r.metadataJson);
     const qty = r.quantity ?? 0;
+    const multiplier = resolveOptionContractMultiplier(r.metadataJson);
     const syncedMark =
       r.marketValue != null && Number.isFinite(r.marketValue) && qty !== 0
-        ? r.marketValue / (qty * 100)
+        ? optionMarkFromMarketValue(r.marketValue, qty, multiplier)
         : null;
     const markPrice = qpx ?? syncedMark ?? averagePrice;
     const price = markPrice;
     const marketValue =
-      markPrice != null && Number.isFinite(markPrice) && qty !== 0 ? markPrice * 100 * qty : r.marketValue;
+      markPrice != null && Number.isFinite(markPrice) && qty !== 0
+        ? optionMarketValueFromMark(markPrice, qty, multiplier)
+        : r.marketValue;
 
     const parsed = parseOptionFromSecurity(r.symbol, r.securityName);
     const dte = parsed ? daysToExpiration(parsed.expiration, r.asOf) : null;
