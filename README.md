@@ -55,10 +55,12 @@ See [docs/migration/from-legacy-finance-hub.md](docs/migration/from-legacy-finan
 cd apps/finance-hub
 cp .env.local.example .env.local   # fill in Schwab / Finnhub keys
 npm install
-npm run dev                        # http://localhost:3000
+npm run build && npm run start     # http://127.0.0.1:3000
 ```
 
-From the repo root you can also run `npm run dev` (delegates to `apps/finance-hub`).
+Day-to-day, point a Dock icon at `apps/finance-hub/scripts/open-finance-hub.command` (it does not build). Production is **http**, not the https dev server. Set `SCHWAB_REDIRECT_URI` to `http://127.0.0.1:3000/api/schwab/callback` and the same URL in the Schwab developer portal before reconnecting. Leave `FINANCE_HUB_ALLOW_BROKER_ORDERS` unset. Do not leave `npm run dev` running — Turbopack dev RSS grows to many GB.
+
+From the repo root you can also run `npm run start` (delegates to `apps/finance-hub`).
 
 Desktop shell: see `apps/finance-hub/docs/DESKTOP.md`.
 

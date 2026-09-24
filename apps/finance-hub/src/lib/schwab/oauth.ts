@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import { SCHWAB_OAUTH_AUTHORIZE_URL, SCHWAB_OAUTH_TOKEN_URL, getSchwabConfig } from "@/lib/schwab/config";
+import { schwabHttpError } from "@/lib/schwab/httpError";
 import type { SchwabToken } from "@/lib/schwab/token";
 
 /** Authorization-code exchange must return both tokens (snake_case or camelCase). */
@@ -72,7 +73,7 @@ export async function exchangeCodeForToken(code: string): Promise<Omit<SchwabTok
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    throw new Error(`Schwab token exchange failed: ${resp.status} ${resp.statusText} ${text}`);
+    throw new Error(schwabHttpError("Schwab token exchange failed", resp.status, resp.statusText, text));
   }
   return parseSchwabTokenFromExchange(await resp.json());
 }
@@ -103,7 +104,7 @@ export async function refreshToken(refresh_token: string): Promise<Omit<SchwabTo
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    throw new Error(`Schwab token refresh failed: ${resp.status} ${resp.statusText} ${text}`);
+    throw new Error(schwabHttpError("Schwab token refresh failed", resp.status, resp.statusText, text));
   }
   return parseSchwabTokenFromRefresh(await resp.json(), refresh_token);
 }
