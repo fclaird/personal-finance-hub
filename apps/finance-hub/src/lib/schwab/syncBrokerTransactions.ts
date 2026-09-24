@@ -3,8 +3,13 @@ import type Database from "better-sqlite3";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { DEFAULT_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
-import { fetchSchwabAccountNumbers, fetchSchwabTransactionsChunked } from "@/lib/schwab/fetchAccountTransactions";
-import { normalizeSchwabTransaction } from "@/lib/schwab/transactionNormalize";
+import {
+  fetchSchwabAccountNumbers,
+  fetchSchwabTransactionsChunked,
+  type FetchSchwabTransactionsChunkedDeps,
+  type SchwabAccountNumberRow,
+} from "@/lib/schwab/fetchAccountTransactions";
+import { normalizeSchwabTransaction, type SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
 import { recordSituationsLinkFingerprint } from "@/lib/situations/ensureSituationsFresh";
 import { rebuildAutoSituations } from "@/lib/situations/persistSituations";
 import { reclassifyBrokerTransactionRow } from "@/lib/strategy/classifyTransaction";
@@ -102,12 +107,23 @@ function upsertTransaction(
 export async function syncSchwabBrokerTransactions(options?: {
   lookbackDays?: number;
   db?: Database.Database;
+  /** Test hook. Production reads Schwab account hashes. */
+  fetchAccountNumbers?: () => Promise<SchwabAccountNumberRow[]>;
+  /** Test hook. Production streams TRADE windows from Schwab. */
+  fetchTransactionsChunked?: (
+    accountHash: string,
+    lookbackDays: number,
+    onChunk: (batch: SchwabTxnRaw[]) => void | Promise<void>,
+    deps?: FetchSchwabTransactionsChunkedDeps,
+  ) => Promise<{ chunks: number }>;
 }): Promise<SyncBrokerTransactionsResult> {
   const db = options?.db ?? getDb();
   const lookbackDays = options?.lookbackDays ?? DEFAULT_TRANSACTION_LOOKBACK_DAYS;
+  const fetchAccountNumbers = options?.fetchAccountNumbers ?? fetchSchwabAccountNumbers;
+  const fetchTransactionsChunked = options?.fetchTransactionsChunked ?? fetchSchwabTransactionsChunked;
   const now = new Date().toISOString();
 
-  const nums = await fetchSchwabAccountNumbers();
+  const nums = await fetchAccountNumbers();
   const updateHash = db.prepare(
     `UPDATE accounts SET schwab_account_hash = @hash, updated_at = @now WHERE id = @id`,
   );
@@ -131,36 +147,37 @@ export async function syncSchwabBrokerTransactions(options?: {
   const touchedIds = new Set<string>();
 
   for (const { accountId, hash } of accountHashes) {
-    const txs = await fetchSchwabTransactionsChunked(hash, lookbackDays);
-    for (const tx of txs) {
-      const norm = normalizeSchwabTransaction(tx);
-      if (!norm) continue;
-      const rowId = newId("btx");
-      const id = upsertTransaction(db, {
-        id: rowId,
-        account_id: accountId,
-        external_activity_id: norm.external_activity_id,
-        trade_date: norm.trade_date,
-        transaction_type: norm.transaction_type,
-        description: norm.description,
-        net_amount: norm.net_amount,
-        raw_json: norm.raw_json,
-        symbol: norm.symbol,
-        underlying_symbol: norm.underlying_symbol,
-        asset_type: norm.asset_type,
-        instruction: norm.instruction,
-        position_effect: norm.position_effect,
-        quantity: norm.quantity,
-        price: norm.price,
-        option_expiration: norm.option_expiration,
-        option_right: norm.option_right,
-        option_strike: norm.option_strike,
-        leg_count: norm.leg_count,
-        now,
-      });
-      transactionsUpserted++;
-      touchedIds.add(id);
-    }
+    await fetchTransactionsChunked(hash, lookbackDays, async (txs) => {
+      for (const tx of txs) {
+        const norm = normalizeSchwabTransaction(tx);
+        if (!norm) continue;
+        const rowId = newId("btx");
+        const id = upsertTransaction(db, {
+          id: rowId,
+          account_id: accountId,
+          external_activity_id: norm.external_activity_id,
+          trade_date: norm.trade_date,
+          transaction_type: norm.transaction_type,
+          description: norm.description,
+          net_amount: norm.net_amount,
+          raw_json: norm.raw_json,
+          symbol: norm.symbol,
+          underlying_symbol: norm.underlying_symbol,
+          asset_type: norm.asset_type,
+          instruction: norm.instruction,
+          position_effect: norm.position_effect,
+          quantity: norm.quantity,
+          price: norm.price,
+          option_expiration: norm.option_expiration,
+          option_right: norm.option_right,
+          option_strike: norm.option_strike,
+          leg_count: norm.leg_count,
+          now,
+        });
+        transactionsUpserted++;
+        touchedIds.add(id);
+      }
+    });
   }
 
   let classified = 0;

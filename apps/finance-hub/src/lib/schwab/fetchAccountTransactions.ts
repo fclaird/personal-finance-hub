@@ -84,33 +84,81 @@ export async function fetchSchwabTransactionsWindow(
   return data as SchwabTxnRaw[];
 }
 
+/** Same id rule the chunk walker has always used so overlap between windows is skipped once. */
+export function schwabTransactionDedupeKey(tx: SchwabTxnRaw): string {
+  return (tx.activityId ?? tx.transactionId)?.toString() ?? JSON.stringify(tx).slice(0, 80);
+}
+
+/**
+ * Newest-first windows. Each step is `chunkDays` even when the remaining lookback is shorter,
+ * so a 14-day refresh still issues one request of `SCHWAB_TRANSACTION_CHUNK_DAYS`.
+ */
+export function schwabTransactionChunkWindows(
+  endCapIso: string,
+  lookbackDays: number,
+  chunkDays: number = CHUNK_DAYS,
+): { start: string; end: string }[] {
+  const step = chunkDays > 0 ? chunkDays : CHUNK_DAYS;
+  const windows: { start: string; end: string }[] = [];
+  let chunkEndIso = endCapIso;
+  for (let back = 0; back < lookbackDays; back += step) {
+    const chunkStartIso = addCalendarDays(chunkEndIso, -step);
+    windows.push({ start: chunkStartIso, end: chunkEndIso });
+    chunkEndIso = chunkStartIso;
+  }
+  return windows;
+}
+
+export type SchwabTransactionWindowFetcher = (
+  accountHash: string,
+  startDate: string,
+  endDate: string,
+  maxCalendarIso: string,
+) => Promise<SchwabTxnRaw[]>;
+
+export type FetchSchwabTransactionsChunkedDeps = {
+  /** Final NY calendar cap. When set, skips the live Schwab clock lookup. */
+  endCapIso?: string;
+  fetchWindow?: SchwabTransactionWindowFetcher;
+  chunkDays?: number;
+};
+
+async function resolveTransactionEndCapIso(): Promise<string> {
+  const localNy = schwabCalendarTodayIso();
+  const serverNy = await getSchwabTraderCalendarCapIso();
+  return serverNy <= localNy ? serverNy : localNy;
+}
+
 /**
  * Pull up to `lookbackDays` of history in 59-day chunks (API limit).
+ * Hands each window's new trades to `onChunk`, then drops that batch before the next fetch.
+ * Only dedupe keys are kept across windows — not the trade payloads.
  */
 export async function fetchSchwabTransactionsChunked(
   accountHash: string,
   lookbackDays: number,
-): Promise<SchwabTxnRaw[]> {
-  const localNy = schwabCalendarTodayIso();
-  const serverNy = await getSchwabTraderCalendarCapIso();
-  const endCap = serverNy <= localNy ? serverNy : localNy;
-
-  let chunkEndIso = endCap;
-  const all: SchwabTxnRaw[] = [];
+  onChunk: (batch: SchwabTxnRaw[]) => void | Promise<void>,
+  deps?: FetchSchwabTransactionsChunkedDeps,
+): Promise<{ chunks: number }> {
+  const endCap = deps?.endCapIso ?? (await resolveTransactionEndCapIso());
+  const fetchWindow = deps?.fetchWindow ?? fetchSchwabTransactionsWindow;
+  const windows = schwabTransactionChunkWindows(endCap, lookbackDays, deps?.chunkDays ?? CHUNK_DAYS);
   const seen = new Set<string>();
 
-  for (let back = 0; back < lookbackDays; back += CHUNK_DAYS) {
-    const chunkStartIso = addCalendarDays(chunkEndIso, -CHUNK_DAYS);
-    const batch = await fetchSchwabTransactionsWindow(accountHash, chunkStartIso, chunkEndIso, endCap);
-    for (const tx of batch) {
-      const id = (tx.activityId ?? tx.transactionId)?.toString() ?? JSON.stringify(tx).slice(0, 80);
+  for (const span of windows) {
+    let fetched: SchwabTxnRaw[] | null = await fetchWindow(accountHash, span.start, span.end, endCap);
+    const fresh: SchwabTxnRaw[] = [];
+    for (const tx of fetched) {
+      const id = schwabTransactionDedupeKey(tx);
       if (seen.has(id)) continue;
       seen.add(id);
-      all.push(tx);
+      fresh.push(tx);
     }
-    chunkEndIso = chunkStartIso;
+    fetched = null;
+    await onChunk(fresh);
   }
-  return all;
+
+  return { chunks: windows.length };
 }
 
 export async function fetchSchwabAccountNumbers(): Promise<SchwabAccountNumberRow[]> {
