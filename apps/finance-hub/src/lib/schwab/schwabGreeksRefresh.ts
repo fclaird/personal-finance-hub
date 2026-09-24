@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import { carryForwardGreeksFromPriorSnapshots, getLatestSchwabSnapshotIds } from "@/lib/schwab/greeksCarryForward";
+import { optionMarketValueFromMark, resolveOptionContractMultiplier } from "@/lib/options/optionContractMultiplier";
 import { pickSchwabQuotePrice } from "@/lib/schwab/schwabQuotesPersist";
 import { schwabMarketFetch } from "@/lib/schwab/client";
 import { schwabQuoteObjectFromEntry } from "@/lib/schwab/quoteEntry";
@@ -81,7 +82,8 @@ export async function runSchwabGreeksRefresh(db?: Database.Database): Promise<Sc
     const optionPositions = database
       .prepare(
         `
-      SELECT p.id as position_id, s.symbol as symbol, p.quantity as quantity
+      SELECT p.id as position_id, s.symbol as symbol, p.quantity as quantity,
+             p.metadata_json as metadata_json
       FROM positions p
       JOIN securities s ON s.id = p.security_id
       LEFT JOIN option_greeks og ON og.position_id = p.id
@@ -93,6 +95,7 @@ export async function runSchwabGreeksRefresh(db?: Database.Database): Promise<Sc
       position_id: string;
       symbol: string;
       quantity: number;
+      metadata_json: string | null;
     }>;
 
     const symbols = Array.from(new Set(optionPositions.map((p) => p.symbol).filter(Boolean)));
@@ -147,10 +150,17 @@ export async function runSchwabGreeksRefresh(db?: Database.Database): Promise<Sc
 
     const rthOpen = isUsEquityRegularSessionOpen();
 
-    const posBySymbol = new Map<string, Array<{ position_id: string; quantity: number }>>();
+    const posBySymbol = new Map<
+      string,
+      Array<{ position_id: string; quantity: number; metadata_json: string | null }>
+    >();
     for (const p of optionPositions) {
       if (!posBySymbol.has(p.symbol)) posBySymbol.set(p.symbol, []);
-      posBySymbol.get(p.symbol)!.push({ position_id: p.position_id, quantity: p.quantity });
+      posBySymbol.get(p.symbol)!.push({
+        position_id: p.position_id,
+        quantity: p.quantity,
+        metadata_json: p.metadata_json,
+      });
     }
 
     for (let i = 0; i < symbols.length; i += BATCH) {
@@ -182,9 +192,10 @@ export async function runSchwabGreeksRefresh(db?: Database.Database): Promise<Sc
         for (const row of posRows) {
           if (px != null && px > 0) {
             const qty = row.quantity ?? 0;
+            const multiplier = resolveOptionContractMultiplier(row.metadata_json);
             updatePositionMark.run({
               position_id: row.position_id,
-              market_value: qty !== 0 ? px * 100 * qty : null,
+              market_value: qty !== 0 ? optionMarketValueFromMark(px, qty, multiplier) : null,
             });
           }
           if (applyGreeks) {
