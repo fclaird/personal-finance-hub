@@ -10,6 +10,7 @@ import {
   schwabIntradayTotalsFromDb,
   schwabLiquidationFromDb,
   schwabPriorEquityFromLatestSync,
+  schwabPriorLiquidationFromDb,
 } from "@/lib/terminal/portfolioAccountTotals";
 import {
   buildPortfolioIndexSeries,
@@ -98,6 +99,29 @@ test("externalMarketValueFromDb adds manual 529 holdings", () => {
 
   const { current } = externalMarketValueFromDb(db, "2026-05-21");
   assert.equal(current, 250000);
+});
+
+test("schwabPriorLiquidationFromDb uses the ET session date, not the UTC date", () => {
+  const db = createTestDb();
+  db.prepare(
+    `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('c1', 'schwab', 'S', 'active')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO accounts (id, connection_id, name, account_bucket, type) VALUES ('schwab_a', 'c1', 'Taxable', 'brokerage', 'brokerage')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO account_value_points (account_id, as_of, equity_value, cash_value, source) VALUES ('schwab_a', '2026-05-21T14:00:00.000Z', 1000000, 0, 'schwab_balances')`,
+  ).run();
+  // Thursday 21:00 ET is Friday 01:00 UTC. SQL date() would drop it from Thursday.
+  db.prepare(
+    `INSERT INTO account_value_points (account_id, as_of, equity_value, cash_value, source) VALUES ('schwab_a', '2026-05-22T01:00:00.000Z', 1010000, 0, 'schwab_balances')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO account_value_points (account_id, as_of, equity_value, cash_value, source) VALUES ('schwab_a', '2026-05-22T20:00:00.000Z', 400000, 0, 'schwab_balances')`,
+  ).run();
+
+  const { prior } = schwabPriorLiquidationFromDb(db, "2026-05-21");
+  assert.equal(prior, 1010000);
 });
 
 test("schwabPriorEquityFromLatestSync reads prior-day equity from the latest sync row", () => {

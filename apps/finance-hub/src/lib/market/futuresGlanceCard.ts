@@ -10,6 +10,7 @@ import {
 } from "@/lib/market/futuresGlancePreviousClose";
 import type { RegionalMarketInstrument } from "@/lib/market/regionalMarketInstruments";
 import { normalizeSeriesForChart, type UsMarketIndexCard } from "@/lib/market/usMarketIndices";
+import { buildPostCashClosePlot } from "@/lib/market/glanceMiniChartSession";
 import { fetchYahooIntradayChart, yahooChartSymbol } from "@/lib/market/yahooChartFetch";
 
 function asNum(v: unknown): number | null {
@@ -32,9 +33,13 @@ export async function buildFuturesGlanceCard(
   let extendedPhase = null as UsMarketIndexCard["extendedPhase"];
   let last: number | null = null;
   let previousClose: number | null = null;
+  let postCashClose: UsMarketIndexCard["postCashClose"] = null;
 
   if (yahoo?.result) {
     const timed = extractYahooTimedCloses(yahoo.result);
+    if (def.id === "us-es" || def.id === "us-nq" || def.id === "us-rty") {
+      postCashClose = buildPostCashClosePlot(timed, now);
+    }
     const split = splitTimedPointsForFuturesGlance(timed, kind, def.region, now);
     series = split.regular;
     extendedSeries = split.extended.length >= 2 ? split.extended : undefined;
@@ -84,6 +89,7 @@ export async function buildFuturesGlanceCard(
     instrumentKind: "future",
     futuresKind: kind,
     tradableOpen: isFuturesInstrumentTradable(kind, def.region, now),
+    postCashClose,
   };
 }
 

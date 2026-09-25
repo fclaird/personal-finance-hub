@@ -13,6 +13,7 @@ import {
   schwabIntradayTotalsFromDb,
 } from "@/lib/terminal/portfolioAccountTotals";
 import { portfolioDailyReturnPct } from "@/lib/terminal/portfolioCashFlows";
+import { selectPortfolioSessionValuation } from "@/lib/terminal/portfolioSessionValuation";
 import { PORTFOLIO_INDEX_BASE } from "@/lib/terminal/portfolioGlanceConstants";
 
 export { PORTFOLIO_INDEX_BASE } from "@/lib/terminal/portfolioGlanceConstants";
@@ -321,16 +322,29 @@ export async function fetchPortfolioGlanceCard(
     const totals = await resolvePortfolioAccountTotals(sessionYmd, priorNySessionYmd(sessionYmd), getDb(), flavor);
     if (!totals) return emptyPortfolioCard();
 
-    const { netValue, priorNetValue, netCashFlow, adjustedNetValue } = totals;
+    const { netValue, priorNetValue, netCashFlow } = totals;
     const previousClose = PORTFOLIO_INDEX_BASE;
-    const lastIndex = toIndex(adjustedNetValue, priorNetValue);
-    const change = lastIndex - previousClose;
-    const changePct = portfolioDailyReturnPct(netValue, priorNetValue, netCashFlow) ?? change;
 
     const db = getDb();
     const intradayTotals = schwabIntradayTotalsFromDb(db, sessionYmd, flavor);
+    const valuation = selectPortfolioSessionValuation({
+      now,
+      sessionYmd,
+      netValue,
+      priorNetValue,
+      netCashFlow,
+      externalCurrent: totals.externalCurrent,
+      schwabIntraday: intradayTotals,
+    });
+    const returnNetValue = valuation.netValueForReturn;
+    const seriesThroughMs = valuation.seriesThroughMs;
+    const flow = Number.isFinite(netCashFlow) ? netCashFlow : 0;
+    const lastIndex = toIndex(returnNetValue - flow, priorNetValue);
+    const change = lastIndex - previousClose;
+    const changePct = valuation.changePct ?? portfolioDailyReturnPct(returnNetValue, priorNetValue, netCashFlow) ?? change;
+
     const chartStartMs = nyWallTimeMs(sessionYmd, GLANCE_PREMARKET_START_MIN);
-    const sessionTotals = intradayTotals.filter((pt) => pt.tsMs >= chartStartMs && pt.tsMs <= nowMs);
+    const sessionTotals = intradayTotals.filter((pt) => pt.tsMs >= chartStartMs && pt.tsMs <= seriesThroughMs);
     const lastAccountValueSyncAt =
       sessionTotals.length > 0 ? sessionTotals[sessionTotals.length - 1]!.asOf : null;
     const intradayStale = detectPortfolioIntradayStale(
@@ -344,9 +358,9 @@ export async function fetchPortfolioGlanceCard(
     const series = buildPortfolioIndexSeries(
       intradayTotals,
       priorNetValue,
-      netValue,
+      returnNetValue,
       sessionYmd,
-      nowMs,
+      seriesThroughMs,
       totals.externalCurrent,
       netCashFlow,
     );
@@ -361,13 +375,14 @@ export async function fetchPortfolioGlanceCard(
     let extendedChangePct: number | null = null;
     const rthCloseTsMs = grid.rthCloseTsMs;
 
-    if (ctx.showExtended && normalizedSeries.length > 0) {
+    if (!valuation.lockedToSessionClose && ctx.showExtended && normalizedSeries.length > 0) {
       const extCh = computeExtendedChange(sessionClose, lastIndex);
       extendedChange = extCh.extendedChange;
       extendedChangePct = extCh.extendedChangePct;
     }
 
     if (
+      !valuation.lockedToSessionClose &&
       ctx.showExtended &&
       grid.extended.length > 0 &&
       rthCloseTsMs != null &&
@@ -408,7 +423,7 @@ export async function fetchPortfolioGlanceCard(
       series: normalizedSeries,
       dataSource: "schwab" as const,
       valueMode: "percent" as const,
-      netValue,
+      netValue: returnNetValue,
       priorNetValue,
       extendedSeries,
       sessionClose,

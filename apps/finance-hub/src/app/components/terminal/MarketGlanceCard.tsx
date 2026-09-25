@@ -37,6 +37,7 @@ import {
 import { nyWallTimeMs } from "@/lib/market/futuresGlanceSession";
 import { cashIndexSegmentLabel, formatLondonGlancePointTime, formatTokyoGlancePointTime } from "@/lib/market/cashIndexGlanceSession";
 import type { FuturesGlanceKind } from "@/lib/market/futuresGlanceSession";
+import type { PostCashClosePlot } from "@/lib/market/glanceMiniChartSession";
 import { futuresExtendedPhaseLabel, futuresSegmentLabel } from "@/lib/market/futuresGlanceSession";
 import { PortfolioGlanceValue } from "@/app/components/terminal/PortfolioGlanceValue";
 import { usePortfolioGlanceUnlockedOptional } from "@/app/components/terminal/portfolioGlanceUnlocked";
@@ -103,6 +104,11 @@ export type UsMarketGlanceItem = {
   futuresKind?: FuturesGlanceKind;
   instrumentKind?: GlanceInstrumentKind;
   tradableOpen?: boolean;
+  /** Y reference for the sparkline when it is not `previousClose` (locked cash close). */
+  chartReferencePrice?: number | null;
+  /** Fixed millisecond x-axis. Used by the after-hours futures proxy. */
+  timeAxis?: { startMs: number; endMs: number } | null;
+  postCashClose?: PostCashClosePlot | null;
 };
 
 export type MarketGlanceCardProps = {
@@ -727,10 +733,11 @@ export function MarketGlanceCard({
     }),
     [sessionOpen, sessionYmd, chartYmd, showingPriorSession],
   );
-  const { item: chartItem, omitPriorAnchor } = useMemo(
-    () => glanceItemForTileChart(displayItem, chartWindowCtx),
-    [displayItem, chartWindowCtx],
-  );
+  const { item: chartItem, omitPriorAnchor } = useMemo(() => {
+    const windowed = glanceItemForTileChart(displayItem, chartWindowCtx);
+    if (displayItem.timeAxis) return { item: windowed.item, omitPriorAnchor: true };
+    return windowed;
+  }, [displayItem, chartWindowCtx]);
   const chartData = useMemo(
     () => buildTileChartRows(chartItem, { omitPriorAnchor }),
     [chartItem, omitPriorAnchor],
@@ -808,6 +815,13 @@ export function MarketGlanceCard({
   }, [baselineChartData]);
   const useSharedEquityDomain = item.futuresKind == null && item.instrumentKind !== "cash_index";
   const chartAxisDomain = useMemo(() => {
+    if (displayItem.timeAxis) {
+      return {
+        startMs: displayItem.timeAxis.startMs,
+        endMs: displayItem.timeAxis.endMs,
+        mode: "closed_session" as const,
+      };
+    }
     if (isPortfolio) {
       return resolvePortfolioGlanceChartAxisDomain(chartWindowCtx, baselineChartData);
     }
@@ -904,8 +918,9 @@ export function MarketGlanceCard({
         baselineChartData[enrichedSessionCloseIdx]?.tsMs ?? closeChartIdx,
       )
     : closeChartIdx;
+  const axisEndX = useFixedTimeAxis ? (xDomain?.[1] ?? lastChartX) : lastChartX;
   const priorRefEndX =
-    sessionCloseReferenceY != null && showExtendedChart ? closeChartX : lastChartX;
+    sessionCloseReferenceY != null && showExtendedChart ? closeChartX : axisEndX;
 
   const renderLastDot = (
     series: "gainStroke" | "lossStroke" | "extGainStroke" | "extLossStroke",
@@ -1164,7 +1179,7 @@ export function MarketGlanceCard({
                       fill={`url(#${gradGainId})`}
                       strokeWidth={0}
                       isAnimationActive={false}
-                      connectNulls
+                      connectNulls={!displayItem.timeAxis}
                       legendType="none"
                     />
                     <Area
@@ -1175,7 +1190,7 @@ export function MarketGlanceCard({
                       fill={`url(#${gradLossId})`}
                       strokeWidth={0}
                       isAnimationActive={false}
-                      connectNulls
+                      connectNulls={!displayItem.timeAxis}
                       legendType="none"
                     />
                     <Line
@@ -1186,7 +1201,7 @@ export function MarketGlanceCard({
                       dot={(props) => renderLastDot("gainStroke", props)}
                       fill="none"
                       isAnimationActive={false}
-                      connectNulls
+                      connectNulls={!displayItem.timeAxis}
                       legendType="none"
                     />
                     <Line
@@ -1197,7 +1212,7 @@ export function MarketGlanceCard({
                       dot={(props) => renderLastDot("lossStroke", props)}
                       fill="none"
                       isAnimationActive={false}
-                      connectNulls
+                      connectNulls={!displayItem.timeAxis}
                       legendType="none"
                     />
                     {sessionCloseReferenceY != null && showExtendedChart ? (
@@ -1210,7 +1225,7 @@ export function MarketGlanceCard({
                           fill={`url(#${gradExtGainId})`}
                           strokeWidth={0}
                           isAnimationActive={false}
-                          connectNulls
+                          connectNulls={!displayItem.timeAxis}
                           legendType="none"
                         />
                         <Area
@@ -1221,7 +1236,7 @@ export function MarketGlanceCard({
                           fill={`url(#${gradExtLossId})`}
                           strokeWidth={0}
                           isAnimationActive={false}
-                          connectNulls
+                          connectNulls={!displayItem.timeAxis}
                           legendType="none"
                         />
                         <Line

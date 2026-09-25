@@ -2,7 +2,11 @@ import { buildCashIndexGlanceCard } from "@/lib/market/cashIndexGlanceCard";
 import { buildFuturesGlanceCard } from "@/lib/market/futuresGlanceCard";
 import type { GlanceTimedGrid } from "@/lib/market/glanceSessionGrid";
 import type { RegionalMarketInstrument } from "@/lib/market/regionalMarketInstruments";
-import { REGIONAL_MARKET_INSTRUMENTS, WTI_CRUDE_INSTRUMENT } from "@/lib/market/regionalMarketInstruments";
+import {
+  REGIONAL_MARKET_INSTRUMENTS,
+  RUSSELL_EMINI_INSTRUMENT,
+  WTI_CRUDE_INSTRUMENT,
+} from "@/lib/market/regionalMarketInstruments";
 import {
   buildSymbolGlanceCard,
   RUSSELL_2000_INDEX,
@@ -38,7 +42,7 @@ export async function fetchGlanceAlternateCards(
   now: Date = new Date(),
   grid?: GlanceTimedGrid,
 ): Promise<UsMarketIndexCard[]> {
-  const [russell2000, gold, bitcoin, ethereum, vix, wtiCrude, nikkei225, ftse100] = await Promise.all([
+  const [russell2000, gold, bitcoin, ethereum, vix, wtiCrude, nikkei225, ftse100, russellEmini] = await Promise.all([
     buildSymbolGlanceCard(RUSSELL_2000_INDEX, now, grid),
     buildFuturesGlanceCard(GOLD_INSTRUMENT, now),
     buildSymbolGlanceCard({ id: "bitcoin", label: "Bitcoin", symbol: "BTC-USD" }, now, grid).then(
@@ -51,6 +55,7 @@ export async function fetchGlanceAlternateCards(
     buildFuturesGlanceCard(WTI_CRUDE_INSTRUMENT, now),
     buildCashIndexGlanceCard(NIKKEI_225_INSTRUMENT, now),
     buildCashIndexGlanceCard(FTSE_100_INSTRUMENT, now),
+    buildFuturesGlanceCard(RUSSELL_EMINI_INSTRUMENT, now),
   ]);
-  return [russell2000, gold, bitcoin, ethereum, vix, wtiCrude, nikkei225, ftse100];
+  return [russell2000, gold, bitcoin, ethereum, vix, wtiCrude, nikkei225, ftse100, russellEmini];
 }

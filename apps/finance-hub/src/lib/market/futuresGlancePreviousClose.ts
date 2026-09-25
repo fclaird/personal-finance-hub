@@ -29,6 +29,9 @@ export function futuresGlanceDayChange(last: number | null, previousClose: numbe
  * `previousClose` / `regularMarketPreviousClose` (e.g. ES 7598.5, NQ 29135 on 2026-09-11).
  *
  * Do not fall back to the current session's first print or a cash QQQ/SPY prior.
+ *
+ * This settle is the futures tile's Day % only. After the cash bell, the mini-chart
+ * reference line is the locked 16:00 ET print (`chartReferencePrice`), not this field.
  */
 export function resolveFuturesGlancePreviousClose(opts: {
   meta?: Record<string, unknown> | null;

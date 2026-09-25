@@ -8,6 +8,7 @@ import {
   type UsMarketGlanceItem,
 } from "@/app/components/terminal/MarketGlanceCard";
 import { MarketGlanceCombinedChart } from "@/app/components/terminal/MarketGlanceCombinedChart";
+import { applyClosedSessionFuturesView } from "@/lib/market/glanceMiniChartSession";
 import { resolveMarketsSlotInstrumentId } from "@/lib/market/glanceMarketsTileResolve";
 import { isUsEquityGlanceItem } from "@/lib/market/glanceTileChartWindow";
 import {
@@ -71,6 +72,11 @@ function resolveTileCard(
   return lookup.get(id) ?? null;
 }
 
+function presentMarketsCard(card: UsMarketGlanceItem | null, now: Date): UsMarketGlanceItem | null {
+  if (!card || card.id === "portfolio") return card;
+  return applyClosedSessionFuturesView(card, now);
+}
+
 export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | null }) {
   const [viewMode, setViewMode] = useState<GlanceViewMode>("tiles");
   const [sourceMode, setSourceMode] = useState<GlanceSourceMode>("markets");
@@ -117,27 +123,27 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
     if (!portfolio) return [];
     const slot2Id = resolveMarketsSlotInstrumentId(2, marketsSlots[0], now);
     const slot3Id = resolveMarketsSlotInstrumentId(3, marketsSlots[1], now);
-    const slot4Id = marketsSlots[2];
+    const slot4Id = resolveMarketsSlotInstrumentId(4, marketsSlots[2], now);
     return [
       { storedId: "portfolio" as const, resolvedId: "portfolio" as const, card: portfolio, adjustable: false },
       {
         storedId: marketsSlots[0],
         resolvedId: slot2Id,
-        card: resolveTileCard(cardLookup, slot2Id),
+        card: presentMarketsCard(resolveTileCard(cardLookup, slot2Id), now),
         adjustable: true,
         slotIndex: 2 as const,
       },
       {
         storedId: marketsSlots[1],
         resolvedId: slot3Id,
-        card: resolveTileCard(cardLookup, slot3Id),
+        card: presentMarketsCard(resolveTileCard(cardLookup, slot3Id), now),
         adjustable: true,
         slotIndex: 3 as const,
       },
       {
         storedId: slot4Id,
         resolvedId: slot4Id,
-        card: resolveTileCard(cardLookup, slot4Id),
+        card: presentMarketsCard(resolveTileCard(cardLookup, slot4Id), now),
         adjustable: true,
         slotIndex: 4 as const,
       },
@@ -376,7 +382,7 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
                 : "Combined view indexes each line to 100 at prior close so portfolio and index day moves are comparable. Extended pre/after-hours segments are included when available (8pm–4am ET excluded)."
               : sourceMode === "futures"
                 ? "Each tile title opens a menu. ES/NQ are CME Globex futures; Nikkei 225 is the Tokyo cash index. Amber header = that market is closed."
-                : "Portfolio tile: indexed day % (100 = prior close), not a tradable price — use Index/$ toggle or unlock balance for dollars. Schwab liquidation + external holdings; AV sync every ~3 min in RTH. Nasdaq/S&P auto-switch to NQ/ES outside US RTH. Slots 2–4 have title menus. 8pm–4am ET omitted from extended segments."}
+                : "Portfolio tile: indexed day % (100 = prior close), not a tradable price — use Index/$ toggle or unlock balance for dollars. Schwab liquidation + external holdings; AV sync every ~3 min in RTH. Outside US RTH, Nasdaq/S&P/Russell switch to NQ/ES/RTY and plot futures ticks since the 16:00 ET cash close (that close stays locked until the next 09:30). ES/NQ day % still uses the Globex settle. Slots 2–4 have title menus."}
           </div>
         </>
       ) : (
