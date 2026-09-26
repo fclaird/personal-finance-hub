@@ -495,4 +495,52 @@ describe("buildSituationTree", () => {
     assert.equal(current.realizedCarry, 0);
     assert.equal(situationBlockFigures(current).total, 0);
   });
+
+  it("heading realized FIFO-consumes a same-symbol lot closed on an earlier roll", () => {
+    const members = [
+      m({
+        transactionId: "o1",
+        role: "open",
+        tradeDate: "2026-01-02",
+        symbol: "TSLA 200P",
+        quantity: -1,
+        netAmount: 500,
+      }),
+      m({
+        transactionId: "o2",
+        role: "open",
+        tradeDate: "2026-01-02",
+        symbol: "TSLA 200P",
+        quantity: -1,
+        netAmount: 300,
+      }),
+      m({
+        transactionId: "rc",
+        role: "roll_close",
+        tradeDate: "2026-02-02",
+        symbol: "TSLA 200P",
+        quantity: 1,
+        netAmount: -400,
+      }),
+      m({
+        transactionId: "ro",
+        role: "roll_open",
+        tradeDate: "2026-02-02",
+        symbol: "TSLA 180P",
+        quantity: -1,
+        netAmount: 350,
+      }),
+      m({
+        transactionId: "c",
+        role: "close",
+        tradeDate: "2026-03-02",
+        symbol: "TSLA 200P",
+        quantity: 1,
+        netAmount: -100,
+      }),
+    ];
+    const heading = situationHeadingFigures(members, { status: "closed" });
+    // Roll vs first 500 lot → +100; leftover original vs second 300 lot → +200.
+    assert.equal(heading.realized, 300);
+  });
 });
