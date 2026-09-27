@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 import {
   externalMarketValueFromDb,
   priorNySessionYmd,
+  sumExternalPositionsWithNav,
   schwabIntradayTotalsFromDb,
   schwabLiquidationFromDb,
   schwabPriorEquityFromLatestSync,
@@ -266,4 +267,54 @@ test("buildPortfolioIndexSeries preserves full path after withdrawal cash flow",
   assert.ok(Math.abs(series[0]!.close - 100) < 0.01);
   const expectedLast = PORTFOLIO_INDEX_BASE * ((netValue - withdrawal) / priorNetValue);
   assert.ok(Math.abs(series[series.length - 1]!.close - expectedLast) < 0.05);
+});
+
+test("externalMarketValueFromDb prior snapshot uses the ET session date", () => {
+  const db = createTestDb();
+  db.prepare(
+    `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('conn_manual', 'manual', 'Manual', 'active')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO accounts (id, connection_id, name, account_bucket, type) VALUES ('manual_529', 'conn_manual', '529', '529', 'manual')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('snapLate', 'manual_529', '2026-05-28T00:04:55.748Z')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('snapPrior', 'manual_529', '2026-05-27T16:00:00.000Z')`,
+  ).run();
+  db.prepare(`INSERT INTO securities (id, symbol, name, security_type) VALUES ('sec_529', '529FUND', '529 Fund', 'fund')`).run();
+  db.prepare(
+    `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('pLate', 'snapLate', 'sec_529', 1, 260000, 260000)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('pPrior', 'snapPrior', 'sec_529', 1, 250000, 250000)`,
+  ).run();
+
+  const { current, prior } = externalMarketValueFromDb(db, "2026-05-27");
+  assert.equal(current, 260000);
+  assert.equal(prior, 260000);
+});
+
+test("sumExternalPositionsWithNav marks 529 plan funds to public NAV", () => {
+  const nav = 280;
+  const mv = sumExternalPositionsWithNav(
+    [
+      {
+        accountId: "manual_529",
+        accountBucket: "529",
+        securityType: "fund",
+        symbol: "VTI",
+        metadataJson: JSON.stringify({
+          source: "manual",
+          fundBasis: { statementMarketValue: 200000, statementDate: "2026-01-01", basisTickerNav: 250 },
+        }),
+        quantity: 800,
+        price: 250,
+        marketValue: 200000,
+      },
+    ],
+    new Map([["VTI", nav]]),
+  );
+  assert.equal(mv, 200000 * (nav / 250));
 });

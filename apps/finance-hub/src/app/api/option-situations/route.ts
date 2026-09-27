@@ -4,14 +4,16 @@ import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
 import { ensureSituationsFresh } from "@/lib/situations/ensureSituationsFresh";
 import { listSituations, situationsToCsv } from "@/lib/situations/persistSituations";
+import { resolveViewScope } from "@/lib/viewScope";
 
 export async function GET(req: Request) {
   try {
+    const { flavor } = await resolveViewScope();
     const db = getDb();
     const fresh = ensureSituationsFresh(db);
     const { searchParams } = new URL(req.url);
     const format = searchParams.get("format") ?? "json";
-    const rows = listSituations(db);
+    const rows = listSituations(db, flavor);
     if (format === "csv") {
       return new NextResponse(situationsToCsv(rows), {
         status: 200,
@@ -23,6 +25,7 @@ export async function GET(req: Request) {
     }
     return NextResponse.json({
       ok: true,
+      flavor,
       situations: rows,
       rebuilt: fresh.rebuilt,
       reason: fresh.reason,
@@ -37,9 +40,10 @@ export async function GET(req: Request) {
 
 export async function POST() {
   try {
+    const { flavor } = await resolveViewScope();
     const db = getDb();
     const result = ensureSituationsFresh(db, { force: true });
-    const situations = listSituations(db);
+    const situations = listSituations(db, flavor);
     return NextResponse.json({
       ok: true,
       rebuilt: result.rebuilt,

@@ -88,6 +88,28 @@ describe("classifySchwabTradeRaw taxonomy", () => {
     assert.equal(classifySchwabTradeRaw(db, raw), "naked-calls");
   });
 
+  it("does not relabel a historical naked call as covered after later share purchases", () => {
+    const db = createTestDb();
+    seedAccount(db);
+    db.prepare(`INSERT INTO securities (id, symbol, name, security_type) VALUES ('s1', 'AAPL', 'Apple', 'equity')`).run();
+    db.prepare(`INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('hs1', 'schwab_1', '2026-09-01T20:00:00Z')`).run();
+    db.prepare(
+      `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('p1', 'hs1', 's1', 100, 220, 22000)`,
+    ).run();
+    const raw = rawTrade({
+      id: 11,
+      date: "2026-01-20",
+      legs: [
+        {
+          instruction: "SELL_TO_OPEN",
+          symbol: occ("AAPL", "260320", "C", 200),
+          underlying: "AAPL",
+        },
+      ],
+    });
+    assert.equal(classifySchwabTradeRaw(db, raw, { accountId: "schwab_1" }), "naked-calls");
+  });
+
   it("labels a sell-open call covered when long shares exist", () => {
     const db = createTestDb();
     seedAccount(db);

@@ -1,15 +1,20 @@
+import fs from "node:fs";
+import path from "node:path";
+
 import assert from "node:assert/strict";
 import test from "node:test";
+import Database from "better-sqlite3";
 
 import {
   computePeriodPlFromSeries,
   computePeriodPct,
   computeVsBenchmark,
   fifoRealizedForClosingLeg,
+  loadRealizedTrades,
   parseRealizedGainFromRaw,
   realizedGainScopeForNickname,
 } from "@/lib/analytics/periodReport";
-import type { SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
+import type { SchwabTxnItem, SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
 
 test("computePeriodPlFromSeries uses anchor day and subtracts session cash flow", () => {
   const series = [
@@ -55,6 +60,19 @@ test("fifoRealizedForClosingLeg matches long equity round trip", () => {
   const { gain, complete } = fifoRealizedForClosingLeg(lots, -100, 12);
   assert.equal(complete, true);
   assert.equal(gain, 200);
+  assert.equal(lots.length, 0);
+});
+
+test("fifoRealizedForClosingLeg second round-trip uses the new lot not leftover qty", () => {
+  const lots = [{ qty: 100, perUnit: 10 }];
+  const first = fifoRealizedForClosingLeg(lots, -100, 12);
+  assert.equal(first.complete, true);
+  assert.equal(first.gain, 200);
+  lots.push({ qty: 100, perUnit: 15 });
+  const second = fifoRealizedForClosingLeg(lots, -100, 16);
+  assert.equal(second.complete, true);
+  assert.equal(second.gain, 100);
+  assert.equal(lots.length, 0);
 });
 
 test("fifoRealizedForClosingLeg matches short option close", () => {
@@ -62,6 +80,7 @@ test("fifoRealizedForClosingLeg matches short option close", () => {
   const { gain, complete } = fifoRealizedForClosingLeg(lots, 7, 124);
   assert.equal(complete, true);
   assert.equal(gain, 4522);
+  assert.equal(lots.length, 0);
 });
 
 test("fifoRealizedForClosingLeg is incomplete without opening lot", () => {
@@ -75,4 +94,87 @@ test("realizedGainScopeForNickname maps joint_brokerage vs retirement", () => {
   assert.equal(realizedGainScopeForNickname("Joint_Brokerage"), "joint_brokerage");
   assert.equal(realizedGainScopeForNickname("c_roth-IRA"), "retirement");
   assert.equal(realizedGainScopeForNickname(null), "retirement");
+});
+
+function equityTradeRaw(leg: SchwabTxnItem): string {
+  return JSON.stringify({ type: "TRADE", transactionItem: [leg] } satisfies SchwabTxnRaw);
+}
+
+test("loadRealizedTrades consumes out-of-window closes so later round-trips use the new lots", () => {
+  const db = new Database(":memory:");
+  db.pragma("foreign_keys = ON");
+  db.exec(fs.readFileSync(path.join(process.cwd(), "src", "db", "schema.sql"), "utf-8"));
+  db.prepare(
+    `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('conn1', 'schwab', 'Schwab', 'active')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO accounts (id, connection_id, name, nickname, account_bucket, type)
+     VALUES ('schwab_1', 'conn1', 'Brokerage', 'joint_brokerage', 'brokerage', 'brokerage')`,
+  ).run();
+  const insert = db.prepare(
+    `INSERT INTO broker_transactions (
+       id, account_id, external_activity_id, trade_date, transaction_type, raw_json, symbol,
+       asset_type, position_effect, quantity, price, leg_count
+     ) VALUES (?, 'schwab_1', ?, ?, 'TRADE', ?, 'AAPL', 'EQUITY', ?, ?, ?, 1)`,
+  );
+  insert.run(
+    "tx_open_old",
+    "ext_open_old",
+    "2026-08-03",
+    equityTradeRaw({
+      positionEffect: "OPENING",
+      quantity: 100,
+      cost: -1000,
+      instrument: { assetType: "EQUITY", symbol: "AAPL" },
+    }),
+    "OPENING",
+    100,
+    10,
+  );
+  insert.run(
+    "tx_close_old",
+    "ext_close_old",
+    "2026-08-04",
+    equityTradeRaw({
+      positionEffect: "CLOSING",
+      quantity: -100,
+      cost: 1200,
+      instrument: { assetType: "EQUITY", symbol: "AAPL" },
+    }),
+    "CLOSING",
+    -100,
+    12,
+  );
+  insert.run(
+    "tx_open_new",
+    "ext_open_new",
+    "2026-08-10",
+    equityTradeRaw({
+      positionEffect: "OPENING",
+      quantity: 100,
+      cost: -1500,
+      instrument: { assetType: "EQUITY", symbol: "AAPL" },
+    }),
+    "OPENING",
+    100,
+    15,
+  );
+  insert.run(
+    "tx_close_new",
+    "ext_close_new",
+    "2026-08-11",
+    equityTradeRaw({
+      positionEffect: "CLOSING",
+      quantity: -100,
+      cost: 1600,
+      instrument: { assetType: "EQUITY", symbol: "AAPL" },
+    }),
+    "CLOSING",
+    -100,
+    16,
+  );
+
+  const { trades } = loadRealizedTrades(db, "main", "2026-08-10", "2026-08-11");
+  const close = trades.find((t) => t.id === "tx_close_new:AAPL");
+  assert.equal(close?.realizedDollars, 100);
 });

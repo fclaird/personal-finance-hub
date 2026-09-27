@@ -1,6 +1,9 @@
 import type Database from "better-sqlite3";
 
+import type { FlavorId } from "@/lib/flavor";
+import { accountsInFlavorWhereSql } from "@/lib/flavors/accounts";
 import { newId } from "@/lib/id";
+import { expandSituationMember } from "@/lib/situations/expandOptionLegs";
 import { clumpLinkablePartials, loadLinkableBrokerTransactions } from "@/lib/situations/fromBrokerTx";
 import { proposeSituations } from "@/lib/situations/linkSituations";
 import type { ProposedSituation, SituationLinkStatus, SituationMemberRole } from "@/lib/situations/types";
@@ -59,7 +62,11 @@ function coveredCallTxnIds(db: Database.Database, txns: ReturnType<typeof loadLi
   return out;
 }
 
-/** Rebuild auto/proposed situations. Confirmed and rejected rows are left intact. */
+/**
+ * Rebuild auto/proposed situations. Confirmed rows stay locked.
+ * Rejected pairs stay for audit but their fills are not locked, so the linker
+ * can split them into singles. Rejected singles stay locked so dismissals stick.
+ */
 export function rebuildAutoSituations(db: Database.Database): { proposed: number; kept: number } {
   const lockedIds = new Set(
     (
@@ -69,7 +76,14 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
           SELECT m.transaction_id AS id
           FROM option_situation_members m
           JOIN option_situations s ON s.id = m.situation_id
-          WHERE s.link_status IN ('confirmed', 'rejected')
+          WHERE s.link_status = 'confirmed'
+             OR (
+               s.link_status = 'rejected'
+               AND (
+                 SELECT COUNT(*) FROM option_situation_members m2
+                 WHERE m2.situation_id = s.id
+               ) <= 1
+             )
         `,
         )
         .all() as { id: string }[]
@@ -81,11 +95,6 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
       .prepare(`SELECT COUNT(*) AS c FROM option_situations WHERE link_status IN ('confirmed', 'rejected')`)
       .get() as { c: number }
   ).c;
-
-  db.exec(`
-    DELETE FROM option_situations
-    WHERE link_status IN ('auto', 'proposed')
-  `);
 
   const rawTxns = loadLinkableBrokerTransactions(db).filter((t) => !lockedIds.has(t.id));
   const allTxns = clumpLinkablePartials(rawTxns);
@@ -118,6 +127,10 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
   );
 
   const write = db.transaction((rows: ProposedSituation[]) => {
+    db.exec(`
+      DELETE FROM option_situations
+      WHERE link_status IN ('auto', 'proposed')
+    `);
     for (const s of rows) {
       const id = newId("sit");
       insertSit.run({
@@ -145,7 +158,8 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
   return { proposed: proposed.length, kept };
 }
 
-export function listSituations(db: Database.Database): SituationListRow[] {
+export function listSituations(db: Database.Database, flavor?: FlavorId): SituationListRow[] {
+  const flavorSql = flavor ? `WHERE ${accountsInFlavorWhereSql(flavor, "a")}` : "";
   const sits = db
     .prepare(
       `
@@ -156,6 +170,7 @@ export function listSituations(db: Database.Database): SituationListRow[] {
         s.net_premium AS netPremium, s.title
       FROM option_situations s
       JOIN accounts a ON a.id = s.account_id
+      ${flavorSql}
       ORDER BY s.opened_on DESC, s.id DESC
     `,
     )
@@ -183,7 +198,8 @@ export function listSituations(db: Database.Database): SituationListRow[] {
         b.net_amount AS netAmount,
         b.instruction AS instruction,
         b.description AS description,
-        CAST(json_extract(b.raw_json, '$.orderId') AS TEXT) AS orderId
+        CAST(json_extract(b.raw_json, '$.orderId') AS TEXT) AS orderId,
+        b.raw_json AS rawJson
       FROM option_situation_members m
       JOIN broker_transactions b ON b.id = m.transaction_id
       ORDER BY b.trade_date ASC, b.id ASC
@@ -207,6 +223,7 @@ export function listSituations(db: Database.Database): SituationListRow[] {
     instruction: string | null;
     description: string | null;
     orderId: string | number | null;
+    rawJson: string | null;
   }>;
 
   const bySit = new Map<string, SituationListRow["members"]>();
@@ -220,16 +237,7 @@ export function listSituations(db: Database.Database): SituationListRow[] {
         : String(m.orderId);
     const expiration = typeof m.expiration === "string" ? m.expiration.slice(0, 10) : null;
     const tradeTime = typeof m.tradeTime === "string" ? m.tradeTime : null;
-    const deltaAtFill = deltaAtFillFromDb(db, {
-      underlying: m.underlying,
-      right,
-      strike: m.strike,
-      expiration,
-      price: m.price,
-      tradeDate: m.tradeDate,
-      tradeTime,
-    });
-    list.push({
+    const base = {
       transactionId: m.transactionId,
       role: m.role,
       tradeDate: m.tradeDate,
@@ -246,8 +254,22 @@ export function listSituations(db: Database.Database): SituationListRow[] {
       instruction: m.instruction,
       description: m.description,
       orderId,
-      deltaAtFill,
-    });
+      deltaAtFill: null,
+    };
+    for (const row of expandSituationMember(base, m.rawJson)) {
+      list.push({
+        ...row,
+        deltaAtFill: deltaAtFillFromDb(db, {
+          underlying: row.underlying,
+          right: row.right,
+          strike: row.strike,
+          expiration: row.expiration,
+          price: row.price,
+          tradeDate: row.tradeDate,
+          tradeTime: row.tradeTime,
+        }),
+      });
+    }
     bySit.set(m.situationId, list);
   }
 

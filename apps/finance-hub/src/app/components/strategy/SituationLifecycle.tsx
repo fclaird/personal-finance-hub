@@ -143,7 +143,7 @@ function OpenFillLines({ members, masked }: { members: SituationMemberView[]; ma
     <ul className="contents">
       {members.map((m) => (
         <CashflowFillRow
-          key={m.transactionId + ":" + m.role}
+          key={m.transactionId + ":" + m.role + ":" + (m.symbol ?? "")}
           line={formatFillLine(m)}
           net={m.netAmount}
           masked={masked}
@@ -166,7 +166,7 @@ function AdjustmentFillLines({
     <ul className="contents">
       {closeMembers.map((m) => (
         <CashflowFillRow
-          key={"c:" + m.transactionId}
+          key={"c:" + m.transactionId + ":" + (m.symbol ?? "")}
           line={"closed · " + formatFillLine(m)}
           net={m.netAmount}
           masked={masked}
@@ -175,7 +175,7 @@ function AdjustmentFillLines({
       ))}
       {openMembers.map((m) => (
         <CashflowFillRow
-          key={"o:" + m.transactionId}
+          key={"o:" + m.transactionId + ":" + (m.symbol ?? "")}
           line={"opened · " + formatFillLine(m)}
           net={m.netAmount}
           masked={masked}
@@ -202,7 +202,7 @@ function CloseFillLines({ members, masked }: { members: SituationMemberView[]; m
       <CashflowFillRow line={members.length + " closes · net"} net={combined} masked={masked} />
       {members.map((m) => (
         <CashflowFillRow
-          key={m.transactionId}
+          key={m.transactionId + ":" + (m.symbol ?? "")}
           line={formatFillLine(m)}
           net={m.netAmount}
           masked={masked}
