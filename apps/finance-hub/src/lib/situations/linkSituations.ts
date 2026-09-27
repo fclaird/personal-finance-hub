@@ -11,7 +11,10 @@ import type {
 
 const STRANGLE_DATE_WINDOW_DAYS = 2;
 const STRANGLE_EXP_WINDOW_DAYS = 7;
+/** Short-premium rolls/closes typically land inside a 45-DTE cycle. */
 const ATTACH_WINDOW_DAYS = 45;
+/** Long calls/LEAPs are held far past 45 days; a matching close must still attach. */
+const LONG_OPTION_ATTACH_WINDOW_DAYS = 1100;
 
 function pairKey(a: string, b: string): string {
   return a < b ? `${a}|${b}` : `${b}|${a}`;
@@ -186,6 +189,9 @@ export function proposeSituations(
     if (used.has(txn.id)) continue;
     const legs = optionLegsOf(txn);
     if (legs.length < 2) continue;
+    // Same-activity rolls / full closes are not new books. Seeding them here
+    // marks the txn used, so the original open never receives the close.
+    if (legs.some((l) => isCloseInstruction(l.instruction) || l.opening === false)) continue;
     const und = primaryUnderlying(txn);
     if (!und) continue;
     const structure = detectOptionStructure(legs);
@@ -303,15 +309,48 @@ export function proposeSituations(
     accountId: string;
     underlying: string;
     rights: Set<"C" | "P">;
-    /** Strike keys like "C:400" / "P:350" still open on this book. */
+    /** Strike keys like "C:400:2026-07-17" / "P:350" still open on this book. */
     openKeys: Set<string>;
     lastDate: string;
     remaining: number;
   };
 
-  function strikeKey(right: "C" | "P" | null, strike: number | null): string | null {
+  function normalizeExpiration(expiration: string | null | undefined): string {
+    const s = (expiration ?? "").trim();
+    return s.length >= 10 ? s.slice(0, 10) : s;
+  }
+
+  /** `P:180:2026-07-17` when expiration is known, else `P:180`. */
+  function strikeKey(right: "C" | "P" | null, strike: number | null, expiration?: string | null): string | null {
     if (!right || strike == null || !Number.isFinite(strike)) return null;
-    return right + ":" + strike;
+    const exp = normalizeExpiration(expiration);
+    return exp ? `${right}:${strike}:${exp}` : `${right}:${strike}`;
+  }
+
+  function keyPrefix(right: "C" | "P" | null, strike: number | null): string | null {
+    if (!right || strike == null || !Number.isFinite(strike)) return null;
+    return `${right}:${strike}`;
+  }
+
+  function bookHoldsStrike(
+    book: OpenBook,
+    right: "C" | "P" | null,
+    strike: number | null,
+    expiration?: string | null,
+  ): boolean {
+    const prefix = keyPrefix(right, strike);
+    if (!prefix) return false;
+    const exp = normalizeExpiration(expiration);
+    if (exp) return book.openKeys.has(`${prefix}:${exp}`) || book.openKeys.has(prefix);
+    for (const k of book.openKeys) {
+      if (k === prefix || k.startsWith(prefix + ":")) return true;
+    }
+    return false;
+  }
+
+  function attachWindowDays(book: OpenBook): number {
+    const sitKind = out[book.index]!.kind;
+    return sitKind === "leap" || sitKind === "long-option" ? LONG_OPTION_ATTACH_WINDOW_DAYS : ATTACH_WINDOW_DAYS;
   }
 
   function rebuildBookKeys(book: OpenBook): void {
@@ -325,7 +364,7 @@ export function proposeSituations(
       const t = sorted.find((x) => x.id === m.transactionId);
       if (!t) continue;
       for (const leg of optionLegsOf(t)) {
-        const key = strikeKey(leg.right, leg.strike);
+        const key = strikeKey(leg.right, leg.strike, leg.expiration);
         if (!key || !leg.right) continue;
         const q = Math.abs(leg.quantity ?? 1);
         if (m.role === "open" || m.role === "roll_open") {
@@ -369,25 +408,41 @@ export function proposeSituations(
     books.push(book);
   }
 
-  function findBook(txn: LinkableTxn, right: "C" | "P" | null, strike: number | null = null): OpenBook | null {
+  function candidateBooks(
+    txn: LinkableTxn,
+    right: "C" | "P" | null,
+    strike: number | null,
+    expiration: string | null,
+  ): Array<{ book: OpenBook; gap: number; exact: boolean }> {
     const und = primaryUnderlying(txn);
-    const key = strikeKey(right, strike);
-    let best: OpenBook | null = null;
-    let bestScore = Infinity;
+    const key = strikeKey(right, strike, expiration);
+    const outList: Array<{ book: OpenBook; gap: number; exact: boolean }> = [];
     for (const book of books) {
       if (book.accountId !== txn.accountId || book.underlying !== und) continue;
       if (book.remaining <= 0) continue;
       if (txn.tradeDate < out[book.index]!.openedOn) continue;
       const gap = daysBetween(book.lastDate, txn.tradeDate);
-      if (gap == null || gap > ATTACH_WINDOW_DAYS) continue;
-      // Prefer exact strike match; skip books that don't hold this strike when we know it.
+      if (gap == null || gap > attachWindowDays(book)) continue;
       if (key) {
-        if (!book.openKeys.has(key)) continue;
+        if (!bookHoldsStrike(book, right, strike, expiration)) continue;
       } else if (right && book.rights.size > 0 && !book.rights.has(right)) {
         continue;
       }
-      // Lower score is better: exact key match beats right-only; nearer dates win ties.
-      const score = (key && book.openKeys.has(key) ? 0 : 100) + gap;
+      outList.push({ book, gap, exact: Boolean(key && bookHoldsStrike(book, right, strike, expiration)) });
+    }
+    return outList;
+  }
+
+  function findBook(
+    txn: LinkableTxn,
+    right: "C" | "P" | null,
+    strike: number | null = null,
+    expiration: string | null = null,
+  ): OpenBook | null {
+    let best: OpenBook | null = null;
+    let bestScore = Infinity;
+    for (const { book, gap, exact } of candidateBooks(txn, right, strike, expiration)) {
+      const score = (exact ? 0 : 100) + gap;
       if (score < bestScore) {
         best = book;
         bestScore = score;
@@ -397,12 +452,30 @@ export function proposeSituations(
   }
 
   function findBookForAnyClose(closes: LinkableTxn[]): OpenBook | null {
+    const scores = new Map<OpenBook, { matches: number; gap: number }>();
     for (const c of closes) {
       const leg = optionLegsOf(c)[0];
-      const book = findBook(c, leg?.right ?? null, leg?.strike ?? null);
-      if (book) return book;
+      const candidates = candidateBooks(c, leg?.right ?? null, leg?.strike ?? null, leg?.expiration ?? null);
+      for (const { book, gap } of candidates) {
+        const prev = scores.get(book);
+        if (!prev) scores.set(book, { matches: 1, gap });
+        else {
+          prev.matches += 1;
+          prev.gap = Math.min(prev.gap, gap);
+        }
+      }
     }
-    return null;
+    let best: OpenBook | null = null;
+    let bestMatches = 0;
+    let bestGap = Infinity;
+    for (const [book, s] of scores) {
+      if (s.matches > bestMatches || (s.matches === bestMatches && s.gap < bestGap)) {
+        best = book;
+        bestMatches = s.matches;
+        bestGap = s.gap;
+      }
+    }
+    return best;
   }
 
   function attachSameOrderRolls(): void {
@@ -457,6 +530,42 @@ export function proposeSituations(
     }
   }
 
+  function seedOpeningBook(txn: LinkableTxn): boolean {
+    if (used.has(txn.id)) return false;
+    const leg = optionLegsOf(txn)[0];
+    if (!leg) return false;
+    if (!(leg.opening && (isShortPremiumInstruction(leg.instruction) || leg.instruction === "buy_open"))) {
+      return false;
+    }
+    const und = primaryUnderlying(txn);
+    if (!und) return false;
+    const kind = kindFromSingle(leg, txn.tradeDate, covered.has(txn.id) && leg.right === "C");
+    const sit = buildSituation(sorted, {
+      accountId: txn.accountId,
+      underlying: und,
+      kind,
+      linkStatus: "auto",
+      members: [{ transactionId: txn.id, role: "open" }],
+      openedOn: txn.tradeDate,
+      closedOn: null,
+      status: "open",
+    });
+    out.push(sit);
+    used.add(txn.id);
+    const newBook: OpenBook = {
+      index: out.length - 1,
+      accountId: txn.accountId,
+      underlying: und,
+      rights: new Set(leg.right ? [leg.right] : []),
+      openKeys: new Set(),
+      lastDate: txn.tradeDate,
+      remaining: Math.abs(leg.quantity ?? 1),
+    };
+    rebuildBookKeys(newBook);
+    books.push(newBook);
+    return true;
+  }
+
   // Same-order multi-leg adjustments BEFORE inventing new books from roll opens.
   attachSameOrderRolls();
 
@@ -489,32 +598,7 @@ export function proposeSituations(
         if (findBookForAnyClose(sameOrderCloses)) continue;
       }
     }
-    const und = primaryUnderlying(txn);
-    if (!und) continue;
-    const kind = kindFromSingle(leg, txn.tradeDate, covered.has(txn.id) && leg.right === "C");
-    const sit = buildSituation(sorted, {
-      accountId: txn.accountId,
-      underlying: und,
-      kind,
-      linkStatus: "auto",
-      members: [{ transactionId: txn.id, role: "open" }],
-      openedOn: txn.tradeDate,
-      closedOn: null,
-      status: "open",
-    });
-    out.push(sit);
-    used.add(txn.id);
-    const newBook: OpenBook = {
-      index: out.length - 1,
-      accountId: txn.accountId,
-      underlying: und,
-      rights: new Set(leg.right ? [leg.right] : []),
-      openKeys: new Set(),
-      lastDate: txn.tradeDate,
-      remaining: Math.abs(leg.quantity ?? 1),
-    };
-    rebuildBookKeys(newBook);
-    books.push(newBook);
+    seedOpeningBook(txn);
   }
 
   // Catch same-order rolls that only became attachable after a new book opened (rare).
@@ -545,7 +629,7 @@ export function proposeSituations(
       const closeTxn = aClose ? a : b;
       const openTxn = aOpen ? a : b;
       const closeLeg = optionLegsOf(closeTxn)[0]!;
-      const book = findBook(closeTxn, closeLeg.right, closeLeg.strike);
+      const book = findBook(closeTxn, closeLeg.right, closeLeg.strike, closeLeg.expiration);
       if (!book) continue;
       out[book.index]!.members.push(
         { transactionId: closeTxn.id, role: "roll_close" },
@@ -571,7 +655,7 @@ export function proposeSituations(
     if (used.has(txn.id)) continue;
     const leg = optionLegsOf(txn)[0];
     if (!leg || !isCloseInstruction(leg.instruction)) continue;
-    const book = findBook(txn, leg.right, leg.strike);
+    const book = findBook(txn, leg.right, leg.strike, leg.expiration);
     if (!book) continue;
     if (isRejectedAgainstBook(rejected, out[book.index]!.members, txn.id)) continue;
 
@@ -588,10 +672,16 @@ export function proposeSituations(
         return Boolean(oLeg?.opening && isShortPremiumInstruction(oLeg.instruction));
       });
 
-    const key = strikeKey(leg.right, leg.strike);
+    const key = strikeKey(leg.right, leg.strike, leg.expiration);
+    const closeKeysThisTxn = new Set(
+      optionLegsOf(txn)
+        .filter((l) => isCloseInstruction(l.instruction) || l.opening === false)
+        .map((l) => strikeKey(l.right, l.strike, l.expiration))
+        .filter((k): k is string => k != null),
+    );
     const otherWingsRemain =
       key != null &&
-      [...book.openKeys].some((k) => k !== key) &&
+      [...book.openKeys].some((k) => !closeKeysThisTxn.has(k)) &&
       out[book.index]!.kind === "short-strangle";
 
     const role: SituationMemberRole =
@@ -609,6 +699,12 @@ export function proposeSituations(
       out[book.index]!.closedOn = txn.tradeDate;
     }
     used.add(txn.id);
+  }
+
+  // Remaining-opens skipped extra same-day shorts so a roll close could attach.
+  // Seed whatever opening fills are still unused so they are not dropped.
+  for (const txn of sorted) {
+    seedOpeningBook(txn);
   }
 
   return out;

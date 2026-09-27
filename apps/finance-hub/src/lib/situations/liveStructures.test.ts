@@ -91,6 +91,31 @@ describe("groupLiveStructureBooks", () => {
       false,
     );
   });
+
+  it("excludes a long LEAP on the same underlying from the short-strangle book", () => {
+    const books = groupLiveStructureBooks(
+      [
+        pos({ positionId: "p", right: "P", strike: 230, quantity: -10, underlying: "AVGO", symbol: "AVGO" }),
+        pos({ positionId: "c", right: "C", strike: 290, quantity: -10, underlying: "AVGO", symbol: "AVGO" }),
+        pos({
+          positionId: "leap",
+          right: "C",
+          strike: 400,
+          quantity: 2,
+          underlying: "AVGO",
+          symbol: "AVGO",
+          expiration: "2027-01-15",
+          dte: 400,
+        }),
+      ],
+      "short-strangle",
+    );
+    assert.equal(books.length, 1);
+    assert.deepEqual(
+      books[0]!.legs.map((l) => l.positionId).sort(),
+      ["c", "p"],
+    );
+  });
 });
 
 describe("groupLiveBooksForTab", () => {

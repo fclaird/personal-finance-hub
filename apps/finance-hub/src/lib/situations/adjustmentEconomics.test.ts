@@ -105,4 +105,41 @@ describe("adjustmentEconomics", () => {
     // put +1200, call -500 → +700
     assert.equal(situationRealizedPnl(members), 700);
   });
+
+  it("FIFO-consumes same-symbol scale-ins so later closes do not rematch the first lot", () => {
+    const open1 = m({
+      transactionId: "o1",
+      role: "open",
+      tradeDate: "2026-03-01",
+      symbol: "SPY  260417P00500000",
+      quantity: -1,
+      netAmount: 500,
+    });
+    const open2 = m({
+      transactionId: "o2",
+      role: "open",
+      tradeDate: "2026-03-01",
+      symbol: "SPY  260417P00500000",
+      quantity: -1,
+      netAmount: 300,
+    });
+    const close1 = m({
+      transactionId: "c1",
+      role: "close",
+      tradeDate: "2026-04-01",
+      symbol: "SPY  260417P00500000",
+      quantity: 1,
+      netAmount: -400,
+    });
+    const close2 = m({
+      transactionId: "c2",
+      role: "close",
+      tradeDate: "2026-04-10",
+      symbol: "SPY  260417P00500000",
+      quantity: 1,
+      netAmount: -100,
+    });
+    assert.equal(situationRealizedPnl([open1, open2, close1, close2]), 300);
+    assert.equal(realizedPerClosedLeg([close2], [open1, open2, close1])[0]!.realized, 200);
+  });
 });

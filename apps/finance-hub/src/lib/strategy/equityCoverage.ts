@@ -4,7 +4,9 @@ import { instructionKind } from "@/lib/strategy/optionParse";
 
 /**
  * Long share quantity available to cover short calls.
- * Prefers the latest snapshot; falls back to net equity TRADE activity on or before asOfDate.
+ * Prefers the latest snapshot on or before `asOfDate` (or the latest snapshot when omitted);
+ * falls back to net equity TRADE activity on or before asOfDate.
+ * Later share purchases must not cover a historical naked short call.
  */
 export function longShareQuantityForUnderlying(
   db: Database.Database,
@@ -14,6 +16,7 @@ export function longShareQuantityForUnderlying(
 ): number {
   const u = (underlyingSymbol ?? "").trim().toUpperCase();
   if (!u || !accountId) return 0;
+  const asOf = asOfDate?.trim() ? asOfDate.trim().slice(0, 10) : null;
 
   const snap = db
     .prepare(
@@ -27,11 +30,13 @@ export function longShareQuantityForUnderlying(
         AND s.security_type != 'cash'
         AND UPPER(TRIM(s.symbol)) = @u
         AND hs.as_of = (
-          SELECT MAX(hs2.as_of) FROM holding_snapshots hs2 WHERE hs2.account_id = @accountId
+          SELECT MAX(hs2.as_of) FROM holding_snapshots hs2
+          WHERE hs2.account_id = @accountId
+            AND (@asOf IS NULL OR substr(hs2.as_of, 1, 10) <= @asOf)
         )
     `,
     )
-    .all({ accountId, u }) as { qty: number }[];
+    .all({ accountId, u, asOf }) as { qty: number }[];
   if (snap.length) {
     const q = snap.reduce((s, r) => s + (Number.isFinite(r.qty) ? r.qty : 0), 0);
     if (q > 0) return q;
@@ -48,7 +53,7 @@ export function longShareQuantityForUnderlying(
         AND (@asOf IS NULL OR trade_date <= @asOf)
     `,
     )
-    .all({ accountId, u, asOf: asOfDate ?? null }) as Array<{
+    .all({ accountId, u, asOf }) as Array<{
     quantity: number | null;
     instruction: string | null;
     trade_date: string;

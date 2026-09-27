@@ -6,6 +6,7 @@ import { DEFAULT_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
 import {
   fetchSchwabAccountNumbers,
   fetchSchwabTransactionsChunked,
+  persistSchwabAccountHashes,
   type FetchSchwabTransactionsChunkedDeps,
   type SchwabAccountNumberRow,
 } from "@/lib/schwab/fetchAccountTransactions";
@@ -123,25 +124,7 @@ export async function syncSchwabBrokerTransactions(options?: {
   const fetchTransactionsChunked = options?.fetchTransactionsChunked ?? fetchSchwabTransactionsChunked;
   const now = new Date().toISOString();
 
-  const nums = await fetchAccountNumbers();
-  const updateHash = db.prepare(
-    `UPDATE accounts SET schwab_account_hash = @hash, updated_at = @now WHERE id = @id`,
-  );
-
-  let accountsUpdated = 0;
-  const accountHashes: { accountId: string; hash: string }[] = [];
-
-  for (const n of nums) {
-    const num = (n.accountNumber ?? "").trim();
-    const hash = (n.hashValue ?? "").trim();
-    if (!num || !hash) continue;
-    const localId = `schwab_${num}`;
-    const acc = db.prepare(`SELECT 1 AS ok FROM accounts WHERE id = ?`).get(localId) as { ok: number } | undefined;
-    if (!acc) continue;
-    updateHash.run({ hash, now, id: localId });
-    accountsUpdated++;
-    accountHashes.push({ accountId: localId, hash });
-  }
+  const { accountsUpdated, accountHashes } = await persistSchwabAccountHashes(db, fetchAccountNumbers);
 
   let transactionsUpserted = 0;
   const touchedIds = new Set<string>();

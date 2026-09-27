@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
 import { ensureSituationsFresh } from "@/lib/situations/ensureSituationsFresh";
 import { listSituations } from "@/lib/situations/persistSituations";
+import { resolveViewScope } from "@/lib/viewScope";
 import {
   aggregateClosedRealized,
   parseRealizedPeriod,
@@ -22,9 +23,10 @@ export async function GET(req: Request) {
       );
     }
 
+    const { flavor } = await resolveViewScope();
     const db = getDb();
     const fresh = ensureSituationsFresh(db);
-    const summary = aggregateClosedRealized(listSituations(db), period);
+    const summary = aggregateClosedRealized(listSituations(db, flavor), period);
     const format = searchParams.get("format") ?? "json";
 
     if (format === "csv") {
