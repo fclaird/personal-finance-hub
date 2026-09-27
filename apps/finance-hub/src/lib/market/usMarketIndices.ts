@@ -20,6 +20,7 @@ import {
   type GlanceTimedGrid,
 } from "@/lib/market/glanceSessionGrid";
 import { nyWallTimeMs } from "@/lib/market/futuresGlanceSession";
+import type { PostCashClosePlot } from "@/lib/market/glanceMiniChartSession";
 import { filterTimedPointsForGlanceSession } from "@/lib/market/glanceTimedFilters";
 import {
   filterYahooClosesToSession,
@@ -79,6 +80,8 @@ export type UsMarketIndexCard = {
   /** Cash index tiles (e.g. Nikkei ^N225) — not futures. */
   instrumentKind?: GlanceInstrumentKind;
   tradableOpen?: boolean;
+  /** Futures ticks since the locked cash close. Chart-only; Day % still uses previousClose. */
+  postCashClose?: PostCashClosePlot | null;
 } & GlanceExtendedFields;
 
 function asNum(v: unknown): number | null {

@@ -72,7 +72,12 @@ export function schwabLiquidationFromDb(db: Database.Database, flavor: FlavorId 
   return { current, byAccount };
 }
 
-/** Last stored Schwab liquidation per account on or before a session date (NY). */
+/**
+ * Last stored Schwab liquidation per account on or before a session date in
+ * America/New_York. SQLite `date(as_of)` is UTC, so a Thursday 21:00 ET print
+ * (Friday 01:00 UTC) would be dropped from Thursday and the day % would use an
+ * older, often much smaller, baseline.
+ */
 export function schwabPriorLiquidationFromDb(
   db: Database.Database,
   sessionYmd: string,
@@ -81,27 +86,28 @@ export function schwabPriorLiquidationFromDb(
   const rows = db
     .prepare(
       `
-      SELECT av.account_id AS account_id, av.equity_value AS equity_value
+      SELECT av.account_id AS account_id, av.as_of AS as_of, av.equity_value AS equity_value
       FROM account_value_points av
       JOIN accounts a ON a.id = av.account_id
-      JOIN (
-        SELECT account_id, MAX(as_of) AS max_as_of
-        FROM account_value_points
-        WHERE date(as_of) <= @session_ymd
-        GROUP BY account_id
-      ) prior ON prior.account_id = av.account_id AND prior.max_as_of = av.as_of
       WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql(flavor, "a")}
     `,
     )
-    .all({ session_ymd: sessionYmd }) as Array<{ account_id: string; equity_value: number }>;
+    .all() as Array<{ account_id: string; as_of: string; equity_value: number }>;
+
+  const best = new Map<string, { ts: number; value: number }>();
+  for (const row of rows) {
+    const ts = Date.parse(row.as_of);
+    if (!Number.isFinite(ts) || !Number.isFinite(row.equity_value)) continue;
+    if (isoDateInUsEastern(ts) > sessionYmd) continue;
+    const prev = best.get(row.account_id);
+    if (!prev || ts >= prev.ts) best.set(row.account_id, { ts, value: row.equity_value });
+  }
 
   const byAccount = new Map<string, number>();
   let prior = 0;
-  for (const row of rows) {
-    const v = row.equity_value;
-    if (!Number.isFinite(v)) continue;
-    byAccount.set(row.account_id, v);
-    prior += v;
+  for (const [accountId, row] of best) {
+    byAccount.set(accountId, row.value);
+    prior += row.value;
   }
   return { prior, byAccount };
 }

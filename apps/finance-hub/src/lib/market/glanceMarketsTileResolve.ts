@@ -1,14 +1,15 @@
 import type { GlanceTileInstrumentId } from "@/lib/market/glanceTileInstruments";
-import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
+import { resolveGlanceInstrumentId } from "@/lib/market/glanceMiniChartSession";
 
-/** Auto-map equity index slots to e-mini outside US RTH when user kept the equity default. */
+/**
+ * Auto-map cash index slots to e-minis outside US RTH.
+ * Slot index is unused: Nasdaq, S&P, and Russell switch in any markets slot.
+ * See `GLANCE_CLOSED_SESSION_PROXY`.
+ */
 export function resolveMarketsSlotInstrumentId(
-  slotIndex: 2 | 3,
+  _slotIndex: 2 | 3 | 4,
   storedId: GlanceTileInstrumentId,
   now: Date = new Date(),
 ): GlanceTileInstrumentId {
-  if (isUsEquityRegularSessionOpen(now)) return storedId;
-  if (slotIndex === 2 && storedId === "nasdaq") return "us-nq";
-  if (slotIndex === 3 && storedId === "sp500") return "us-es";
-  return storedId;
+  return resolveGlanceInstrumentId(storedId, now) as GlanceTileInstrumentId;
 }

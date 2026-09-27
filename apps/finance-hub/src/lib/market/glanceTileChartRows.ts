@@ -42,6 +42,8 @@ export function isIndexedGlanceChartItem(item: UsMarketGlanceItem): boolean {
 }
 
 export function resolvePriorSessionClose(item: UsMarketGlanceItem): number | null {
+  const chartRef = item.chartReferencePrice;
+  if (chartRef != null && Number.isFinite(chartRef)) return chartRef;
   if (item.previousClose == null || !Number.isFinite(item.previousClose)) return null;
   return item.previousClose;
 }
@@ -90,6 +92,7 @@ export function buildTileChartRows(
         idx: rows.length,
         regular: null,
         extended: null,
+        tsMs: lastRow.tsMs + 1,
         segment: "regular",
       });
     }

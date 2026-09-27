@@ -42,6 +42,7 @@ export const FUTURES_GLANCE_CHART_LINES: GlanceChartLine[] = [
   { id: "jp-n225", label: "Nikkei 225", color: "#2563eb" },
   { id: "us-es", label: "S&P 500 E-mini", color: "#16a34a" },
   { id: "us-nq", label: "Nasdaq 100 E-mini", color: "#0891b2" },
+  { id: "us-rty", label: "Russell 2000 E-mini", color: "#ea580c" },
   { id: "russell2000", label: "Russell 2000", color: "#ea580c" },
 ];
 

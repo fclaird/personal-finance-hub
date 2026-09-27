@@ -36,6 +36,16 @@ export const REGIONAL_MARKET_INSTRUMENTS: RegionalMarketInstrument[] = [
   },
 ];
 
+/** Russell 2000 E-mini — after-hours stand-in for the IWM / Russell glance slot. */
+export const RUSSELL_EMINI_INSTRUMENT: RegionalMarketInstrument = {
+  id: "us-rty",
+  region: "us",
+  label: "Russell 2000 E-mini",
+  yahooSymbol: "RTY=F",
+  stooqSymbol: "rty.f",
+  includePrePost: true,
+};
+
 /** WTI Crude — selectable on the Markets quick-glance 4th tile. */
 export const WTI_CRUDE_INSTRUMENT: RegionalMarketInstrument = {
   id: "us-cl",
