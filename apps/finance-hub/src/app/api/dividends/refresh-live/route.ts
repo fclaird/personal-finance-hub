@@ -8,17 +8,20 @@ import {
   loadLatestSchwabPositionRows,
 } from "@/lib/dividends/schwabDividendBook";
 import { ensureBookLiveStartedAt, syncBookForwardSnaps } from "@/lib/dividends/bookForwardSnap";
+import { resolveViewScope } from "@/lib/viewScope";
 
 export async function POST() {
   const db = getDb();
+  const { flavor } = await resolveViewScope();
   try {
-    const raw = loadLatestSchwabPositionRows(db);
+    const raw = loadLatestSchwabPositionRows(db, flavor);
     const symbols = [...new Set(raw.map((r) => r.symbol.toUpperCase()))];
     await ensureFundamentalsSnapshotsFresh(db, symbols, undefined, true);
 
     const book = await buildSchwabDividendBook(db, {
       fetchLiveData: true,
       forceRefetchFundamentals: false,
+      flavor,
     });
 
     ensureBookLiveStartedAt(db);

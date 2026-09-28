@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
 import { isManualAccountId, parseManualPositionMetadata } from "@/lib/manual/manualAccounts";
-import { isPosterityAccountId, notPosterityWhereSql } from "@/lib/posterity";
+import { isPosterityAccountId } from "@/lib/posterity";
 import { normalizeOptionUnderlying } from "@/lib/options/optionUnderlying";
 import { latestSnapshotIds as latestSyncedSnapshotIds, latestSnapshotScopeForMode } from "@/lib/holdings/latestSnapshots";
 import { isAccountInFlavor } from "@/lib/flavors/accounts";
@@ -419,13 +419,13 @@ export async function GET(req: Request) {
     let responseSnapshotLabel: string | null = null;
 
     if (accountIdParam) {
-      if (isPosterityAccountId(accountIdParam)) {
-        return NextResponse.json(
-          { ok: false, error: "Posterity accounts are not served by this route; use posterity APIs." },
-          { status: 400 },
-        );
-      }
       if (!isAccountInFlavor(flavor, accountIdParam)) {
+        if (isPosterityAccountId(accountIdParam)) {
+          return NextResponse.json(
+            { ok: false, error: "Posterity accounts are not served by this route; use posterity APIs." },
+            { status: 400 },
+          );
+        }
         return NextResponse.json({ ok: false, error: "Account not in active flavor scope" }, { status: 400 });
       }
       const snap = db
@@ -478,7 +478,7 @@ export async function GET(req: Request) {
         connection_id: string;
         accountBucket: string | null;
       }>
-    ).filter((a) => isAccountInFlavor(flavor, a.id) && !isPosterityAccountId(a.id));
+    ).filter((a) => isAccountInFlavor(flavor, a.id));
 
     return NextResponse.json({
       ok: true,
