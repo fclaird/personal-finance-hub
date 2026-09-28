@@ -7,6 +7,7 @@ import {
   cusipTickerMap,
   freshAccountIds,
   internalFillsFromStoredRow,
+  latestShareSnapshotsByDay,
   mergeShareMarks,
   qualifyInternalUnderlyings,
   seedUnexplainedShareFills,
@@ -572,6 +573,62 @@ describe("current holdings and stock closes", () => {
       { accountId: "manual_10b6", lastSnapshot: "2026-09-23" },
     ]);
     assert.deepEqual([...fresh].sort(), ["manual_10b6", "schwab_99113937"]);
+  });
+
+  it("window pnl is the mark change when older cost and same-day snapshots repeat", () => {
+    const snaps = [
+      { accountId: "a", symbol: "PLTR", date: "2024-06-03", asOf: "2024-06-03T01:00:14Z", quantity: 100, price: 10 },
+      { accountId: "a", symbol: "PLTR", date: "2024-06-03", asOf: "2024-06-03T01:10:14Z", quantity: 100, price: 10 },
+      { accountId: "a", symbol: "PLTR", date: "2024-07-01", asOf: "2024-07-01T01:00:14Z", quantity: 100, price: 10 },
+      { accountId: "a", symbol: "PLTR", date: "2024-07-01", asOf: "2024-07-01T01:10:14Z", quantity: 100, price: 10 },
+    ];
+    assert.equal(latestShareSnapshotsByDay(snaps).filter((row) => row.date === "2024-06-03")[0]?.quantity, 100);
+    const built = buildInternalPerformanceSeries([share("2024-01-02", 100, 10, "PLTR")], {
+      asOf: "2024-07-01",
+      dates: ["2024-06-03", "2024-07-01"],
+      sharePrices: {
+        PLTR: [
+          { date: "2024-06-03", price: 50 },
+          { date: "2024-07-01", price: 80 },
+        ],
+      },
+      shareSnapshots: snaps,
+      openHoldings: [
+        { symbol: "PLTR", leg: "share", quantity: 100, strike: null, expiration: null, marketValue: 8000 },
+      ],
+    });
+    const end = built.bySymbol.PLTR?.[1];
+    assert.equal(built.audit.find((row) => row.symbol === "PLTR")?.pnl, 3000);
+    assert.equal(end?.stockPct, 60);
+    assert.equal(end?.returnPct, end?.stockPct);
+  });
+
+  it("keeps a shares-only return on the stock line when the lot is seeded inside the window", () => {
+    const seeded = seedUnexplainedShareFills(
+      [],
+      [{ accountId: "a", symbol: "RKLB", date: "2024-07-01", quantity: 56, price: 300 }],
+    );
+    const built = buildInternalPerformanceSeries(seeded, {
+      asOf: "2024-07-01",
+      dates: ["2024-06-03", "2024-07-01"],
+      sharePrices: {
+        RKLB: [
+          { date: "2024-06-03", price: 100 },
+          { date: "2024-07-01", price: 60 },
+        ],
+      },
+      shareSnapshots: [
+        { accountId: "a", symbol: "RKLB", date: "2024-07-01", asOf: "2024-07-01T01:00:14Z", quantity: 56, price: 300 },
+        { accountId: "a", symbol: "RKLB", date: "2024-07-01", asOf: "2024-07-01T01:10:14Z", quantity: 56, price: 300 },
+      ],
+      openHoldings: [
+        { symbol: "RKLB", leg: "share", quantity: 56, strike: null, expiration: null, marketValue: 3360 },
+      ],
+    });
+    const end = built.bySymbol.RKLB?.[1];
+    assert.equal(built.audit.find((row) => row.symbol === "RKLB")?.pnl, -2240);
+    assert.ok((end?.returnPct ?? 0) < 0);
+    assert.equal(end?.returnPct, end?.stockPct);
   });
 
   it("measures a long book's giveback against the value at the chart start", () => {

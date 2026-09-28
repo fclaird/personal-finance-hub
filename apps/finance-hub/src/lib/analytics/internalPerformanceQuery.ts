@@ -14,9 +14,11 @@ import {
   freshAccountIds,
   internalFillsFromStoredRow,
   mergeShareMarks,
+  latestShareSnapshotsByDay,
   seedUnexplainedShareFills,
   shareClosesBySymbol,
   snapshotMarkPerShare,
+  type ShareSnapshotRow,
   type InternalAudit,
   type InternalFill,
   type OpenHolding,
@@ -162,17 +164,18 @@ function freshAccounts(db: Database.Database, flavor: FlavorId, bucket: Internal
   );
 }
 
-function earliestShareSnapshots(
+function shareSnapshotRows(
   db: Database.Database,
   flavor: FlavorId,
   bucket: InternalPerformanceBucket,
   fresh: Set<string>,
-): ShareHoldingSnapshot[] {
+): ShareSnapshotRow[] {
   const accountWhere = strategyTradesAccountWhereSql(flavor, "a");
   const rows = db
     .prepare(
       `
       SELECT hs.account_id AS account_id,
+             hs.as_of AS as_of,
              substr(hs.as_of, 1, 10) AS date,
              UPPER(TRIM(sec.symbol)) AS symbol,
              p.quantity AS quantity,
@@ -196,6 +199,7 @@ function earliestShareSnapshots(
     )
     .all() as Array<{
     account_id: string;
+    as_of: string;
     date: string;
     symbol: string;
     quantity: number;
@@ -207,27 +211,32 @@ function earliestShareSnapshots(
     account_bucket: string | null;
   }>;
 
+  return latestShareSnapshotsByDay(
+    rows.flatMap((row) => {
+      if (!fresh.has(row.account_id)) return [];
+      if (!accountInBucket(bucket, row.account_name, row.account_nickname, row.account_bucket)) return [];
+      if (!row.symbol) return [];
+      return [
+        {
+          accountId: row.account_id,
+          symbol: row.symbol,
+          date: row.date,
+          asOf: row.as_of,
+          quantity: row.quantity,
+          price: snapshotCostPerShare(row.price, row.quantity, row.market_value, row.metadata_json),
+        },
+      ];
+    }),
+  );
+}
+
+function earliestShareSnapshots(rows: ShareSnapshotRow[]): ShareHoldingSnapshot[] {
   const earliest = new Map<string, ShareHoldingSnapshot>();
   for (const row of rows) {
-    if (!fresh.has(row.account_id)) continue;
-    if (!accountInBucket(bucket, row.account_name, row.account_nickname, row.account_bucket)) continue;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(row.date) || !row.symbol) continue;
-    const key = `${row.account_id}|${row.symbol}`;
-    const price = snapshotCostPerShare(row.price, row.quantity, row.market_value, row.metadata_json);
+    const key = `${row.accountId}|${row.symbol}`;
     const prev = earliest.get(key);
-    if (!prev) {
-      earliest.set(key, {
-        accountId: row.account_id,
-        symbol: row.symbol,
-        date: row.date,
-        quantity: row.quantity,
-        price,
-      });
-      continue;
-    }
-    if (row.date > prev.date) continue;
-    prev.quantity += row.quantity;
-    if (!(prev.price != null && prev.price > 0) && price != null) prev.price = price;
+    if (prev && row.date >= prev.date) continue;
+    earliest.set(key, row);
   }
   return [...earliest.values()];
 }
@@ -305,10 +314,15 @@ function latestOpenHoldings(
       JOIN securities sec ON sec.id = p.security_id
       LEFT JOIN securities us ON us.id = sec.underlying_security_id
       JOIN (
-        SELECT account_id, MAX(as_of) AS max_as_of
-        FROM holding_snapshots
-        GROUP BY account_id
-      ) latest ON latest.account_id = hs.account_id AND latest.max_as_of = hs.as_of
+        SELECT hs2.account_id AS account_id, MAX(hs2.id) AS snapshot_id
+        FROM holding_snapshots hs2
+        JOIN (
+          SELECT account_id, MAX(as_of) AS max_as_of
+          FROM holding_snapshots
+          GROUP BY account_id
+        ) newest ON newest.account_id = hs2.account_id AND newest.max_as_of = hs2.as_of
+        GROUP BY hs2.account_id
+      ) latest ON latest.snapshot_id = hs.id
       WHERE sec.security_type != 'cash'
         AND ${accountWhere}
     `,
@@ -468,13 +482,18 @@ export function loadInternalPerformance(
     (row) => fresh.has(row.account_id) && accountInBucket(bucket, row.account_name, row.account_nickname, row.account_bucket),
   );
   const cusips = tickerByCusip(db);
+  const rawShareSnapshots = shareSnapshotRows(db, flavor, bucket, fresh);
   const fills = remapFills(
     seedUnexplainedShareFills(
       scoped.flatMap((row) => internalFillsFromStoredRow(row)),
-      earliestShareSnapshots(db, flavor, bucket, fresh),
+      earliestShareSnapshots(rawShareSnapshots),
     ),
     cusips,
   );
+  const shareSnapshots = rawShareSnapshots.flatMap((row) => {
+    const symbol = canonicalSymbol(row.symbol, cusips);
+    return symbol ? [{ ...row, symbol }] : [];
+  });
   const openHoldings = latestOpenHoldings(db, flavor, bucket, cusips, fresh);
   const history = portfolioRows(db, flavor, bucket, now);
   const dates = history.map((row) => row.date);
@@ -573,7 +592,7 @@ export function loadInternalPerformance(
 
   const built =
     dates.length > 0
-      ? buildInternalPerformanceSeries(fills, { asOf, dates, sharePrices, optionMarks, openHoldings })
+      ? buildInternalPerformanceSeries(fills, { asOf, dates, sharePrices, optionMarks, openHoldings, shareSnapshots })
       : { symbols: [], bySymbol: {}, audit: [] };
 
   const ranked = [...built.symbols].sort(

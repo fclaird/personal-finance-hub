@@ -70,6 +70,7 @@ export type InternalFill = {
   price: number;
   strike: number | null;
   expiration: string | null;
+  seeded?: boolean;
 };
 
 export type QualifyReason = "shares" | "synthetic" | "both";
@@ -678,6 +679,74 @@ export type ShareHoldingSnapshot = {
   price: number | null;
 };
 
+export type ShareSnapshotRow = ShareHoldingSnapshot & { asOf: string };
+
+export function latestShareSnapshotsByDay(rows: ShareSnapshotRow[]): ShareSnapshotRow[] {
+  const byShot = new Map<string, ShareSnapshotRow>();
+  for (const row of rows) {
+    const symbol = row.symbol.trim().toUpperCase();
+    const date = row.date.slice(0, 10);
+    const asOf = row.asOf || date;
+    if (!symbol || symbol === "CASH" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (!Number.isFinite(row.quantity)) continue;
+    const accountId = row.accountId || "default";
+    const key = `${accountId}|${symbol}|${asOf}`;
+    const prev = byShot.get(key);
+    if (!prev) {
+      byShot.set(key, { accountId, symbol, date, asOf, quantity: row.quantity, price: row.price });
+      continue;
+    }
+    const prevQty = prev.quantity;
+    prev.quantity += row.quantity;
+    if (prev.price != null && prev.price > 0 && row.price != null && row.price > 0 && prev.quantity !== 0) {
+      prev.price = (prev.price * prevQty + row.price * row.quantity) / prev.quantity;
+    } else if (!(prev.price != null && prev.price > 0) && row.price != null && row.price > 0) {
+      prev.price = row.price;
+    }
+  }
+  const byDay = new Map<string, ShareSnapshotRow>();
+  for (const row of byShot.values()) {
+    const key = `${row.accountId}|${row.symbol}|${row.date}`;
+    const prev = byDay.get(key);
+    if (!prev || row.asOf > prev.asOf) byDay.set(key, row);
+  }
+  return [...byDay.values()];
+}
+
+function snapshotShareQty(rows: ShareSnapshotRow[], symbol: string, date: string, fills: InternalFill[]): number | null {
+  const mine = rows.filter((row) => row.symbol === symbol);
+  if (mine.length === 0) return null;
+  const accounts = new Set(mine.map((row) => row.accountId));
+  let total = 0;
+  let any = false;
+  for (const accountId of accounts) {
+    const history = mine
+      .filter((row) => row.accountId === accountId)
+      .sort((a, b) => a.date.localeCompare(b.date) || a.asOf.localeCompare(b.asOf));
+    const past = history.filter((row) => row.date <= date);
+    if (past.length > 0) {
+      total += past[past.length - 1]!.quantity;
+      any = true;
+      continue;
+    }
+    const future = history.find((row) => row.date > date);
+    if (!future) continue;
+    const traded = fills.some(
+      (fill) =>
+        !fill.seeded &&
+        fill.leg === "share" &&
+        (fill.accountId || "default") === accountId &&
+        fill.underlying.trim().toUpperCase() === symbol &&
+        fill.date > date &&
+        fill.date <= future.date,
+    );
+    if (traded) continue;
+    total += future.quantity;
+    any = true;
+  }
+  return any ? total : null;
+}
+
 function shareBookQty(fills: InternalFill[], accountId: string, symbol: string, throughDate: string): number {
   const lots: Lot[] = [];
   const ordered = fills
@@ -730,6 +799,7 @@ export function seedUnexplainedShareFills(fills: InternalFill[], snapshots: Shar
       price: snap.price,
       strike: null,
       expiration: null,
+      seeded: true,
     });
   }
   if (seeds.length === 0) return fills;
@@ -837,6 +907,48 @@ function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+function lotsMarked(lots: Lot[], basis: number): Lot[] {
+  return lots.map((lot) => ({ qty: lot.qty, perUnit: basis }));
+}
+
+function shareCashAfter(
+  fills: InternalFill[],
+  symbol: string,
+  afterDate: string,
+  throughDate: string,
+  startQty: Map<string, number>,
+): number {
+  const qty = new Map(startQty);
+  let cash = 0;
+  const ordered = fills
+    .filter(
+      (fill) =>
+        !fill.seeded &&
+        fill.leg === "share" &&
+        fill.underlying === symbol &&
+        fill.date > afterDate &&
+        fill.date <= throughDate,
+    )
+    .sort((a, b) => a.date.localeCompare(b.date) || a.accountId.localeCompare(b.accountId));
+  for (const fill of ordered) {
+    const held = qty.get(fill.accountId) ?? 0;
+    const applied = fill.signedShares < 0 ? -Math.min(-fill.signedShares, Math.max(0, held)) : fill.signedShares;
+    if (Math.abs(applied) < 1e-9) continue;
+    cash += applied * fill.price;
+    qty.set(fill.accountId, held + applied);
+  }
+  return cash;
+}
+
+function shareQtyByAccount(books: DayBooks): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const [accountId, book] of books) {
+    const qty = Math.max(0, bookShareQty(book));
+    if (qty > 1e-6) out.set(accountId, qty);
+  }
+  return out;
+}
+
 export function buildInternalPerformanceSeries(
   fills: InternalFill[],
   opts: {
@@ -845,6 +957,7 @@ export function buildInternalPerformanceSeries(
     sharePrices?: Record<string, SharePricePoint[]>;
     optionMarks?: OptionMarkPoint[];
     openHoldings?: OpenHolding[];
+    shareSnapshots?: ShareSnapshotRow[];
   },
 ): { symbols: QualifiedUnderlying[]; bySymbol: Record<string, InternalSeriesPoint[]>; audit: InternalAudit[] } {
   const dates = [...opts.dates].filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)).sort();
@@ -893,9 +1006,44 @@ export function buildInternalPerformanceSeries(
     for (const mark of opts.optionMarks ?? []) pushOption(mark, 1);
     for (const list of optionPoints.values()) list.sort((a, b) => a.date.localeCompare(b.date) || a.rank - b.rank);
 
+    const collapsedSnaps = latestShareSnapshotsByDay(
+      (opts.shareSnapshots ?? []).filter((row) => row.symbol.trim().toUpperCase() === symbol),
+    );
+    const optionMarkAt = (contract: ContractBook, date: string): number | null =>
+      markOn(
+        (optionPoints.get(contractKey(contract.right, contract.strike, contract.expiration)) ?? []).map((point) => ({
+          date: point.date,
+          price: point.price,
+        })),
+        date,
+      );
+    const optionUnrealizedAt = (books: DayBooks, date: string, basisDate: string): number => {
+      if (!includeSynthetic) return 0;
+      let pnl = 0;
+      for (const book of books.values()) {
+        const synthetic = syntheticQtyByContract(book.contracts);
+        for (const [key, synQty] of synthetic) {
+          const contract = book.contracts.get(key);
+          if (!contract) continue;
+          const open = qtyOf(contract.lots);
+          if (Math.abs(open) < 1e-6) continue;
+          const basis = optionMarkAt(contract, basisDate);
+          const mark = optionMarkAt(contract, date);
+          if (basis == null || mark == null) continue;
+          const fraction = Math.min(1, Math.abs(synQty) / Math.abs(open));
+          pnl += unrealizedLots(lotsMarked(contract.lots, basis), mark) * fraction;
+        }
+      }
+      return pnl;
+    };
+
     const chartDates = new Set(dates);
-    let baselinePnl: number | null = null;
-    let unrealizedAtBaseline = 0;
+    let baselineDate: string | null = null;
+    let shareQty0 = 0;
+    let shareMark0: number | null = null;
+    let optionRealized0 = 0;
+    let syntheticCapital0 = 0;
+    let startQtyByAccount = new Map<string, number>();
     let maxCapital = 0;
     let lastAudit: InternalAudit | null = null;
     const pointByDate = new Map<string, InternalSeriesPoint>();
@@ -908,27 +1056,27 @@ export function buildInternalPerformanceSeries(
         includeShares,
         includeSynthetic,
         shareMark,
-        (contract) =>
-          markOn(
-            (optionPoints.get(contractKey(contract.right, contract.strike, contract.expiration)) ?? []).map((point) => ({
-              date: point.date,
-              price: point.price,
-            })),
-            snap.date,
-          ),
+        (contract) => optionMarkAt(contract, snap.date),
       );
-      const shareActive = includeShares && (valued.shareQty > 1e-6 || snap.shareRealized !== 0);
+      const snappedQty = includeShares ? snapshotShareQty(collapsedSnaps, symbol, snap.date, symbolFills) : null;
+      const shareQty = snappedQty ?? valued.shareQty;
+      const shareActive = includeShares && shareQty > 1e-6;
       const syntheticActive = includeSynthetic && (valued.syntheticAbs > 1e-6 || snap.syntheticRealized !== 0);
-      const active = shareActive || syntheticActive || valued.capital > 1e-6;
-      if (!chartDates.has(snap.date) && baselinePnl == null) continue;
-      if (baselinePnl == null) {
-        if (!active) {
+      const active = shareActive || syntheticActive;
+      if (!chartDates.has(snap.date) && baselineDate == null) continue;
+      if (baselineDate == null) {
+        if (!active || (shareActive && shareMark == null && !syntheticActive)) {
           if (chartDates.has(snap.date)) pointByDate.set(snap.date, { date: snap.date, returnPct: null, stockPct: null });
           continue;
         }
-        baselinePnl = valued.pnl;
-        unrealizedAtBaseline = Math.max(0, valued.unrealized);
-        maxCapital = valued.capital + unrealizedAtBaseline;
+        baselineDate = snap.date;
+        shareQty0 = shareQty;
+        shareMark0 = shareActive ? shareMark : null;
+        optionRealized0 = includeSynthetic ? snap.syntheticRealized : 0;
+        syntheticCapital0 = includeSynthetic ? capitalFor(snap.books, false, true) : 0;
+        startQtyByAccount = shareQtyByAccount(snap.books);
+        const shareCapital = shareMark0 != null && shareQty0 > 1e-6 ? shareQty0 * shareMark0 : includeShares ? valued.capital - syntheticCapital0 : 0;
+        maxCapital = Math.max(0, shareCapital) + syntheticCapital0;
         if (chartDates.has(snap.date)) {
           const stockPct = chartStartPrice != null && chartStartPrice > 0 && shareMark != null ? roundPct((shareMark / chartStartPrice - 1) * 100) : null;
           pointByDate.set(snap.date, {
@@ -946,15 +1094,23 @@ export function buildInternalPerformanceSeries(
         }
         continue;
       }
-      maxCapital = Math.max(maxCapital, valued.capital + unrealizedAtBaseline);
+      const cash = includeShares ? shareCashAfter(symbolFills, symbol, baselineDate, snap.date, startQtyByAccount) : 0;
+      const sharePnl =
+        includeShares && shareMark0 != null && shareMark != null ? shareQty * shareMark - shareQty0 * shareMark0 - cash : 0;
+      const optionPnl = includeSynthetic
+        ? snap.syntheticRealized - optionRealized0 + optionUnrealizedAt(snap.books, snap.date, baselineDate)
+        : 0;
+      const syntheticCapital = includeSynthetic ? capitalFor(snap.books, false, true) : 0;
+      maxCapital = Math.max(maxCapital, Math.max(0, (shareMark0 != null ? shareQty0 * shareMark0 : 0) + cash) + syntheticCapital);
       if (!chartDates.has(snap.date)) continue;
-      const returnPct = maxCapital > 0 ? roundPct(((valued.pnl - baselinePnl) / maxCapital) * 100) : null;
+      const pnl = sharePnl + optionPnl;
+      const returnPct = maxCapital > 0 ? roundPct((pnl / maxCapital) * 100) : null;
       const stockPct =
         chartStartPrice != null && chartStartPrice > 0 && shareMark != null ? roundPct((shareMark / chartStartPrice - 1) * 100) : null;
       pointByDate.set(snap.date, { date: snap.date, returnPct, stockPct });
       lastAudit = {
         symbol,
-        pnl: roundMoney(valued.pnl - baselinePnl),
+        pnl: roundMoney(pnl),
         capital: roundMoney(maxCapital),
         returnPct,
         stockPct,
