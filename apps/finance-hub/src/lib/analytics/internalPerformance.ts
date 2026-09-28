@@ -4,9 +4,7 @@ import { fifoRealizedForClosingLeg } from "@/lib/analytics/periodReport";
 import { isNyTradingDayYmd } from "@/lib/analytics/periodWindows";
 import { securityLegsOf, type SchwabTxnItem, type SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
 
-/** Calendar days a synthetic book must span. A span of 180 does not qualify. */
-const SYNTHETIC_MIN_CALENDAR_DAYS = 180;
-/** Flat NYSE sessions at or above this count start a new synthetic clock. */
+const SYNTHETIC_SPAN_MUST_EXCEED_DAYS = 180;
 const FLAT_GAP_TRADING_DAYS = 5;
 const CONTRACT_SHARES = 100;
 
@@ -316,7 +314,7 @@ function overlaps(interval: Interval, window: Window | undefined): boolean {
 
 function syntheticQualifies(intervals: Interval[], window: Window | undefined): boolean {
   return mergeSyntheticEpisodes(intervals).some(
-    (episode) => overlaps(episode, window) && (daysBetween(episode.start, episode.end) ?? 0) > SYNTHETIC_MIN_CALENDAR_DAYS,
+    (episode) => overlaps(episode, window) && (daysBetween(episode.start, episode.end) ?? 0) > SYNTHETIC_SPAN_MUST_EXCEED_DAYS,
   );
 }
 
@@ -482,16 +480,12 @@ function unrealizedLots(lots: Lot[], mark: number | null): number {
   return pnl;
 }
 
-/**
- * Capital committed for the open book.
- * Short-put collateral is strike times share-equivalents (strike × 100 × contracts).
- * It is added to share cost basis. Shares do not offset that collateral.
- * Open long-call premium stays in the denominator as FIFO cost.
- */
 function capitalFor(books: DayBooks, includeShares: boolean, includeSynthetic: boolean): number {
-  let capital = 0;
+  let shareCost = 0;
+  let putCollateral = 0;
+  let longCallPremium = 0;
   for (const book of books.values()) {
-    if (includeShares) capital += longCost(book.shareLots);
+    if (includeShares) shareCost += longCost(book.shareLots);
     if (!includeSynthetic) continue;
     const synthetic = syntheticQtyByContract(book.contracts);
     for (const [key, synQty] of synthetic) {
@@ -499,11 +493,11 @@ function capitalFor(books: DayBooks, includeShares: boolean, includeSynthetic: b
       if (!contract) continue;
       const open = qtyOf(contract.lots);
       if (Math.abs(open) < 1e-6) continue;
-      if (contract.right === "P" && synQty < 0) capital += contract.strike * Math.abs(synQty);
-      if (contract.right === "C" && synQty > 0) capital += longCost(contract.lots) * Math.min(1, synQty / open);
+      if (contract.right === "P" && synQty < 0) putCollateral += contract.strike * Math.abs(synQty);
+      if (contract.right === "C" && synQty > 0) longCallPremium += longCost(contract.lots) * Math.min(1, synQty / open);
     }
   }
-  return capital;
+  return shareCost + putCollateral + longCallPremium;
 }
 
 function pnlFor(
@@ -761,7 +755,6 @@ export function internalFillsFromStoredRow(row: StoredBrokerFillRow): InternalFi
           .filter((fill): fill is InternalFill => fill != null);
       }
     } catch {
-      // Column fields are the fallback when raw JSON is not a transaction.
     }
   }
   const one = fillFromColumns(row, date);
