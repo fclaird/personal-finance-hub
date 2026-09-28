@@ -3,10 +3,15 @@ import { describe, it } from "node:test";
 
 import {
   buildInternalPerformanceSeries,
+  canonicalSymbol,
+  cusipTickerMap,
   internalFillsFromStoredRow,
+  mergeShareMarks,
   qualifyInternalUnderlyings,
   seedUnexplainedShareFills,
+  shareClosesBySymbol,
   type InternalFill,
+  type OpenHolding,
   type StoredBrokerFillRow,
 } from "@/lib/analytics/internalPerformance";
 
@@ -163,6 +168,13 @@ describe("internal performance return", () => {
     assert.equal(line?.[0]?.returnPct, 0);
     assert.equal(line?.[1]?.returnPct, 12.5);
     assert.equal(line?.[1]?.stockPct, 20);
+    assert.deepEqual(built.audit.find((row) => row.symbol === "TSLA"), {
+      symbol: "TSLA",
+      pnl: 250,
+      capital: 2000,
+      returnPct: 12.5,
+      stockPct: 20,
+    });
   });
 
   it("keeps each account's share lots separate", () => {
@@ -428,6 +440,118 @@ describe("real Schwab row shape", () => {
     assert.equal(fills.length, 1);
     assert.equal(fills[0]?.signedShares, 4800);
     assert.equal(symbols(fills, "2024-01-03")[0], "QXO:shares");
+  });
+});
+
+describe("current holdings and stock closes", () => {
+  const pltrOpen: OpenHolding = {
+    symbol: "PLTR",
+    leg: "share",
+    quantity: 100,
+    strike: null,
+    expiration: null,
+    marketValue: 18629,
+  };
+  const closed: OpenHolding[] = [
+    pltrOpen,
+    { symbol: "TSLA", leg: "share", quantity: 10, strike: null, expiration: null, marketValue: 3741 },
+  ];
+
+  it("keeps names open on the latest snapshot and drops closed history", () => {
+    const fills = [
+      share("2024-01-02", 100, 10, "PLTR"),
+      share("2024-01-02", 100, 10, "CLOV"),
+      share("2024-02-01", -100, 12, "CLOV"),
+      share("2024-01-02", 10, 20, "GME"),
+    ];
+    assert.deepEqual(
+      qualifyInternalUnderlyings(fills, "2026-09-28", { start: "2026-05-08", end: "2026-09-28" }, closed).map(
+        (row) => row.symbol,
+      ),
+      ["PLTR", "TSLA"],
+    );
+  });
+
+  it("resolves a CUSIP to its ticker and drops an unresolved CUSIP", () => {
+    const map = cusipTickerMap([
+      { symbol: "67012U108", cusip: "67012U108", securityType: "equity" },
+      { symbol: "NVDA", cusip: "67012U108", securityType: "equity" },
+      { symbol: "82489T104", cusip: "82489T104", securityType: "equity" },
+    ]);
+    assert.equal(canonicalSymbol("67012U108", map), "NVDA");
+    assert.equal(canonicalSymbol("82489T104", map), null);
+    assert.equal(canonicalSymbol("PLTR", map), "PLTR");
+    assert.equal(canonicalSymbol("G8251K115", map), null);
+  });
+
+  it("stock line is the Schwab close from the first chart date", () => {
+    const closes = shareClosesBySymbol([
+      { symbol: "PLTR", date: "2026-05-08", price: 14.06, provider: "yahoo" },
+      { symbol: "PLTR", date: "2026-05-08T16:00:00Z", price: 137.8, provider: "schwab" },
+      { symbol: "PLTR", date: "2026-08-28", price: 186.29, provider: "schwab" },
+      { symbol: "PLTR", date: "2026-09-15", price: 14.06, provider: "yahoo" },
+      { symbol: "TSLA", date: "2026-05-08", price: 428.35, provider: "schwab" },
+      { symbol: "TSLA", date: "2026-09-21", price: 374.1, provider: "schwab" },
+      { symbol: "GRAB", date: "2026-05-08", price: 5.2, provider: "schwab" },
+      { symbol: "GRAB", date: "2026-08-28", price: 5, provider: "schwab" },
+      { symbol: "GRAB", date: "2026-08-28", price: 3.1824, provider: "yahoo" },
+      { symbol: "QXO", date: "2026-05-08", price: 18, provider: "schwab" },
+      { symbol: "QXO", date: "2026-08-28", price: 17, provider: "schwab" },
+      { symbol: "QXO", date: "2026-08-28", price: 11.826, provider: "other" },
+    ]);
+    const pltr = mergeShareMarks(closes.PLTR ?? [], [{ date: "2026-09-25", price: 190 }]);
+    const fills = [
+      share("2026-05-08", 100, 14.06, "PLTR"),
+      share("2026-09-15", 1, 14.06, "PLTR"),
+      share("2026-05-08", 10, 900, "TSLA"),
+      share("2026-05-08", 100, 5, "GRAB"),
+      share("2026-05-08", 100, 20, "QXO"),
+    ];
+    const open: OpenHolding[] = [
+      pltrOpen,
+      { symbol: "TSLA", leg: "share", quantity: 10, strike: null, expiration: null, marketValue: 3741 },
+      { symbol: "GRAB", leg: "share", quantity: 100, strike: null, expiration: null, marketValue: 400 },
+      { symbol: "QXO", leg: "share", quantity: 100, strike: null, expiration: null, marketValue: 1200 },
+    ];
+    const built = buildInternalPerformanceSeries(fills, {
+      asOf: "2026-09-28",
+      dates: ["2026-05-08", "2026-08-28", "2026-09-21", "2026-09-25", "2026-09-28"],
+      sharePrices: {
+        PLTR: pltr,
+        TSLA: closes.TSLA ?? [],
+        GRAB: closes.GRAB ?? [],
+        QXO: closes.QXO ?? [],
+      },
+      openHoldings: open,
+    });
+    const pltrLine = built.bySymbol.PLTR;
+    const tslaLine = built.bySymbol.TSLA;
+    assert.equal(pltrLine?.find((point) => point.date === "2026-08-28")?.stockPct, 35.188679);
+    assert.equal(pltrLine?.find((point) => point.date === "2026-09-25")?.stockPct, 37.880987);
+    assert.equal(pltrLine?.find((point) => point.date === "2026-09-28")?.stockPct, 37.880987);
+    assert.equal(tslaLine?.find((point) => point.date === "2026-09-21")?.stockPct, -12.664877);
+    assert.equal(tslaLine?.find((point) => point.date === "2026-09-28")?.stockPct, null);
+    assert.equal(built.bySymbol.GRAB?.find((point) => point.date === "2026-08-28")?.stockPct, -3.846154);
+    assert.equal(built.bySymbol.QXO?.find((point) => point.date === "2026-08-28")?.stockPct, -5.555556);
+  });
+
+  it("qualifies a snapshot synthetic only when the current episode exceeds 180 days", () => {
+    const shortPut = (underlying: string): OpenHolding => ({
+      symbol: underlying,
+      leg: "put",
+      quantity: -1700,
+      strike: 28,
+      expiration: "2026-10-16",
+      marketValue: 3000,
+    });
+    const fills = [
+      opt("2024-01-02", "BMNR", "put", 28, -1700, 2.32, "2026-10-16"),
+      opt("2026-09-01", "CLOV", "put", 28, -100, 1, "2026-10-16"),
+    ];
+    const names = qualifyInternalUnderlyings(fills, "2026-09-28", undefined, [shortPut("BMNR"), shortPut("CLOV")]).map(
+      (row) => `${row.symbol}:${row.reason}`,
+    );
+    assert.deepEqual(names, ["BMNR:synthetic"]);
   });
 });
 

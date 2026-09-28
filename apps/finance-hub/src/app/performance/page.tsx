@@ -373,10 +373,12 @@ export default function PerformancePage() {
         <div className="px-4 py-3">
         {view === "internal" ? (
           <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Each line is cumulative return on capital for one underlying over these trading days. Shares and a
-            long-running synthetic book share one line. A dotted line is that ticker&apos;s stock price return. Capital
-            is share cost basis plus short-put collateral of strike times 100 times contracts. Long-call premium is
-            included. Share cost and short-put collateral both count when the book holds both.
+            Each line is cumulative return on capital for one underlying over these trading days. Only positions
+            open on the latest holdings snapshot are included. The eight largest by market value start on. A dotted
+            line is that ticker&apos;s close-to-close stock return from the first chart date, and it stops when the
+            last mark is more than five days old. Capital is share cost basis plus short-put collateral of strike
+            times 100 times contracts. Long-call premium is included. Share cost and short-put collateral both count
+            when the book holds both.
           </p>
         ) : (
         <div className="mb-3 flex flex-wrap items-center gap-2 text-sm" role="group" aria-label="Benchmarks">

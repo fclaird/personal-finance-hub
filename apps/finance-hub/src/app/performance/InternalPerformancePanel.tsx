@@ -11,6 +11,7 @@ export type InternalSymbol = {
   symbol: string;
   reason: "shares" | "synthetic" | "both";
   color: string;
+  defaultOn?: boolean;
 };
 
 export type InternalChartRow = {
@@ -37,13 +38,23 @@ export function InternalPerformancePanel({
   symbols: InternalSymbol[];
   rows: InternalChartRow[];
 }) {
-  const [hidden, setHidden] = useState<string[]>([]);
   const [stockOff, setStockOff] = useState<string[]>([]);
-  const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
+  const symbolKey = symbols.map((symbol) => `${symbol.symbol}:${symbol.defaultOn === false ? 0 : 1}`).join("|");
+  const [hiddenState, setHiddenState] = useState<{ key: string; hidden: string[] } | null>(null);
+  const hiddenList =
+    hiddenState?.key === symbolKey
+      ? hiddenState.hidden
+      : symbols.filter((symbol) => symbol.defaultOn === false).map((symbol) => symbol.symbol);
+  const hiddenSet = useMemo(() => new Set(hiddenList), [hiddenList]);
   const stockOffSet = useMemo(() => new Set(stockOff), [stockOff]);
 
-  function toggle(list: string[], symbol: string, set: (next: string[]) => void) {
-    set(list.includes(symbol) ? list.filter((item) => item !== symbol) : [...list, symbol]);
+  function toggleSymbol(symbol: string) {
+    const next = hiddenList.includes(symbol) ? hiddenList.filter((item) => item !== symbol) : [...hiddenList, symbol];
+    setHiddenState({ key: symbolKey, hidden: next });
+  }
+
+  function toggleStock(symbol: string) {
+    setStockOff((list) => (list.includes(symbol) ? list.filter((item) => item !== symbol) : [...list, symbol]));
   }
 
   const chartData = useMemo(() => {
@@ -97,7 +108,7 @@ export function InternalPerformancePanel({
               <button
                 type="button"
                 aria-pressed={on}
-                onClick={() => toggle(hidden, symbol.symbol, setHidden)}
+                onClick={() => toggleSymbol(symbol.symbol)}
                 className={
                   "inline-flex items-center gap-2 rounded-full border bg-white/80 px-2.5 py-1 text-sm font-medium dark:bg-zinc-950/40 " +
                   (on ? "" : "opacity-45")
@@ -117,7 +128,7 @@ export function InternalPerformancePanel({
               <button
                 type="button"
                 aria-pressed={stockOn}
-                onClick={() => toggle(stockOff, symbol.symbol, setStockOff)}
+                onClick={() => toggleStock(symbol.symbol)}
                 className={
                   "inline-flex items-center gap-2 rounded-full border border-dashed bg-white/80 px-2.5 py-1 text-sm font-medium dark:bg-zinc-950/40 " +
                   (stockOn ? "" : "opacity-45")
@@ -204,7 +215,7 @@ export function InternalPerformancePanel({
                 />
               ))}
             {symbols
-              .filter((symbol) => !stockOffSet.has(symbol.symbol))
+              .filter((symbol) => !hiddenSet.has(symbol.symbol) && !stockOffSet.has(symbol.symbol))
               .map((symbol) => (
                 <Line
                   key={`${symbol.symbol}-stock`}

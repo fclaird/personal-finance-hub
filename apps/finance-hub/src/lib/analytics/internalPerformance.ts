@@ -8,6 +8,8 @@ import { inferInstructionKind } from "@/lib/situations/fromBrokerTx";
 const SYNTHETIC_SPAN_MUST_EXCEED_DAYS = 180;
 const FLAT_GAP_TRADING_DAYS = 5;
 const CONTRACT_SHARES = 100;
+const STOCK_MARK_MAX_AGE_DAYS = 5;
+export const INTERNAL_DEFAULT_ON_LIMIT = 8;
 
 export type InternalFillLeg = "share" | "call" | "put";
 
@@ -29,6 +31,24 @@ export type QualifyReason = "shares" | "synthetic" | "both";
 export type QualifiedUnderlying = {
   symbol: string;
   reason: QualifyReason;
+  marketValue: number;
+};
+
+export type OpenHolding = {
+  symbol: string;
+  leg: InternalFillLeg;
+  quantity: number;
+  strike: number | null;
+  expiration: string | null;
+  marketValue: number;
+};
+
+export type InternalAudit = {
+  symbol: string;
+  pnl: number;
+  capital: number;
+  returnPct: number | null;
+  stockPct: number | null;
 };
 
 export type InternalSeriesPoint = {
@@ -323,6 +343,141 @@ function shareQualifies(intervals: Interval[], window: Window | undefined): bool
   return intervals.some((interval) => overlaps(interval, window));
 }
 
+function syntheticHeldNow(fills: InternalFill[], asOf: string): Interval | null {
+  const dates = visitDates(
+    fills.map((fill) => fill.date),
+    [],
+    asOf,
+  );
+  const snaps = replaySymbol(fills, dates);
+  const intervals = intervalsFromFlags(
+    snaps.map((snap) => snap.date),
+    snaps.map((snap) => snap.syntheticHeld),
+    asOf,
+  );
+  const episodes = mergeSyntheticEpisodes(intervals);
+  return episodes.find((episode) => episode.start <= asOf && episode.end >= asOf) ?? null;
+}
+
+export function exposureFromOpenHoldings(
+  holdings: OpenHolding[],
+): Map<string, { shares: number; synthetic: number; marketValue: number }> {
+  const grouped = new Map<string, OpenHolding[]>();
+  for (const holding of holdings) {
+    const symbol = holding.symbol.trim().toUpperCase();
+    if (!symbol || symbol === "CASH") continue;
+    const list = grouped.get(symbol) ?? [];
+    list.push({ ...holding, symbol });
+    grouped.set(symbol, list);
+  }
+  const out = new Map<string, { shares: number; synthetic: number; marketValue: number }>();
+  for (const [symbol, rows] of grouped) {
+    let shares = 0;
+    let shareMv = 0;
+    const contracts = new Map<string, ContractBook>();
+    const mvByKey = new Map<string, number>();
+    for (const row of rows) {
+      if (row.leg === "share") {
+        shares += row.quantity;
+        shareMv += Math.abs(row.marketValue);
+        continue;
+      }
+      if (!row.expiration || row.strike == null || Math.abs(row.quantity) < 1e-9) continue;
+      const right: "C" | "P" = row.leg === "put" ? "P" : "C";
+      const key = contractKey(right, row.strike, row.expiration);
+      const contract = contracts.get(key) ?? { right, strike: row.strike, expiration: row.expiration, lots: [] };
+      contract.lots.push({ qty: row.quantity, perUnit: 0 });
+      contracts.set(key, contract);
+      mvByKey.set(key, (mvByKey.get(key) ?? 0) + Math.abs(row.marketValue));
+    }
+    const syntheticMap = syntheticQtyByContract(contracts);
+    let synthetic = 0;
+    let syntheticMv = 0;
+    for (const [key, qty] of syntheticMap) {
+      synthetic += Math.abs(qty);
+      const open = Math.abs(qtyOf(contracts.get(key)?.lots ?? []));
+      const fraction = open > 1e-9 ? Math.min(1, Math.abs(qty) / open) : 0;
+      syntheticMv += (mvByKey.get(key) ?? 0) * fraction;
+    }
+    if (shares <= 1e-6 && synthetic <= 1e-6) continue;
+    out.set(symbol, { shares, synthetic, marketValue: shareMv + syntheticMv });
+  }
+  return out;
+}
+
+export function looksLikeCusip(symbol: string): boolean {
+  return /^[0-9A-Z]{8,9}$/.test(symbol) && /\d/.test(symbol);
+}
+
+export function cusipTickerMap(
+  rows: Array<{ symbol: string; cusip: string; securityType?: string | null }>,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  const rank = new Map<string, number>();
+  for (const row of rows) {
+    const cusip = row.cusip.trim().toUpperCase();
+    const symbol = row.symbol.trim().toUpperCase();
+    if (!looksLikeCusip(cusip) || !symbol || looksLikeCusip(symbol)) continue;
+    const preference = (row.securityType ?? "").toLowerCase() === "equity" ? 2 : 1;
+    if ((rank.get(cusip) ?? 0) > preference) continue;
+    map.set(cusip, symbol);
+    rank.set(cusip, preference);
+  }
+  return map;
+}
+
+export function canonicalSymbol(symbol: string, cusips: Map<string, string>): string | null {
+  const trimmed = symbol.trim().toUpperCase();
+  if (!trimmed || trimmed === "CASH") return null;
+  if (!looksLikeCusip(trimmed)) return trimmed;
+  return cusips.get(trimmed) ?? null;
+}
+
+export type ShareCloseRow = { symbol: string; date: string; price: number; provider?: string | null };
+
+export function shareClosesBySymbol(rows: ShareCloseRow[]): Record<string, SharePricePoint[]> {
+  const hasSchwab = new Set<string>();
+  for (const row of rows) {
+    if ((row.provider ?? "schwab").trim().toLowerCase() === "schwab") hasSchwab.add(row.symbol.trim().toUpperCase());
+  }
+  const best = new Map<string, { price: number; schwab: boolean }>();
+  for (const row of rows) {
+    const symbol = row.symbol.trim().toUpperCase();
+    const date = row.date.slice(0, 10);
+    if (!symbol || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(row.price > 0)) continue;
+    const schwab = (row.provider ?? "schwab").trim().toLowerCase() === "schwab";
+    if (hasSchwab.has(symbol) && !schwab) continue;
+    const key = `${symbol}|${date}`;
+    const prev = best.get(key);
+    if (!prev || (schwab && !prev.schwab)) best.set(key, { price: row.price, schwab });
+  }
+  const out: Record<string, SharePricePoint[]> = {};
+  for (const [key, value] of best) {
+    const split = key.indexOf("|");
+    const symbol = key.slice(0, split);
+    const date = key.slice(split + 1);
+    const list = out[symbol] ?? [];
+    list.push({ date, price: value.price });
+    out[symbol] = list;
+  }
+  for (const list of Object.values(out)) list.sort((a, b) => a.date.localeCompare(b.date));
+  return out;
+}
+
+export function mergeShareMarks(closes: SharePricePoint[], snapshots: SharePricePoint[]): SharePricePoint[] {
+  const byDate = new Map<string, number>();
+  for (const close of closes) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(close.date) && close.price > 0) byDate.set(close.date, close.price);
+  }
+  for (const snap of snapshots) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(snap.date) || !(snap.price > 0) || byDate.has(snap.date)) continue;
+    byDate.set(snap.date, snap.price);
+  }
+  return [...byDate.entries()]
+    .map(([date, price]) => ({ date, price }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
 function groupFills(fills: InternalFill[]): Map<string, InternalFill[]> {
   const bySymbol = new Map<string, InternalFill[]>();
   for (const fill of fills) {
@@ -441,12 +596,29 @@ export function qualifyInternalUnderlyings(
   fills: InternalFill[],
   asOf: string,
   window?: Window,
+  openHoldings?: OpenHolding[],
 ): QualifiedUnderlying[] {
   const grouped = groupFills(fills);
+  const exposure = openHoldings ? exposureFromOpenHoldings(openHoldings) : null;
   const out: QualifiedUnderlying[] = [];
-  for (const [symbol, symbolFills] of grouped) {
-    const reason = classifySymbol(symbolFills, asOf, window);
-    if (reason) out.push({ symbol, reason });
+  const symbols = new Set<string>([...grouped.keys(), ...(exposure ? exposure.keys() : [])]);
+  for (const symbol of symbols) {
+    const symbolFills = grouped.get(symbol) ?? [];
+    if (!exposure) {
+      const reason = classifySymbol(symbolFills, asOf, window);
+      if (reason) out.push({ symbol, reason, marketValue: 0 });
+      continue;
+    }
+    const open = exposure.get(symbol);
+    const shares = (open?.shares ?? 0) > 1e-6;
+    const episode = syntheticHeldNow(symbolFills, asOf);
+    const synthetic =
+      (open?.synthetic ?? 0) > 1e-6 &&
+      episode != null &&
+      (daysBetween(episode.start, episode.end) ?? 0) > SYNTHETIC_SPAN_MUST_EXCEED_DAYS;
+    if (!shares && !synthetic) continue;
+    const reason: QualifyReason = shares && synthetic ? "both" : shares ? "shares" : "synthetic";
+    out.push({ symbol, reason, marketValue: open?.marketValue ?? 0 });
   }
   out.sort((a, b) => a.symbol.localeCompare(b.symbol));
   return out;
@@ -531,15 +703,6 @@ function roundPct(value: number): number {
   return Math.round(value * 1e6) / 1e6;
 }
 
-function lastPrice(points: Px[], date: string): number | null {
-  let price: number | null = null;
-  for (const point of points) {
-    if (point.date > date) break;
-    price = point.price;
-  }
-  return price;
-}
-
 function longCost(lots: Lot[]): number {
   return lots.reduce((sum, lot) => sum + (lot.qty > 0 ? lot.qty * lot.perUnit : 0), 0);
 }
@@ -610,6 +773,23 @@ function pnlFor(
   };
 }
 
+function markOn(marks: SharePricePoint[], date: string): number | null {
+  let price: number | null = null;
+  let priceDate: string | null = null;
+  for (const mark of marks) {
+    if (mark.date > date) break;
+    price = mark.price;
+    priceDate = mark.date;
+  }
+  if (price == null || priceDate == null) return null;
+  if ((daysBetween(priceDate, date) ?? STOCK_MARK_MAX_AGE_DAYS + 1) > STOCK_MARK_MAX_AGE_DAYS) return null;
+  return price;
+}
+
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 export function buildInternalPerformanceSeries(
   fills: InternalFill[],
   opts: {
@@ -617,15 +797,17 @@ export function buildInternalPerformanceSeries(
     dates: string[];
     sharePrices?: Record<string, SharePricePoint[]>;
     optionMarks?: OptionMarkPoint[];
+    openHoldings?: OpenHolding[];
   },
-): { symbols: QualifiedUnderlying[]; bySymbol: Record<string, InternalSeriesPoint[]> } {
+): { symbols: QualifiedUnderlying[]; bySymbol: Record<string, InternalSeriesPoint[]>; audit: InternalAudit[] } {
   const dates = [...opts.dates].filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)).sort();
-  if (dates.length === 0) return { symbols: [], bySymbol: {} };
+  if (dates.length === 0) return { symbols: [], bySymbol: {}, audit: [] };
   const window = { start: dates[0]!, end: dates[dates.length - 1]! };
   const asOf = opts.asOf > window.end ? opts.asOf : window.end;
-  const qualified = qualifyInternalUnderlyings(fills, asOf, window);
+  const qualified = qualifyInternalUnderlyings(fills, asOf, window, opts.openHoldings);
   const grouped = groupFills(fills);
   const bySymbol: Record<string, InternalSeriesPoint[]> = {};
+  const audit: InternalAudit[] = [];
 
   for (const { symbol, reason } of qualified) {
     const symbolFills = grouped.get(symbol) ?? [];
@@ -637,12 +819,8 @@ export function buildInternalPerformanceSeries(
       window.end,
     );
     const snaps = replaySymbol(symbolFills, visit);
-    const sharePoints: Px[] = [
-      ...symbolFills
-        .filter((fill) => fill.leg === "share")
-        .map((fill) => ({ date: fill.date, price: fill.price, rank: 0 })),
-      ...(opts.sharePrices?.[symbol] ?? []).map((point) => ({ date: point.date, price: point.price, rank: 1 })),
-    ].sort((a, b) => a.date.localeCompare(b.date) || a.rank - b.rank);
+    const shareMarks = [...(opts.sharePrices?.[symbol] ?? [])].sort((a, b) => a.date.localeCompare(b.date));
+    const chartStartPrice = markOn(shareMarks, dates[0]!);
     const optionPoints = new Map<string, Px[]>();
     const pushOption = (point: OptionMarkPoint, rank: number) => {
       if (point.underlying.trim().toUpperCase() !== symbol) return;
@@ -671,18 +849,25 @@ export function buildInternalPerformanceSeries(
     const chartDates = new Set(dates);
     let baselinePnl: number | null = null;
     let maxCapital = 0;
-    let baselinePrice: number | null = null;
+    let lastAudit: InternalAudit | null = null;
     const pointByDate = new Map<string, InternalSeriesPoint>();
     for (const snap of snaps) {
+      const shareMark = markOn(shareMarks, snap.date);
       const valued = pnlFor(
         snap.books,
         snap.shareRealized,
         snap.syntheticRealized,
         includeShares,
         includeSynthetic,
-        lastPrice(sharePoints, snap.date),
+        shareMark,
         (contract) =>
-          lastPrice(optionPoints.get(contractKey(contract.right, contract.strike, contract.expiration)) ?? [], snap.date),
+          markOn(
+            (optionPoints.get(contractKey(contract.right, contract.strike, contract.expiration)) ?? []).map((point) => ({
+              date: point.date,
+              price: point.price,
+            })),
+            snap.date,
+          ),
       );
       const shareActive = includeShares && (valued.shareQty > 1e-6 || snap.shareRealized !== 0);
       const syntheticActive = includeSynthetic && (valued.syntheticAbs > 1e-6 || snap.syntheticRealized !== 0);
@@ -695,32 +880,47 @@ export function buildInternalPerformanceSeries(
         }
         baselinePnl = valued.pnl;
         maxCapital = valued.capital;
-        baselinePrice = lastPrice(sharePoints, snap.date);
         if (chartDates.has(snap.date)) {
+          const stockPct = chartStartPrice != null && chartStartPrice > 0 && shareMark != null ? roundPct((shareMark / chartStartPrice - 1) * 100) : null;
           pointByDate.set(snap.date, {
             date: snap.date,
             returnPct: maxCapital > 0 ? 0 : null,
-            stockPct: baselinePrice != null && baselinePrice > 0 ? 0 : null,
+            stockPct,
           });
+          lastAudit = {
+            symbol,
+            pnl: 0,
+            capital: roundMoney(maxCapital),
+            returnPct: maxCapital > 0 ? 0 : null,
+            stockPct,
+          };
         }
         continue;
       }
       maxCapital = Math.max(maxCapital, valued.capital);
       if (!chartDates.has(snap.date)) continue;
-      const stock = lastPrice(sharePoints, snap.date);
-      pointByDate.set(snap.date, {
-        date: snap.date,
-        returnPct: maxCapital > 0 ? roundPct(((valued.pnl - baselinePnl) / maxCapital) * 100) : null,
-        stockPct: baselinePrice != null && baselinePrice > 0 && stock != null ? roundPct((stock / baselinePrice - 1) * 100) : null,
-      });
+      const returnPct = maxCapital > 0 ? roundPct(((valued.pnl - baselinePnl) / maxCapital) * 100) : null;
+      const stockPct =
+        chartStartPrice != null && chartStartPrice > 0 && shareMark != null ? roundPct((shareMark / chartStartPrice - 1) * 100) : null;
+      pointByDate.set(snap.date, { date: snap.date, returnPct, stockPct });
+      lastAudit = {
+        symbol,
+        pnl: roundMoney(valued.pnl - baselinePnl),
+        capital: roundMoney(maxCapital),
+        returnPct,
+        stockPct,
+      };
     }
+    if (lastAudit) audit.push(lastAudit);
     const points = dates.map((date) => pointByDate.get(date) ?? { date, returnPct: null, stockPct: null });
     if (points.some((point) => point.returnPct != null)) bySymbol[symbol] = points;
   }
 
+  audit.sort((a, b) => a.symbol.localeCompare(b.symbol));
   return {
     symbols: qualified.filter((row) => bySymbol[row.symbol]),
     bySymbol,
+    audit,
   };
 }
 
