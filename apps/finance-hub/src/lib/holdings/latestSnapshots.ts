@@ -2,11 +2,10 @@ import type Database from "better-sqlite3";
 
 import type { DataMode } from "@/lib/dataMode";
 import type { FlavorId } from "@/lib/flavor";
-import { accountsInFlavorWhereSql } from "@/lib/flavors/accounts";
-import { notPosterityWhereSql } from "@/lib/posterity";
+import { accountsInFlavorAndPosterityWhereSql } from "@/lib/flavors/accounts";
 
 function syncedAccountsBaseWhereSql(alias: string, flavor: FlavorId): string {
-  return `${alias}.id NOT LIKE 'demo_%' AND ${notPosterityWhereSql(alias)} AND ${accountsInFlavorWhereSql(flavor, alias)}`;
+  return `${alias}.id NOT LIKE 'demo_%' AND ${accountsInFlavorAndPosterityWhereSql(flavor, alias)}`;
 }
 
 export type LatestSnapshotScope = "all_synced" | "schwab_only";
@@ -23,12 +22,12 @@ export function latestSnapshotPerAccountJoinSql(hsAlias = "hs"): string {
   ) _latest_snap ON _latest_snap.account_id = ${hsAlias}.account_id AND _latest_snap.max_as_of = ${hsAlias}.as_of`;
 }
 
-/** All synced accounts for a flavor: Schwab, manual, Plaid, etc. (excludes posterity, demo). */
+/** All synced accounts for a flavor: Schwab, manual, Plaid, etc. (excludes demo; posterity stays out unless the flavor owns it). */
 export function allSyncedAccountsWhereSql(flavor: FlavorId, alias = "a"): string {
   return syncedAccountsBaseWhereSql(alias, flavor);
 }
 
-/** Schwab broker + manual external accounts for a flavor (REAL data mode; excludes posterity, demo). */
+/** Schwab broker + manual external accounts for a flavor (REAL data mode; excludes demo; posterity stays out unless the flavor owns it). */
 export function syncedBrokerAndManualWhereSql(flavor: FlavorId, alias = "a"): string {
   return `(${alias}.id LIKE 'schwab_%' OR ${alias}.id LIKE 'manual_%') AND ${syncedAccountsBaseWhereSql(alias, flavor)}`;
 }

@@ -7,6 +7,7 @@ import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { FlavorPasswordDialog } from "@/app/components/FlavorPasswordDialog";
 import type { FlavorId } from "@/lib/flavor";
+import { getFlavorConfig } from "@/lib/flavors/registry";
 import { formatDisplayDateTime } from "@/lib/formatDate";
 import { MAX_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
 
@@ -15,6 +16,7 @@ type FlavorOption = {
   label: string;
   features: { plaid: boolean };
   passwordRequired?: boolean;
+  pillActiveClass?: string;
 };
 
 type SyncResult = { ok: boolean; accounts?: number; error?: string };
@@ -52,11 +54,11 @@ declare global {
   }
 }
 
-function flavorPillClass(active: boolean) {
+function flavorPillClass(active: boolean, activeClass: string) {
   return (
     "rounded-full px-4 py-2 text-sm font-medium " +
     (active
-      ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
+      ? activeClass
       : "border border-zinc-300 bg-white text-zinc-900 shadow-sm hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
   );
 }
@@ -237,7 +239,10 @@ export default function ConnectionsPage() {
                     <button
                       key={f.id}
                       type="button"
-                      className={flavorPillClass(flavor === f.id)}
+                      className={flavorPillClass(
+                        flavor === f.id,
+                        f.pillActiveClass ?? getFlavorConfig(f.id).accent.pillActiveClass,
+                      )}
                       onClick={() => beginFlavorUnlock(f.id)}
                     >
                       {f.label}
