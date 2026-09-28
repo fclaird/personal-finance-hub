@@ -3,7 +3,10 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { PortfolioSessionClosePlot } from "@/app/components/terminal/PortfolioSessionClosePlot";
+import {
+  PortfolioSessionCloseHeadline,
+  PortfolioSessionClosePlot,
+} from "@/app/components/terminal/PortfolioSessionClosePlot";
 import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
 import { resolveGlanceInstrumentId } from "@/lib/market/glanceMiniChartSession";
 import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
@@ -86,9 +89,11 @@ test("after the 16:00 ET close the portfolio drops its series and holds the sess
   assert.equal(plot.mode, "session_close");
   if (plot.mode !== "session_close") return;
   assert.deepEqual(plot.series, []);
-  assert.equal(plot.referencePrice, 100);
-  assert.equal(plot.headlineKind, "index");
+  assert.equal(plot.referencePrice, 97.33);
+  assert.equal(plot.shownReferencePrice, 97.33);
   assert.equal(plot.headlineValue, 97.33);
+  assert.equal(plot.headlineKind, "index");
+  assert.equal(plot.headlineLabel, "Previous close");
   assert.equal(plot.changePct, -2.67);
   assert.equal(plot.changeLabel, "At close");
   assert.ok(portfolio.series.length >= 2);
@@ -107,8 +112,10 @@ test("pre-open Monday uses the session close, same as the futures proxy", () => 
   assert.equal(plot.mode, "session_close");
   if (plot.mode !== "session_close") return;
   assert.deepEqual(plot.series, []);
-  assert.equal(plot.referencePrice, 100);
-  assert.equal(plot.headlineValue, 97.33);
+  assert.equal(plot.referencePrice, 97.33);
+  assert.equal(plot.shownReferencePrice, plot.headlineValue);
+  assert.equal(plot.headlineValue, plot.referencePrice);
+  assert.equal(plot.headlineLabel, "Previous close");
   assert.equal(plot.changeLabel, "At close");
 });
 
@@ -125,8 +132,12 @@ test("weekend uses the session close, same as the futures proxy", () => {
   assert.equal(plot.mode, "session_close");
   if (plot.mode !== "session_close") return;
   assert.deepEqual(plot.series, []);
-  assert.equal(plot.referencePrice, 100);
+  assert.equal(plot.referencePrice, 97.33);
+  assert.equal(plot.shownReferencePrice, plot.referencePrice);
+  assert.equal(plot.headlineValue, plot.referencePrice);
+  assert.equal(plot.headlineLabel, "Previous close");
   assert.equal(plot.changePct, -2.67);
+  assert.equal(plot.changeLabel, "At close");
 });
 
 test("dollar mode headline is the close balance when unlocked, and stays masked when locked", () => {
@@ -140,9 +151,11 @@ test("dollar mode headline is the close balance when unlocked, and stays masked 
   assert.equal(unlocked.mode, "session_close");
   if (unlocked.mode !== "session_close") return;
   assert.deepEqual(unlocked.series, []);
-  assert.equal(unlocked.referencePrice, 1_000_000);
-  assert.equal(unlocked.headlineKind, "dollars");
+  assert.equal(unlocked.referencePrice, 973_300);
+  assert.equal(unlocked.shownReferencePrice, 973_300);
   assert.equal(unlocked.headlineValue, 973_300);
+  assert.equal(unlocked.headlineKind, "dollars");
+  assert.equal(unlocked.headlineLabel, "Previous close");
   assert.equal(unlocked.changeLabel, "At close");
 
   const locked = portfolioGlancePlot({
@@ -155,8 +168,16 @@ test("dollar mode headline is the close balance when unlocked, and stays masked 
   if (locked.mode !== "session_close") return;
   assert.equal(locked.headlineKind, "masked");
   assert.equal(locked.headlineValue, null);
-  assert.equal(locked.referencePrice, 1_000_000);
+  assert.equal(locked.headlineLabel, "Previous close");
+  assert.equal(locked.referencePrice, 973_300);
+  assert.equal(locked.shownReferencePrice, null);
   assert.equal(locked.changePct, -2.67);
+  assert.equal(locked.changeLabel, "At close");
+  const lockedHtml = renderToStaticMarkup(
+    createElement(PortfolioSessionClosePlot, { referencePrice: locked.shownReferencePrice }),
+  );
+  assert.match(lockedHtml, /data-portfolio-mark="reference"/);
+  assert.equal(lockedHtml.includes("973300"), false);
 });
 
 test("closed render path draws the previous-close line and no portfolio series", () => {
@@ -171,15 +192,27 @@ test("closed render path draws the previous-close line and no portfolio series",
   if (plot.mode !== "session_close") return;
   assert.deepEqual(plot.series, []);
 
+  assert.equal(plot.headlineValue, plot.referencePrice);
   const html = renderToStaticMarkup(
-    createElement(PortfolioSessionClosePlot, { referencePrice: plot.referencePrice }),
+    createElement(
+      "div",
+      null,
+      createElement(
+        PortfolioSessionCloseHeadline,
+        { label: plot.headlineLabel },
+        plot.headlineValue == null ? null : plot.headlineValue.toFixed(2),
+      ),
+      createElement(PortfolioSessionClosePlot, { referencePrice: plot.shownReferencePrice }),
+    ),
   );
   assert.match(html, /data-portfolio-plot="session-close"/);
   assert.match(html, /data-portfolio-mark="reference"/);
-  assert.match(html, /data-reference-price="100"/);
+  assert.match(html, /data-reference-price="97.33"/);
+  assert.match(html, />Previous close</);
+  assert.match(html, />97\.33</);
   assert.equal(html.includes('data-portfolio-mark="series"'), false);
   assert.equal(html.includes("<path"), false);
-  assert.equal(html.includes("Previous close 100"), true);
+  assert.equal(html.includes("Previous close 97.33"), true);
 });
 
 test("a benchmark id does not enter the portfolio session-close plot", () => {

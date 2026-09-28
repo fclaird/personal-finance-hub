@@ -40,7 +40,10 @@ import type { FuturesGlanceKind } from "@/lib/market/futuresGlanceSession";
 import type { PostCashClosePlot } from "@/lib/market/glanceMiniChartSession";
 import { futuresExtendedPhaseLabel, futuresSegmentLabel } from "@/lib/market/futuresGlanceSession";
 import { PortfolioGlanceValue } from "@/app/components/terminal/PortfolioGlanceValue";
-import { PortfolioSessionClosePlot } from "@/app/components/terminal/PortfolioSessionClosePlot";
+import {
+  PortfolioSessionCloseHeadline,
+  PortfolioSessionClosePlot,
+} from "@/app/components/terminal/PortfolioSessionClosePlot";
 import { usePortfolioGlanceUnlockedOptional } from "@/app/components/terminal/portfolioGlanceUnlocked";
 import {
   readPortfolioGlanceDisplayMode,
@@ -1076,12 +1079,14 @@ export function MarketGlanceCard({
           {isPortfolio ? (
             <div className="shrink-0 self-start text-right">
               {sessionClosePlot ? (
-                <PortfolioGlanceValue
-                  netValue={sessionClosePlot.headlineKind === "dollars" ? sessionClosePlot.headlineValue : item.netValue}
-                  changePct={sessionClosePlot.changePct}
-                  changeLabel={sessionClosePlot.changeLabel}
-                  indexLevel={sessionClosePlot.headlineKind === "index" ? sessionClosePlot.headlineValue : null}
-                />
+                <PortfolioSessionCloseHeadline label={sessionClosePlot.headlineLabel}>
+                  <PortfolioGlanceValue
+                    netValue={sessionClosePlot.headlineKind === "dollars" ? sessionClosePlot.headlineValue : item.netValue}
+                    changePct={sessionClosePlot.changePct}
+                    changeLabel={sessionClosePlot.changeLabel}
+                    indexLevel={sessionClosePlot.headlineKind === "index" ? sessionClosePlot.headlineValue : null}
+                  />
+                </PortfolioSessionCloseHeadline>
               ) : (
                 <PortfolioGlanceValue netValue={item.netValue} changePct={item.changePct} />
               )}
@@ -1103,7 +1108,7 @@ export function MarketGlanceCard({
       <div className={"relative z-0 shrink-0 overflow-hidden px-3 pt-1.5 " + GLANCE_TILE_CHART_HEIGHT_CLASS}>
         {sessionClosePlot ? (
           <div className="h-full w-full min-w-0 overflow-hidden">
-            <PortfolioSessionClosePlot referencePrice={sessionClosePlot.referencePrice} />
+            <PortfolioSessionClosePlot referencePrice={sessionClosePlot.shownReferencePrice} />
           </div>
         ) : chartData.length >= 2 ? (
           <div className="h-full w-full min-w-0 overflow-hidden">
@@ -1331,9 +1336,7 @@ export function MarketGlanceCard({
               <div>
                 <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
                   {sessionClosePlot
-                    ? sessionClosePlot.headlineKind === "index"
-                      ? "Index"
-                      : "Close"
+                    ? sessionClosePlot.headlineLabel
                     : portfolioIndexedDisplay
                       ? "Index"
                       : "Current"}
