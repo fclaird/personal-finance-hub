@@ -713,38 +713,42 @@ export function latestShareSnapshotsByDay(rows: ShareSnapshotRow[]): ShareSnapsh
   return [...byDay.values()];
 }
 
-function snapshotShareQty(rows: ShareSnapshotRow[], symbol: string, date: string, fills: InternalFill[]): number | null {
+function netShareFills(fills: InternalFill[], accountId: string, symbol: string, afterDate: string, throughDate: string): number {
+  let net = 0;
+  for (const fill of fills) {
+    if (fill.seeded || fill.leg !== "share") continue;
+    if ((fill.accountId || "default") !== accountId) continue;
+    if (fill.underlying.trim().toUpperCase() !== symbol) continue;
+    if (fill.date <= afterDate || fill.date > throughDate) continue;
+    net += fill.signedShares;
+  }
+  return net;
+}
+
+function snapshotShareQtyByAccount(
+  rows: ShareSnapshotRow[],
+  symbol: string,
+  date: string,
+  fills: InternalFill[],
+): Map<string, number> | null {
   const mine = rows.filter((row) => row.symbol === symbol);
   if (mine.length === 0) return null;
-  const accounts = new Set(mine.map((row) => row.accountId));
-  let total = 0;
-  let any = false;
-  for (const accountId of accounts) {
+  const out = new Map<string, number>();
+  for (const accountId of new Set(mine.map((row) => row.accountId))) {
     const history = mine
       .filter((row) => row.accountId === accountId)
       .sort((a, b) => a.date.localeCompare(b.date) || a.asOf.localeCompare(b.asOf));
     const past = history.filter((row) => row.date <= date);
     if (past.length > 0) {
-      total += past[past.length - 1]!.quantity;
-      any = true;
+      out.set(accountId, Math.max(0, past[past.length - 1]!.quantity));
       continue;
     }
     const future = history.find((row) => row.date > date);
     if (!future) continue;
-    const traded = fills.some(
-      (fill) =>
-        !fill.seeded &&
-        fill.leg === "share" &&
-        (fill.accountId || "default") === accountId &&
-        fill.underlying.trim().toUpperCase() === symbol &&
-        fill.date > date &&
-        fill.date <= future.date,
-    );
-    if (traded) continue;
-    total += future.quantity;
-    any = true;
+    const qty = future.quantity - netShareFills(fills, accountId, symbol, date, future.date);
+    out.set(accountId, Math.max(0, qty));
   }
-  return any ? total : null;
+  return out.size > 0 ? out : null;
 }
 
 function shareBookQty(fills: InternalFill[], accountId: string, symbol: string, throughDate: string): number {
@@ -1058,7 +1062,8 @@ export function buildInternalPerformanceSeries(
         shareMark,
         (contract) => optionMarkAt(contract, snap.date),
       );
-      const snappedQty = includeShares ? snapshotShareQty(collapsedSnaps, symbol, snap.date, symbolFills) : null;
+      const snappedByAccount = includeShares ? snapshotShareQtyByAccount(collapsedSnaps, symbol, snap.date, symbolFills) : null;
+      const snappedQty = snappedByAccount ? [...snappedByAccount.values()].reduce((sum, qty) => sum + qty, 0) : null;
       const shareQty = snappedQty ?? valued.shareQty;
       const shareActive = includeShares && shareQty > 1e-6;
       const syntheticActive = includeSynthetic && (valued.syntheticAbs > 1e-6 || snap.syntheticRealized !== 0);
@@ -1074,7 +1079,12 @@ export function buildInternalPerformanceSeries(
         shareMark0 = shareActive ? shareMark : null;
         optionRealized0 = includeSynthetic ? snap.syntheticRealized : 0;
         syntheticCapital0 = includeSynthetic ? capitalFor(snap.books, false, true) : 0;
-        startQtyByAccount = shareQtyByAccount(snap.books);
+        startQtyByAccount = new Map();
+        if (snappedByAccount) {
+          for (const [accountId, qty] of snappedByAccount) if (qty > 1e-6) startQtyByAccount.set(accountId, qty);
+        } else {
+          startQtyByAccount = shareQtyByAccount(snap.books);
+        }
         const shareCapital = shareMark0 != null && shareQty0 > 1e-6 ? shareQty0 * shareMark0 : includeShares ? valued.capital - syntheticCapital0 : 0;
         maxCapital = Math.max(0, shareCapital) + syntheticCapital0;
         if (chartDates.has(snap.date)) {

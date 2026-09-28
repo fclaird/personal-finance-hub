@@ -631,6 +631,38 @@ describe("current holdings and stock closes", () => {
     assert.equal(end?.returnPct, end?.stockPct);
   });
 
+  it("back-derives shares already held when the only snapshot is after the window start", () => {
+    const start = 416;
+    const end = 371.75;
+    const buyCost = 347.39 + 362;
+    const snaps = [
+      { accountId: "a", symbol: "TSLA", date: "2026-09-28", asOf: "2026-09-28T01:00:14Z", quantity: 5, price: 250 },
+    ];
+    const built = buildInternalPerformanceSeries(
+      seedUnexplainedShareFills(
+        [share("2026-08-19", 1, 347.39, "TSLA"), share("2026-08-31", 1, 362, "TSLA")],
+        snaps,
+      ),
+      {
+        asOf: "2026-09-28",
+        dates: ["2026-06-01", "2026-09-28"],
+        sharePrices: {
+          TSLA: [
+            { date: "2026-06-01", price: start },
+            { date: "2026-09-28", price: end },
+          ],
+        },
+        shareSnapshots: snaps,
+        openHoldings: [
+          { symbol: "TSLA", leg: "share", quantity: 5, strike: null, expiration: null, marketValue: 5 * end },
+        ],
+      },
+    );
+    const audit = built.audit.find((row) => row.symbol === "TSLA");
+    assert.equal(audit?.pnl, Math.round((5 * end - 3 * start - buyCost) * 100) / 100);
+    assert.equal(audit?.capital, Math.round((3 * start + buyCost) * 100) / 100);
+  });
+
   it("measures a long book's giveback against the value at the chart start", () => {
     const built = buildInternalPerformanceSeries([share("2024-01-02", 100, 10, "VSCPX")], {
       asOf: "2024-07-01",
