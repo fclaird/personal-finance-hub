@@ -11,11 +11,32 @@ function formatDayPct(pct: number | null | undefined): string {
 export function PortfolioGlanceValue({
   netValue,
   changePct,
+  changeLabel = "day",
+  indexLevel,
 }: {
   netValue: number | null | undefined;
   changePct?: number | null;
+  changeLabel?: string;
+  indexLevel?: number | null;
 }) {
   const { unlocked, startEditing, lock } = usePortfolioGlanceUnlocked();
+  const pctLine =
+    changePct != null ? (
+      <div className="text-[10px] font-medium tabular-nums text-zinc-500 dark:text-zinc-400">
+        {formatDayPct(changePct)} {changeLabel}
+      </div>
+    ) : null;
+
+  if (indexLevel != null && Number.isFinite(indexLevel)) {
+    return (
+      <div className="text-right">
+        <div className="truncate text-sm font-semibold leading-5 tabular-nums text-zinc-900 dark:text-zinc-50">
+          {indexLevel.toFixed(2)}
+        </div>
+        {pctLine}
+      </div>
+    );
+  }
 
   if (unlocked) {
     return (
@@ -28,11 +49,7 @@ export function PortfolioGlanceValue({
         >
           {formatUsd2(netValue)}
         </button>
-        {changePct != null ? (
-          <div className="text-[10px] font-medium tabular-nums text-zinc-500 dark:text-zinc-400">
-            {formatDayPct(changePct)} day
-          </div>
-        ) : null}
+        {pctLine}
       </div>
     );
   }
@@ -47,11 +64,7 @@ export function PortfolioGlanceValue({
       >
         Show balance
       </button>
-      {changePct != null ? (
-        <div className="text-[10px] font-medium tabular-nums text-zinc-500 dark:text-zinc-400">
-          {formatDayPct(changePct)} day
-        </div>
-      ) : null}
+      {pctLine}
     </div>
   );
 }
