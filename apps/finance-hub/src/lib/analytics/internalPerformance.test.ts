@@ -5,7 +5,9 @@ import {
   buildInternalPerformanceSeries,
   internalFillsFromStoredRow,
   qualifyInternalUnderlyings,
+  seedUnexplainedShareFills,
   type InternalFill,
+  type StoredBrokerFillRow,
 } from "@/lib/analytics/internalPerformance";
 
 const EXP = "2024-12-19";
@@ -247,4 +249,236 @@ describe("internal fills from broker rows", () => {
       ],
     );
   });
+
+  it("reads signed transferItems when instruction is null", () => {
+    const bmnr = internalFillsFromStoredRow(
+      realShapeRow({
+        date: "2024-01-02",
+        asset: "OPTION",
+        effect: "OPENING",
+        amount: -17,
+        price: 2.32,
+        symbol: "BMNR  261016P00028000",
+        underlying: "BMNR",
+        putCall: "PUT",
+      }),
+    );
+    const pltr = internalFillsFromStoredRow(
+      realShapeRow({
+        date: "2024-01-02",
+        asset: "OPTION",
+        effect: "CLOSING",
+        amount: 1,
+        price: 42.55,
+        symbol: "PLTR  281215C00290000",
+        underlying: "PLTR",
+        putCall: "CALL",
+      }),
+    );
+    const qxo = internalFillsFromStoredRow(
+      realShapeRow({
+        date: "2024-01-10",
+        asset: "EQUITY",
+        effect: "CLOSING",
+        amount: -4800,
+        price: 12.32,
+        symbol: "QXO",
+      }),
+    );
+    const fund = internalFillsFromStoredRow(
+      realShapeRow({
+        date: "2024-01-02",
+        asset: "MUTUAL_FUND",
+        effect: "OPENING",
+        amount: 25,
+        price: 15,
+        symbol: "SWPPX",
+      }),
+    );
+    const collective = internalFillsFromStoredRow(
+      realShapeRow({
+        date: "2024-01-02",
+        asset: "COLLECTIVE_INVESTMENT",
+        effect: "OPENING",
+        amount: 10,
+        price: 20,
+        symbol: "CTIVX",
+      }),
+    );
+    assert.deepEqual(
+      [bmnr[0], pltr[0], qxo[0], fund[0], collective[0]].map((fill) => [
+        fill?.underlying,
+        fill?.leg,
+        fill?.signedShares,
+        fill?.strike,
+        fill?.price,
+      ]),
+      [
+        ["BMNR", "put", -1700, 28, 2.32],
+        ["PLTR", "call", 100, 290, 42.55],
+        ["QXO", "share", -4800, null, 12.32],
+        ["SWPPX", "share", 25, null, 15],
+        ["CTIVX", "share", 10, null, 20],
+      ],
+    );
+  });
 });
+
+describe("real Schwab row shape", () => {
+  it("qualifies BMNR, PLTR, and TSLA synthetics plus seeded and fund shares", () => {
+    const rows = [
+      realShapeRow({
+        date: "2024-01-02",
+        asset: "OPTION",
+        effect: "OPENING",
+        amount: -17,
+        price: 2.32,
+        symbol: "BMNR  261016P00028000",
+        underlying: "BMNR",
+        putCall: "PUT",
+      }),
+      realShapeRow({
+        date: "2024-01-02",
+        asset: "OPTION",
+        effect: "CLOSING",
+        amount: 1,
+        price: 42.55,
+        symbol: "PLTR  281215C00290000",
+        underlying: "PLTR",
+        putCall: "CALL",
+      }),
+      realShapeRow({
+        date: "2024-01-02",
+        asset: "OPTION",
+        effect: "OPENING",
+        amount: -4,
+        price: 3.1,
+        symbol: "TSLA  261016P00200000",
+        underlying: "TSLA",
+        putCall: "PUT",
+      }),
+      realShapeRow({
+        date: "2024-01-02",
+        asset: "OPTION",
+        effect: "OPENING",
+        amount: -1,
+        price: 1.1,
+        symbol: "IWM   240719P00180000",
+        underlying: "IWM",
+        putCall: "PUT",
+        extraLeg: {
+          amount: -1,
+          price: 1.4,
+          symbol: "IWM   240719C00230000",
+          underlying: "IWM",
+          putCall: "CALL",
+        },
+      }),
+      realShapeRow({
+        date: "2024-06-03",
+        asset: "EQUITY",
+        effect: "CLOSING",
+        amount: -4800,
+        price: 12.32,
+        symbol: "QXO",
+      }),
+      realShapeRow({
+        date: "2024-01-02",
+        asset: "MUTUAL_FUND",
+        effect: "OPENING",
+        amount: 25,
+        price: 15,
+        symbol: "SWPPX",
+      }),
+      realShapeRow({
+        date: "2024-01-02",
+        asset: "COLLECTIVE_INVESTMENT",
+        effect: "OPENING",
+        amount: 10,
+        price: 20,
+        symbol: "CTIVX",
+      }),
+    ];
+    const fills = seedUnexplainedShareFills(
+      rows.flatMap((row) => internalFillsFromStoredRow(row)),
+      [{ accountId: "schwab_1", symbol: "QXO", date: "2024-01-02", quantity: 4800, price: 10 }],
+    );
+    assert.deepEqual(symbols(fills, "2024-07-02"), [
+      "BMNR:synthetic",
+      "CTIVX:shares",
+      "PLTR:synthetic",
+      "QXO:shares",
+      "SWPPX:shares",
+      "TSLA:synthetic",
+    ]);
+  });
+
+  it("does not seed shares the blotter already explains", () => {
+    const fills = seedUnexplainedShareFills([share("2024-01-02", 100, 10, "QXO")], [
+      { accountId: "a", symbol: "QXO", date: "2024-01-02", quantity: 100, price: 10 },
+    ]);
+    assert.equal(fills.length, 1);
+    assert.equal(fills[0]?.signedShares, 100);
+  });
+
+  it("seeds the share gap when the earliest snapshot is larger than the blotter", () => {
+    const fills = seedUnexplainedShareFills([], [
+      { accountId: "schwab_1", symbol: "QXO", date: "2024-01-02", quantity: 4800, price: 10 },
+    ]);
+    assert.equal(fills.length, 1);
+    assert.equal(fills[0]?.signedShares, 4800);
+    assert.equal(symbols(fills, "2024-01-03")[0], "QXO:shares");
+  });
+});
+
+function realShapeRow(input: {
+  date: string;
+  asset: string;
+  effect: "OPENING" | "CLOSING";
+  amount: number;
+  price: number;
+  symbol: string;
+  underlying?: string;
+  putCall?: string;
+  extraLeg?: { amount: number; price: number; symbol: string; underlying: string; putCall: string };
+}): StoredBrokerFillRow {
+  const leg = (part: {
+    amount: number;
+    price: number;
+    symbol: string;
+    underlying?: string;
+    putCall?: string;
+  }) => ({
+    positionEffect: input.effect,
+    amount: part.amount,
+    price: part.price,
+    instrument: {
+      assetType: input.asset,
+      symbol: part.symbol,
+      underlyingSymbol: part.underlying,
+      putCall: part.putCall,
+    },
+  });
+  const security = leg(input);
+  const items = [
+    { feeType: "COMMISSION", amount: -0.65, instrument: { assetType: "CURRENCY", symbol: "CURRENCY_USD" } },
+    security,
+  ];
+  if (input.extraLeg) items.push(leg(input.extraLeg));
+  return {
+    account_id: "schwab_1",
+    trade_date: input.date,
+    transaction_type: "TRADE",
+    raw_json: JSON.stringify({ type: "TRADE", transferItems: items }),
+    symbol: input.symbol,
+    underlying_symbol: input.underlying ?? null,
+    asset_type: input.asset,
+    instruction: null,
+    position_effect: input.effect,
+    quantity: input.amount,
+    price: input.price,
+    option_expiration: null,
+    option_right: null,
+    option_strike: null,
+  };
+}

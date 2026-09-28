@@ -1,8 +1,9 @@
-import { daysBetween, instructionKind, parseOptionFromSchwabSymbol } from "@/lib/strategy/optionParse";
+import { daysBetween, parseOptionFromSchwabSymbol } from "@/lib/strategy/optionParse";
 import { isButterflyStructure, type OptionLegView } from "@/lib/strategy/optionStructures";
 import { fifoRealizedForClosingLeg } from "@/lib/analytics/periodReport";
 import { isNyTradingDayYmd } from "@/lib/analytics/periodWindows";
 import { securityLegsOf, type SchwabTxnItem, type SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
+import { inferInstructionKind } from "@/lib/situations/fromBrokerTx";
 
 const SYNTHETIC_SPAN_MUST_EXCEED_DAYS = 180;
 const FLAT_GAP_TRADING_DAYS = 5;
@@ -451,6 +452,79 @@ export function qualifyInternalUnderlyings(
   return out;
 }
 
+export type ShareHoldingSnapshot = {
+  accountId: string;
+  symbol: string;
+  date: string;
+  quantity: number;
+  price: number | null;
+};
+
+function shareBookQty(fills: InternalFill[], accountId: string, symbol: string, throughDate: string): number {
+  const lots: Lot[] = [];
+  const ordered = fills
+    .filter(
+      (fill) =>
+        fill.leg === "share" &&
+        (fill.accountId || "default") === accountId &&
+        fill.underlying.trim().toUpperCase() === symbol &&
+        fill.date <= throughDate,
+    )
+    .sort((a, b) => a.date.localeCompare(b.date));
+  for (const fill of ordered) {
+    if (!(fill.price > 0) || Math.abs(fill.signedShares) < 1e-9) continue;
+    applyShareFill(lots, fill.signedShares, fill.price);
+  }
+  return qtyOf(lots);
+}
+
+export function seedUnexplainedShareFills(fills: InternalFill[], snapshots: ShareHoldingSnapshot[]): InternalFill[] {
+  const earliest = new Map<string, ShareHoldingSnapshot>();
+  for (const snap of snapshots) {
+    const symbol = snap.symbol.trim().toUpperCase();
+    const date = snap.date.slice(0, 10);
+    if (!symbol || symbol === "CASH" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (!Number.isFinite(snap.quantity)) continue;
+    const accountId = snap.accountId || "default";
+    const key = `${accountId}|${symbol}`;
+    const prev = earliest.get(key);
+    if (prev && date > prev.date) continue;
+    if (prev && date === prev.date) {
+      prev.quantity += snap.quantity;
+      if (!(prev.price != null && prev.price > 0) && snap.price != null && snap.price > 0) prev.price = snap.price;
+      continue;
+    }
+    earliest.set(key, { accountId, symbol, date, quantity: snap.quantity, price: snap.price });
+  }
+
+  const seeds: InternalFill[] = [];
+  for (const snap of earliest.values()) {
+    const held = shareBookQty(fills, snap.accountId, snap.symbol, snap.date);
+    const delta = snap.quantity - held;
+    if (Math.abs(delta) < 1e-4) continue;
+    if (!(snap.price != null && snap.price > 0)) continue;
+    seeds.push({
+      accountId: snap.accountId,
+      date: snap.date,
+      underlying: snap.symbol,
+      leg: "share",
+      signedShares: delta,
+      price: snap.price,
+      strike: null,
+      expiration: null,
+    });
+  }
+  if (seeds.length === 0) return fills;
+  const seeded = new Set(seeds);
+  return [...fills, ...seeds].sort((a, b) => {
+    const byDate = a.date.localeCompare(b.date);
+    if (byDate) return byDate;
+    const bySeed = (seeded.has(a) ? 1 : 0) - (seeded.has(b) ? 1 : 0);
+    if (bySeed) return bySeed;
+    return a.accountId.localeCompare(b.accountId);
+  });
+}
+
 type Px = { date: string; price: number; rank: number };
 
 function roundPct(value: number): number {
@@ -650,7 +724,7 @@ export function buildInternalPerformanceSeries(
   };
 }
 
-function signedFromKind(kind: ReturnType<typeof instructionKind>, quantity: number, multiplier: number): number | null {
+function signedFromKind(kind: ReturnType<typeof inferInstructionKind>, quantity: number, multiplier: number): number | null {
   const magnitude = Math.abs(quantity) * multiplier;
   if (!(magnitude > 0)) return null;
   if (kind === "buy_open" || kind === "buy_close") return magnitude;
@@ -658,18 +732,33 @@ function signedFromKind(kind: ReturnType<typeof instructionKind>, quantity: numb
   return null;
 }
 
+function legQuantity(leg: { quantity?: number | null; amount?: number | null }): number | null {
+  if (typeof leg.quantity === "number" && Number.isFinite(leg.quantity)) return leg.quantity;
+  if (typeof leg.amount === "number" && Number.isFinite(leg.amount)) return leg.amount;
+  return null;
+}
+
+function signedShareEquivalents(
+  instruction: string | null | undefined,
+  positionEffect: string | null | undefined,
+  quantity: number,
+  multiplier: number,
+): number | null {
+  const kind = inferInstructionKind({ instruction, positionEffect, quantity });
+  return signedFromKind(kind, quantity, multiplier);
+}
+
 function fillFromSchwabLeg(accountId: string, date: string, leg: SchwabTxnItem): InternalFill | null {
-  const kind = instructionKind(leg.instruction ?? null);
   const asset = (leg.instrument?.assetType ?? "").toUpperCase();
   const symbol = leg.instrument?.symbol?.trim() || "";
   const parsed = parseOptionFromSchwabSymbol(symbol);
   const putCall = (leg.instrument?.putCall ?? "").toUpperCase();
   const right = parsed?.right ?? (putCall.startsWith("P") ? "P" : putCall.startsWith("C") ? "C" : null);
   const isOption = asset === "OPTION" || right != null;
-  const qty = typeof leg.quantity === "number" ? leg.quantity : typeof leg.amount === "number" ? leg.amount : null;
+  const qty = legQuantity(leg);
   const price = typeof leg.price === "number" ? leg.price : null;
   if (qty == null || price == null || !(price > 0)) return null;
-  const signed = signedFromKind(kind, qty, isOption ? CONTRACT_SHARES : 1);
+  const signed = signedShareEquivalents(leg.instruction ?? null, leg.positionEffect ?? null, qty, isOption ? CONTRACT_SHARES : 1);
   if (signed == null) return null;
   if (!isOption) {
     const underlying = (leg.instrument?.underlyingSymbol || symbol).trim().toUpperCase();
@@ -702,7 +791,6 @@ function fillFromSchwabLeg(accountId: string, date: string, leg: SchwabTxnItem):
 }
 
 function fillFromColumns(row: StoredBrokerFillRow, date: string): InternalFill | null {
-  const kind = instructionKind(row.instruction);
   const rightRaw = (row.option_right ?? "").toUpperCase();
   const right = rightRaw.startsWith("P") ? "P" : rightRaw.startsWith("C") ? "C" : null;
   const asset = (row.asset_type ?? "").toUpperCase();
@@ -710,7 +798,7 @@ function fillFromColumns(row: StoredBrokerFillRow, date: string): InternalFill |
   const qty = row.quantity;
   const price = row.price;
   if (qty == null || price == null || !(price > 0)) return null;
-  const signed = signedFromKind(kind, qty, isOption ? CONTRACT_SHARES : 1);
+  const signed = signedShareEquivalents(row.instruction, row.position_effect, qty, isOption ? CONTRACT_SHARES : 1);
   if (signed == null) return null;
   if (!isOption) {
     const underlying = (row.underlying_symbol || row.symbol || "").trim().toUpperCase();

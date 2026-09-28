@@ -9,7 +9,9 @@ import {
 import {
   buildInternalPerformanceSeries,
   internalFillsFromStoredRow,
+  seedUnexplainedShareFills,
   type QualifyReason,
+  type ShareHoldingSnapshot,
   type StoredBrokerFillRow,
 } from "@/lib/analytics/internalPerformance";
 import { bucketFromAccount, type AccountBucket } from "@/lib/accountBuckets";
@@ -65,6 +67,79 @@ function accountInBucket(
   return bucketFromAccount(name, nickname, accountBucket) === (bucket as AccountBucket);
 }
 
+function snapshotUnitPrice(price: number | null, quantity: number, marketValue: number | null): number | null {
+  if (price != null && price > 0) return price;
+  if (marketValue == null || quantity === 0) return null;
+  const perShare = Math.abs(marketValue / quantity);
+  return perShare > 0 && Number.isFinite(perShare) ? perShare : null;
+}
+
+function earliestShareSnapshots(
+  db: Database.Database,
+  flavor: FlavorId,
+  bucket: InternalPerformanceBucket,
+): ShareHoldingSnapshot[] {
+  const accountWhere = strategyTradesAccountWhereSql(flavor, "a");
+  const rows = db
+    .prepare(
+      `
+      SELECT hs.account_id AS account_id,
+             substr(hs.as_of, 1, 10) AS date,
+             UPPER(TRIM(sec.symbol)) AS symbol,
+             p.quantity AS quantity,
+             p.price AS price,
+             p.market_value AS market_value,
+             a.name AS account_name,
+             a.nickname AS account_nickname,
+             a.account_bucket AS account_bucket
+      FROM positions p
+      JOIN holding_snapshots hs ON hs.id = p.snapshot_id
+      JOIN accounts a ON a.id = hs.account_id
+      JOIN securities sec ON sec.id = p.security_id
+      WHERE sec.security_type != 'option'
+        AND sec.security_type != 'cash'
+        AND sec.symbol IS NOT NULL
+        AND TRIM(sec.symbol) != ''
+        AND ${accountWhere}
+      ORDER BY hs.as_of ASC, p.id ASC
+    `,
+    )
+    .all() as Array<{
+    account_id: string;
+    date: string;
+    symbol: string;
+    quantity: number;
+    price: number | null;
+    market_value: number | null;
+    account_name: string;
+    account_nickname: string | null;
+    account_bucket: string | null;
+  }>;
+
+  const earliest = new Map<string, ShareHoldingSnapshot>();
+  for (const row of rows) {
+    if (!accountInBucket(bucket, row.account_name, row.account_nickname, row.account_bucket)) continue;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(row.date) || !row.symbol) continue;
+    const key = `${row.account_id}|${row.symbol}`;
+    const price = snapshotUnitPrice(row.price, row.quantity, row.market_value);
+    const prev = earliest.get(key);
+    if (!prev) {
+      earliest.set(key, {
+        accountId: row.account_id,
+        symbol: row.symbol,
+        date: row.date,
+        quantity: row.quantity,
+        price,
+      });
+      continue;
+    }
+    if (row.date > prev.date) continue;
+    prev.quantity += row.quantity;
+    if (!(prev.price != null && prev.price > 0) && price != null) prev.price = price;
+  }
+  return [...earliest.values()];
+}
+
 function portfolioRows(db: Database.Database, flavor: FlavorId, bucket: InternalPerformanceBucket, now: Date) {
   const denseAll = mergeMissingSnapshotDays(
     getGlanceAlignedPortfolioValueSeriesByBucket(bucket, db, flavor),
@@ -106,7 +181,10 @@ export function loadInternalPerformance(
     .all() as AccountRow[];
 
   const scoped = rows.filter((row) => accountInBucket(bucket, row.account_name, row.account_nickname, row.account_bucket));
-  const fills = scoped.flatMap((row) => internalFillsFromStoredRow(row));
+  const fills = seedUnexplainedShareFills(
+    scoped.flatMap((row) => internalFillsFromStoredRow(row)),
+    earliestShareSnapshots(db, flavor, bucket),
+  );
   const history = portfolioRows(db, flavor, bucket, now);
   const dates = history.map((row) => row.date);
   const asOf = nyYmd(now);
