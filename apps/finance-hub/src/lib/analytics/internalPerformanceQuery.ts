@@ -521,7 +521,16 @@ function optionDeltaPoints(
     const key = `${underlying}|${right}|${strike}|${expiration}|${row.date}`;
     const prev = latest.get(key);
     if (prev && row.as_of < prev.asOf) continue;
-    latest.set(key, { underlying, right, strike, expiration, date: row.date, delta: row.delta, asOf: row.as_of });
+    latest.set(key, {
+      underlying,
+      right,
+      strike,
+      expiration,
+      date: row.date,
+      delta: row.delta,
+      occ: row.option_symbol ?? undefined,
+      asOf: row.as_of,
+    });
   }
   return [...latest.values()].map((row) => ({
     underlying: row.underlying,
@@ -530,6 +539,7 @@ function optionDeltaPoints(
     expiration: row.expiration,
     date: row.date,
     delta: row.delta,
+    occ: row.occ,
   }));
 }
 

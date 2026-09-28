@@ -79,6 +79,8 @@ export type InternalFill = {
   price: number;
   strike: number | null;
   expiration: string | null;
+  /** Raw OCC symbol, including the internal spaces Schwab stores. */
+  occ?: string;
   seeded?: boolean;
 };
 
@@ -109,6 +111,12 @@ export type InternalAudit = {
   stockPct: number | null;
   fallback: boolean;
   approx: boolean;
+  /** Exposure has no underlying mark on the audit date, so the return is blank. */
+  unpriced: boolean;
+  /** Open synthetic option legs on the audit date. */
+  openLegs: number;
+  /** Those legs with a stored delta within five days. */
+  deltaLegs: number;
 };
 
 export type OptionDeltaPoint = {
@@ -118,6 +126,8 @@ export type OptionDeltaPoint = {
   expiration: string;
   date: string;
   delta: number;
+  /** Raw OCC symbol from securities.symbol. */
+  occ?: string;
 };
 
 export type InternalSeriesPoint = {
@@ -146,6 +156,7 @@ type ContractBook = {
   strike: number;
   expiration: string;
   lots: Lot[];
+  occ?: string;
 };
 
 type AccountBook = {
@@ -339,8 +350,11 @@ function contractFor(book: AccountBook, fill: InternalFill): ContractBook {
   const expiration = fill.expiration ?? "";
   const key = contractKey(right, strike, expiration);
   const existing = book.contracts.get(key);
-  if (existing) return existing;
-  const created: ContractBook = { right, strike, expiration, lots: [] };
+  if (existing) {
+    if (!existing.occ && fill.occ) existing.occ = fill.occ;
+    return existing;
+  }
+  const created: ContractBook = { right, strike, expiration, lots: [], occ: fill.occ };
   book.contracts.set(key, created);
   return created;
 }
@@ -589,6 +603,7 @@ function cloneBooks(books: DayBooks): DayBooks {
         right: contract.right,
         strike: contract.strike,
         expiration: contract.expiration,
+        occ: contract.occ,
         lots: contract.lots.map((lot) => ({ ...lot })),
       });
     }
@@ -977,12 +992,20 @@ function shareQtyByAccount(books: DayBooks): Map<string, number> {
 
 type LineValuation = {
   date: string;
+  /** Signed economic value: shares at the mark plus signed option market value. */
   value: number | null;
+  /** Denominator. Shares use value. Option lines use capital at risk. */
+  base: number | null;
+  /** Premium and share cash. Subtracted from the value change. */
   flow: number;
+  /** Cash plus collateral posted or released. Weights the Dietz denominator. */
+  capitalFlow: number;
   pnl: number;
   capital: number;
   shareEq: number;
   approx: boolean;
+  openLegs: number;
+  deltaLegs: number;
 };
 
 function signedSyntheticValue(books: DayBooks, markAt: (contract: ContractBook) => number | null): number {
@@ -1035,17 +1058,32 @@ function shareFillMark(fills: InternalFill[], symbol: string, date: string): num
   return mark > 0 ? mark : null;
 }
 
-function deltaLists(points: OptionDeltaPoint[] | undefined, symbol: string): Map<string, OptionDeltaPoint[]> {
-  const map = new Map<string, OptionDeltaPoint[]>();
+function normOcc(symbol: string | null | undefined): string {
+  return (symbol ?? "").replace(/\s+/g, "").toUpperCase();
+}
+
+function deltaIndexes(points: OptionDeltaPoint[] | undefined): {
+  byKey: Map<string, OptionDeltaPoint[]>;
+  byOcc: Map<string, OptionDeltaPoint[]>;
+} {
+  const byKey = new Map<string, OptionDeltaPoint[]>();
+  const byOcc = new Map<string, OptionDeltaPoint[]>();
   for (const point of points ?? []) {
-    if (point.underlying.trim().toUpperCase() !== symbol) continue;
     if (!Number.isFinite(point.delta)) continue;
-    const key = contractKey(point.right, point.strike, point.expiration);
-    const list = map.get(key) ?? [];
+    const occ = normOcc(point.occ);
+    if (occ) {
+      const listed = byOcc.get(occ) ?? [];
+      listed.push(point);
+      byOcc.set(occ, listed);
+    }
+    const underlying = point.underlying.trim().toUpperCase();
+    if (!underlying) continue;
+    const key = `${underlying}|${contractKey(point.right, point.strike, point.expiration)}`;
+    const list = byKey.get(key) ?? [];
     list.push(point);
-    map.set(key, list);
+    byKey.set(key, list);
   }
-  return map;
+  return { byKey, byOcc };
 }
 
 function nearestDelta(points: OptionDeltaPoint[], date: string): number | null {
@@ -1060,19 +1098,26 @@ function nearestDelta(points: OptionDeltaPoint[], date: string): number | null {
 
 function optionShareEquivalent(
   books: DayBooks,
+  symbol: string,
   date: string,
   spot: number | null,
-  deltas: Map<string, OptionDeltaPoint[]>,
-): { eq: number; approx: boolean } {
+  deltas: { byKey: Map<string, OptionDeltaPoint[]>; byOcc: Map<string, OptionDeltaPoint[]> },
+): { eq: number; approx: boolean; openLegs: number; deltaLegs: number } {
   let eq = 0;
   let approx = false;
+  let openLegs = 0;
+  let deltaLegs = 0;
   for (const book of books.values()) {
     const synthetic = syntheticQtyByContract(book.contracts);
     for (const [key, synQty] of synthetic) {
       const contract = book.contracts.get(key);
       if (!contract) continue;
-      const stored = nearestDelta(deltas.get(key) ?? [], date);
+      openLegs += 1;
+      const occ = normOcc(contract.occ);
+      const points = (occ && deltas.byOcc.get(occ)) || deltas.byKey.get(`${symbol}|${key}`) || [];
+      const stored = nearestDelta(points, date);
       if (stored != null) {
+        deltaLegs += 1;
         eq += stored * synQty;
         continue;
       }
@@ -1082,7 +1127,48 @@ function optionShareEquivalent(
       if (deep) eq += synQty;
     }
   }
-  return { eq, approx };
+  return { eq, approx, openLegs, deltaLegs };
+}
+
+function putCollateral(books: DayBooks): number {
+  let collateral = 0;
+  for (const book of books.values()) {
+    const synthetic = syntheticQtyByContract(book.contracts);
+    for (const [key, synQty] of synthetic) {
+      const contract = book.contracts.get(key);
+      if (!contract || contract.right !== "P" || !(synQty < 0)) continue;
+      collateral += contract.strike * Math.abs(synQty);
+    }
+  }
+  return collateral;
+}
+
+function capitalAtRisk(
+  books: DayBooks,
+  shareQty: number,
+  shareMark: number | null,
+  markAt: (contract: ContractBook) => number | null,
+): number {
+  let base = shareMark != null && shareQty > 1e-6 ? shareQty * shareMark : 0;
+  for (const book of books.values()) {
+    const synthetic = syntheticQtyByContract(book.contracts);
+    for (const [key, synQty] of synthetic) {
+      const contract = book.contracts.get(key);
+      if (!contract) continue;
+      if (contract.right === "P" && synQty < 0) base += contract.strike * Math.abs(synQty);
+      if (contract.right === "C" && synQty > 0) {
+        const mark = markAt(contract);
+        if (mark != null) {
+          base += mark * synQty;
+          continue;
+        }
+        const open = Math.abs(qtyOf(contract.lots));
+        const fraction = open > 1e-6 ? Math.min(1, synQty / open) : 1;
+        base += longCost(contract.lots) * fraction;
+      }
+    }
+  }
+  return base;
 }
 
 function addIsoDays(iso: string, days: number): string {
@@ -1119,30 +1205,37 @@ function valuationAt(rows: LineValuation[], through: string): LineValuation | nu
   return found;
 }
 
-function chainedTwr(rows: LineValuation[], through: string): number | null {
+function chainedTwr(rows: LineValuation[], through: string, floorLoss: boolean): number | null {
   let growth = 1;
   let pending = 0;
-  let prev: number | null = null;
+  let prevValue: number | null = null;
+  let prevBase: number | null = null;
   let linked = false;
   for (const row of rows) {
     if (row.date > through) break;
-    if (row.value == null) {
+    if (row.value == null || row.base == null) {
       pending += row.flow;
       continue;
     }
-    if (prev == null) {
-      prev = row.value;
+    if (prevValue == null || prevBase == null) {
+      prevValue = row.value;
+      prevBase = row.base;
       continue;
     }
     const flow = row.flow + pending;
     pending = 0;
-    if (prev > TINY_DENOMINATOR) {
-      growth *= 1 + (row.value - prev - flow) / prev;
+    if (prevBase > TINY_DENOMINATOR) {
+      let sub = (row.value - prevValue - flow) / prevBase;
+      if (floorLoss) sub = Math.max(-1, sub);
+      growth *= 1 + sub;
       linked = true;
     }
-    prev = row.value;
+    prevValue = row.value;
+    prevBase = row.base;
   }
-  return linked || prev != null ? roundPct((growth - 1) * 100) : null;
+  if (!(linked || prevValue != null)) return null;
+  const pct = (growth - 1) * 100;
+  return roundPct(floorLoss ? Math.max(-100, pct) : pct);
 }
 
 function modifiedDietz(
@@ -1150,7 +1243,7 @@ function modifiedDietz(
   through: string,
 ): { pnl: number; denominator: number; fallback: boolean } {
   const at = valuationAt(rows, through);
-  const start = rows.find((row) => row.value != null && row.date <= through);
+  const start = rows.find((row) => row.value != null && row.base != null && row.date <= through);
   let end: LineValuation | null = null;
   for (const row of rows) {
     if (row.date > through) break;
@@ -1158,7 +1251,7 @@ function modifiedDietz(
   }
   const capitalPnl = at?.pnl ?? 0;
   const capital = at?.capital ?? 0;
-  if (!start || !end || start.value == null || end.value == null) {
+  if (!start || !end || start.value == null || end.value == null || start.base == null) {
     return { pnl: capitalPnl, denominator: capital, fallback: true };
   }
   const span = daysBetween(start.date, end.date) ?? 0;
@@ -1166,14 +1259,14 @@ function modifiedDietz(
   let weighted = 0;
   for (const row of rows) {
     if (row.date <= start.date || row.date > end.date) continue;
-    if (Math.abs(row.flow) < 1e-9) continue;
+    if (Math.abs(row.flow) < 1e-9 && Math.abs(row.capitalFlow) < 1e-9) continue;
     flowSum += row.flow;
     const elapsed = daysBetween(start.date, row.date) ?? 0;
     const weight = span > 0 ? (span - elapsed) / span : 0;
-    weighted += row.flow * weight;
+    weighted += row.capitalFlow * weight;
   }
   const pnl = end.value - start.value - flowSum;
-  const denominator = start.value + weighted;
+  const denominator = start.base + weighted;
   if (!(denominator > TINY_DENOMINATOR)) return { pnl: capitalPnl, denominator: capital, fallback: true };
   return { pnl, denominator, fallback: false };
 }
@@ -1270,7 +1363,7 @@ export function buildInternalPerformanceSeries(
     };
 
     const chartDates = new Set(dates);
-    const deltas = deltaLists(opts.optionDeltas, symbol);
+    const deltas = deltaIndexes(opts.optionDeltas);
     let baselineDate: string | null = null;
     let shareQty0 = 0;
     let shareMark0: number | null = null;
@@ -1280,6 +1373,8 @@ export function buildInternalPerformanceSeries(
     let startQtyByAccount = new Map<string, number>();
     let maxCapital = 0;
     let prevShareCash = 0;
+    let prevPutCollateral = 0;
+    let sawValuation = false;
     let lastAudit: InternalAudit | null = null;
     let auditDate: string | null = null;
     const valuations: LineValuation[] = [];
@@ -1294,15 +1389,28 @@ export function buildInternalPerformanceSeries(
     };
     const remember = (date: string, books: DayBooks, shareQty: number, shareMark: number | null, flow: number, pnl: number) => {
       const spot = shareMark ?? underlyingMark0;
-      const optionEq = includeSynthetic ? optionShareEquivalent(books, date, spot, deltas) : { eq: 0, approx: false };
+      const optionEq = includeSynthetic
+        ? optionShareEquivalent(books, symbol, date, spot, deltas)
+        : { eq: 0, approx: false, openLegs: 0, deltaLegs: 0 };
+      const value = lineValue(books, shareQty, shareMark, date);
+      const linedShares = includeShares ? shareQty : 0;
+      const base = includeSynthetic ? capitalAtRisk(books, linedShares, shareMark, (contract) => optionMarkAt(contract, date)) : value;
+      const collateral = includeSynthetic ? putCollateral(books) : 0;
+      const collateralDelta = sawValuation ? collateral - prevPutCollateral : 0;
+      sawValuation = true;
+      prevPutCollateral = collateral;
       valuations.push({
         date,
-        value: lineValue(books, shareQty, shareMark, date),
+        value,
+        base,
         flow,
+        capitalFlow: includeSynthetic ? flow + collateralDelta : flow,
         pnl,
         capital: maxCapital,
-        shareEq: (includeShares ? shareQty : 0) + optionEq.eq,
+        shareEq: linedShares + optionEq.eq,
         approx: optionEq.approx,
+        openLegs: optionEq.openLegs,
+        deltaLegs: optionEq.deltaLegs,
       });
     };
     for (const snap of snaps) {
@@ -1361,6 +1469,9 @@ export function buildInternalPerformanceSeries(
             stockPct,
             fallback: false,
             approx: false,
+            unpriced: false,
+            openLegs: valuations[valuations.length - 1]?.openLegs ?? 0,
+            deltaLegs: valuations[valuations.length - 1]?.deltaLegs ?? 0,
           };
         }
         continue;
@@ -1394,6 +1505,9 @@ export function buildInternalPerformanceSeries(
         stockPct,
         fallback: false,
         approx: false,
+        unpriced: false,
+        openLegs: valuations[valuations.length - 1]?.openLegs ?? 0,
+        deltaLegs: valuations[valuations.length - 1]?.deltaLegs ?? 0,
       };
     }
     if (method !== "capital" && baselineDate && auditDate && lastAudit) {
@@ -1401,29 +1515,31 @@ export function buildInternalPerformanceSeries(
         const at = valuationAt(valuations, through);
         const capitalPnl = at?.pnl ?? 0;
         const capitalBase = at?.capital ?? 0;
-        const approx = valuations.some((row) => row.date <= through && row.approx);
+        const approx = at?.approx ?? false;
+        const bound = (pct: number | null) => (includeSynthetic && pct != null ? Math.max(-100, pct) : pct);
         if (method === "twr") {
+          const start = valuations.find((row) => row.base != null && row.date <= through);
           return {
             pnl: capitalPnl,
-            denominator: valuations.find((row) => row.value != null)?.value ?? capitalBase,
-            returnPct: chainedTwr(valuations, through),
+            denominator: start?.base ?? capitalBase,
+            returnPct: chainedTwr(valuations, through, includeSynthetic),
             fallback: false,
             approx,
+            unpriced: false,
           };
         }
         if (method === "dietz") {
           const dietz = modifiedDietz(valuations, through);
-          const returnPct = dietz.denominator > TINY_DENOMINATOR ? roundPct((dietz.pnl / dietz.denominator) * 100) : null;
-          return { pnl: dietz.pnl, denominator: dietz.denominator, returnPct, fallback: dietz.fallback, approx };
+          const raw = dietz.denominator > TINY_DENOMINATOR ? roundPct((dietz.pnl / dietz.denominator) * 100) : null;
+          return { pnl: dietz.pnl, denominator: dietz.denominator, returnPct: bound(raw), fallback: dietz.fallback, approx, unpriced: false };
         }
-        const denom = underlyingMark0 != null && underlyingMark0 > 0 ? averageShareEquivalents(valuations, baselineDate, through) * underlyingMark0 : 0;
-        return {
-          pnl: capitalPnl,
-          denominator: denom,
-          returnPct: denom > TINY_DENOMINATOR ? roundPct((capitalPnl / denom) * 100) : null,
-          fallback: false,
-          approx,
-        };
+        const spot = markOn(shareMarks, through);
+        if (spot == null || underlyingMark0 == null || !(underlyingMark0 > 0)) {
+          return { pnl: capitalPnl, denominator: 0, returnPct: null, fallback: false, approx, unpriced: true };
+        }
+        const denom = averageShareEquivalents(valuations, baselineDate, through) * underlyingMark0;
+        const raw = denom > TINY_DENOMINATOR ? roundPct((capitalPnl / denom) * 100) : null;
+        return { pnl: capitalPnl, denominator: denom, returnPct: bound(raw), fallback: false, approx, unpriced: false };
       };
       for (const date of dates) {
         if (date < baselineDate) continue;
@@ -1432,6 +1548,7 @@ export function buildInternalPerformanceSeries(
         pointByDate.set(date, { ...existing, returnPct: apply(date).returnPct });
       }
       const end = apply(auditDate);
+      const endLegs = valuationAt(valuations, auditDate);
       lastAudit = {
         ...lastAudit,
         method,
@@ -1440,11 +1557,14 @@ export function buildInternalPerformanceSeries(
         returnPct: end.returnPct,
         fallback: end.fallback,
         approx: end.approx,
+        unpriced: end.unpriced,
+        openLegs: endLegs?.openLegs ?? 0,
+        deltaLegs: endLegs?.deltaLegs ?? 0,
       };
     }
     if (lastAudit) audit.push(lastAudit);
     const points = dates.map((date) => pointByDate.get(date) ?? { date, returnPct: null, stockPct: null });
-    if (points.some((point) => point.returnPct != null)) bySymbol[symbol] = points;
+    if (points.some((point) => point.returnPct != null) || lastAudit?.unpriced) bySymbol[symbol] = points;
   }
 
   audit.sort((a, b) => a.symbol.localeCompare(b.symbol));
@@ -1518,6 +1638,7 @@ function fillFromSchwabLeg(accountId: string, date: string, leg: SchwabTxnItem):
     price,
     strike,
     expiration,
+    occ: leg.instrument?.symbol,
   };
 }
 
@@ -1556,6 +1677,7 @@ function fillFromColumns(row: StoredBrokerFillRow, date: string): InternalFill |
     price,
     strike: row.option_strike,
     expiration: row.option_expiration.slice(0, 10),
+    occ: row.symbol ?? undefined,
   };
 }
 

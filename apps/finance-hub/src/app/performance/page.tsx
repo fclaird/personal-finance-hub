@@ -27,17 +27,17 @@ const INTERNAL_METHODS = [
   {
     id: "twr",
     label: "Time-weighted",
-    hint: "Daily returns chained together, with each buy or sell removed so new cash does not count as a gain.",
+    hint: "Daily returns chained on capital at risk, with opens, closes, rolls, and collateral removed so new cash does not count as a gain.",
   },
   {
     id: "dietz",
     label: "Modified Dietz",
-    hint: "One return for the whole window that gives more weight to cash invested for longer.",
+    hint: "One return for the whole window on capital at risk, giving more weight to cash that has been invested for longer.",
   },
   {
     id: "exposure",
     label: "Exposure",
-    hint: "Profit divided by average daily share exposure, priced at the starting stock price, using option delta when it is on file.",
+    hint: "Profit divided by average daily share exposure at the starting stock price, using a stored option delta. Blank when the stock has no mark.",
   },
 ] as const;
 
