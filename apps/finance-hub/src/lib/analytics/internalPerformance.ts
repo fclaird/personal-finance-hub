@@ -110,6 +110,7 @@ export type InternalAudit = {
   returnPct: number | null;
   stockPct: number | null;
   fallback: boolean;
+  /** Exposure used a guessed delta for an open leg. Other methods leave this false. */
   approx: boolean;
   /** Exposure has no underlying mark on the audit date, so the return is blank. */
   unpriced: boolean;
@@ -1255,20 +1256,17 @@ function modifiedDietz(
     return { pnl: capitalPnl, denominator: capital, fallback: true };
   }
   const span = daysBetween(start.date, end.date) ?? 0;
-  let flowSum = 0;
   let weighted = 0;
   for (const row of rows) {
     if (row.date <= start.date || row.date > end.date) continue;
-    if (Math.abs(row.flow) < 1e-9 && Math.abs(row.capitalFlow) < 1e-9) continue;
-    flowSum += row.flow;
+    if (Math.abs(row.capitalFlow) < 1e-9) continue;
     const elapsed = daysBetween(start.date, row.date) ?? 0;
     const weight = span > 0 ? (span - elapsed) / span : 0;
     weighted += row.capitalFlow * weight;
   }
-  const pnl = end.value - start.value - flowSum;
   const denominator = start.base + weighted;
   if (!(denominator > TINY_DENOMINATOR)) return { pnl: capitalPnl, denominator: capital, fallback: true };
-  return { pnl, denominator, fallback: false };
+  return { pnl: capitalPnl, denominator, fallback: false };
 }
 
 export function buildInternalPerformanceSeries(
@@ -1515,7 +1513,6 @@ export function buildInternalPerformanceSeries(
         const at = valuationAt(valuations, through);
         const capitalPnl = at?.pnl ?? 0;
         const capitalBase = at?.capital ?? 0;
-        const approx = at?.approx ?? false;
         const bound = (pct: number | null) => (includeSynthetic && pct != null ? Math.max(-100, pct) : pct);
         if (method === "twr") {
           const start = valuations.find((row) => row.base != null && row.date <= through);
@@ -1524,15 +1521,16 @@ export function buildInternalPerformanceSeries(
             denominator: start?.base ?? capitalBase,
             returnPct: chainedTwr(valuations, through, includeSynthetic),
             fallback: false,
-            approx,
+            approx: false,
             unpriced: false,
           };
         }
         if (method === "dietz") {
           const dietz = modifiedDietz(valuations, through);
           const raw = dietz.denominator > TINY_DENOMINATOR ? roundPct((dietz.pnl / dietz.denominator) * 100) : null;
-          return { pnl: dietz.pnl, denominator: dietz.denominator, returnPct: bound(raw), fallback: dietz.fallback, approx, unpriced: false };
+          return { pnl: dietz.pnl, denominator: dietz.denominator, returnPct: bound(raw), fallback: dietz.fallback, approx: false, unpriced: false };
         }
+        const approx = at?.approx ?? false;
         const spot = markOn(shareMarks, through);
         if (spot == null || underlyingMark0 == null || !(underlyingMark0 > 0)) {
           return { pnl: capitalPnl, denominator: 0, returnPct: null, fallback: false, approx, unpriced: true };

@@ -798,8 +798,10 @@ describe("current holdings and stock closes", () => {
       assert.equal(audit?.unpriced, false);
     }
     assert.equal(audits[1]?.returnPct, 3.75);
+    assert.equal(audits[1]?.approx, false);
     assert.equal(audits[2]?.returnPct, 3.75);
     assert.equal(audits[2]?.fallback, false);
+    assert.equal(audits[2]?.approx, false);
     assert.equal(audits[3]?.returnPct, 3);
     assert.equal(audits[3]?.approx, true);
   });
@@ -846,10 +848,12 @@ describe("current holdings and stock closes", () => {
     assert.equal(byMethod.twr?.denominator, 8100);
     assert.equal(byMethod.twr?.returnPct, 2.544637);
     assert.equal(byMethod.twr?.fallback, false);
-    assert.equal(byMethod.dietz?.pnl, 210);
+    assert.equal(byMethod.twr?.approx, false);
+    assert.equal(byMethod.dietz?.pnl, 200);
     assert.equal(byMethod.dietz?.denominator, 8367.86);
-    assert.equal(byMethod.dietz?.returnPct, 2.509603);
+    assert.equal(byMethod.dietz?.returnPct, 2.390098);
     assert.equal(byMethod.dietz?.fallback, false);
+    assert.equal(byMethod.dietz?.approx, false);
     assert.equal(byMethod.exposure?.pnl, 200);
     assert.equal(byMethod.exposure?.denominator, 10000);
     assert.equal(byMethod.exposure?.returnPct, 2);
@@ -862,6 +866,126 @@ describe("current holdings and stock closes", () => {
     }
     assert.equal(byMethod.twr?.openLegs, 2);
     assert.equal(byMethod.exposure?.openLegs, 2);
+    for (const audit of Object.values(byMethod)) {
+      assert.ok(Math.abs((audit?.pnl ?? 0) - 200) < 0.01);
+    }
+  });
+
+  it("keeps the same window pnl on every method, including a rolled synthetic", () => {
+    const methods = ["capital", "twr", "dietz", "exposure"] as const;
+    const books: Array<{ label: string; audits: Array<{ pnl: number } | undefined> }> = [];
+    const collect = (label: string, run: (method: (typeof methods)[number]) => { pnl: number } | undefined) => {
+      books.push({ label, audits: methods.map((method) => run(method)) });
+    };
+    collect("shares", (method) =>
+      buildInternalPerformanceSeries([share("2024-01-02", 100, 10, "PLTR")], {
+        method,
+        asOf: "2024-07-01",
+        dates: ["2024-06-03", "2024-07-01"],
+        sharePrices: {
+          PLTR: [
+            { date: "2024-06-03", price: 50 },
+            { date: "2024-07-01", price: 80 },
+          ],
+        },
+      }).audit.find((row) => row.symbol === "PLTR"),
+    );
+    collect("short put", (method) =>
+      buildInternalPerformanceSeries([opt("2024-01-02", "BMNR", "put", 28, -100, 2, "2026-10-16")], {
+        method,
+        asOf: "2024-07-02",
+        dates: ["2024-01-02", "2024-07-02"],
+        sharePrices: {
+          BMNR: [
+            { date: "2024-01-02", price: 30 },
+            { date: "2024-07-02", price: 30 },
+          ],
+        },
+        optionMarks: [
+          { underlying: "BMNR", right: "P", strike: 28, expiration: "2026-10-16", date: "2024-01-02", price: 2 },
+          { underlying: "BMNR", right: "P", strike: 28, expiration: "2026-10-16", date: "2024-07-02", price: 1 },
+        ],
+      }).audit.find((row) => row.symbol === "BMNR"),
+    );
+    const expiration = "2026-10-16";
+    const rolled = "2026-12-18";
+    collect("roll", (method) =>
+      buildInternalPerformanceSeries(
+        [
+          opt("2024-01-02", "TSLA", "call", 80, 100, 10, expiration),
+          opt("2024-01-02", "TSLA", "put", 70, -100, 2, expiration),
+          opt("2024-06-20", "TSLA", "put", 70, 100, 1, expiration),
+          opt("2024-06-20", "TSLA", "put", 75, -100, 1.5, rolled),
+        ],
+        {
+          method,
+          asOf: "2024-07-15",
+          dates: ["2024-06-03", "2024-07-15"],
+          sharePrices: {
+            TSLA: [
+              { date: "2024-06-03", price: 100 },
+              { date: "2024-06-20", price: 105 },
+              { date: "2024-07-15", price: 110 },
+            ],
+          },
+          optionMarks: [
+            { underlying: "TSLA", right: "C", strike: 80, expiration, date: "2024-06-03", price: 11 },
+            { underlying: "TSLA", right: "P", strike: 70, expiration, date: "2024-06-03", price: 1.8 },
+            { underlying: "TSLA", right: "C", strike: 80, expiration, date: "2024-06-20", price: 11.5 },
+            { underlying: "TSLA", right: "P", strike: 70, expiration, date: "2024-06-20", price: 1 },
+            { underlying: "TSLA", right: "P", strike: 75, expiration: rolled, date: "2024-06-20", price: 1.5 },
+            { underlying: "TSLA", right: "C", strike: 80, expiration, date: "2024-07-15", price: 12 },
+            { underlying: "TSLA", right: "P", strike: 75, expiration: rolled, date: "2024-07-15", price: 1.2 },
+          ],
+        },
+      ).audit.find((row) => row.symbol === "TSLA"),
+    );
+    for (const book of books) {
+      const first = book.audits[0]?.pnl;
+      assert.ok(first != null, book.label);
+      for (const audit of book.audits) {
+        assert.ok(audit != null, book.label);
+        assert.ok(Math.abs(audit.pnl - first) < 0.01, book.label);
+      }
+    }
+  });
+
+  it("divides the close by the pre-release base and the later rally by the remaining capital", () => {
+    const expiration = "2026-10-16";
+    const fills = [
+      share("2023-06-01", 100, 100, "TSLA"),
+      opt("2023-06-01", "TSLA", "put", 40, -100, 2, expiration),
+      opt("2024-06-20", "TSLA", "put", 40, 100, 1, expiration),
+    ];
+    const opts = {
+      asOf: "2024-07-15",
+      dates: ["2024-06-03", "2024-06-20", "2024-07-15"],
+      sharePrices: {
+        TSLA: [
+          { date: "2024-06-03", price: 100 },
+          { date: "2024-06-20", price: 100 },
+          { date: "2024-07-15", price: 130 },
+        ],
+      },
+      optionMarks: [
+        { underlying: "TSLA", right: "P" as const, strike: 40, expiration, date: "2024-06-03", price: 2 },
+        { underlying: "TSLA", right: "P" as const, strike: 40, expiration, date: "2024-06-20", price: 1 },
+      ],
+    };
+    const audits = (["capital", "twr", "dietz", "exposure"] as const).map((method) =>
+      buildInternalPerformanceSeries(fills, { ...opts, method }).audit.find((row) => row.symbol === "TSLA"),
+    );
+    for (const audit of audits) assert.equal(audit?.pnl, 3100);
+    assert.equal(audits[0]?.returnPct, 22.142857);
+    assert.equal(audits[0]?.denominator, 14000);
+    assert.equal(audits[1]?.denominator, 14000);
+    assert.equal(audits[1]?.returnPct, 30.928571);
+    assert.equal(audits[1]?.approx, false);
+    assert.equal(audits[2]?.pnl, 3100);
+    assert.equal(audits[2]?.denominator, 11678.57);
+    assert.equal(audits[2]?.returnPct, 26.544343);
+    assert.equal(audits[2]?.approx, false);
+    assert.equal(audits[2]?.fallback, false);
   });
 
   it("leaves exposure blank when the underlying has no mark", () => {
