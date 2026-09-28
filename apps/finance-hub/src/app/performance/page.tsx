@@ -6,6 +6,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { EditablePageHeading } from "@/app/components/EditableHeading";
+import { InternalPerformancePanel, type InternalChartRow, type InternalSymbol } from "@/app/performance/InternalPerformancePanel";
 import { filletLinearCurve } from "@/lib/charts/curveFilletLinear";
 import { formatDisplayDate } from "@/lib/formatDate";
 import {
@@ -43,6 +44,15 @@ type HistoryPayload = {
   total_return_pct?: number | null;
   vs_spy?: number | null;
   vs_qqq?: number | null;
+  error?: string;
+};
+
+type PerformanceView = "history" | "internal";
+
+type InternalPayload = {
+  ok: boolean;
+  symbols?: InternalSymbol[];
+  chart_data?: InternalChartRow[];
   error?: string;
 };
 
@@ -135,7 +145,10 @@ async function safeJson(resp: Response) {
 
 export default function PerformancePage() {
   const [bucket, setBucket] = useState<"combined" | "retirement" | "brokerage">("combined");
+  const [view, setView] = useState<PerformanceView>("history");
   const [hist, setHist] = useState<HistoryPayload | null>(null);
+  const [internal, setInternal] = useState<InternalPayload | null>(null);
+  const [internalLoading, setInternalLoading] = useState(false);
   const [histLoading, setHistLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [enabledIds, setEnabledIds] = useState<PerformanceBenchmarkId[]>(() =>
@@ -182,6 +195,30 @@ export default function PerformancePage() {
       cancelled = true;
     };
   }, [bucket]);
+
+  useEffect(() => {
+    if (view !== "internal") return;
+    let cancelled = false;
+    setInternalLoading(true);
+    void (async () => {
+      try {
+        const url = `/api/performance/internal?bucket=${encodeURIComponent(bucket)}`;
+        const resp = await fetch(url, { cache: "no-store" });
+        const json = (await safeJson(resp)) as InternalPayload;
+        if (!cancelled) {
+          if (json.ok) setInternal(json);
+          else setInternal({ ok: false, error: json.error ?? "Failed to load internal performance" });
+        }
+      } catch (e) {
+        if (!cancelled) setInternal({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      } finally {
+        if (!cancelled) setInternalLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bucket, view]);
 
   const chartData = useMemo((): ChartRow[] => {
     const rows = hist?.chart_data ?? [];
@@ -288,6 +325,28 @@ export default function PerformancePage() {
           </div>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
+              <div className="text-sm font-medium text-teal-900 dark:text-teal-100">View</div>
+              {(
+                [
+                  ["history", "Portfolio"],
+                  ["internal", "Internal performance"],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={view === id}
+                  onClick={() => setView(id)}
+                  className={
+                    "rounded-full px-4 py-2 text-sm font-medium " +
+                    (view === id
+                      ? "bg-teal-800 text-white shadow-sm dark:bg-teal-200 dark:text-teal-950"
+                      : "border border-teal-300/80 bg-white/80 text-teal-950 shadow-sm hover:bg-white dark:border-teal-800/60 dark:bg-teal-950/40 dark:text-teal-50 dark:hover:bg-teal-950/60")
+                  }
+                >
+                  {label}
+                </button>
+              ))}
               <div className="text-sm font-medium text-teal-900 dark:text-teal-100">Bucket</div>
               {(["combined", "retirement", "brokerage"] as const).map((b) => (
                 <button
@@ -312,6 +371,14 @@ export default function PerformancePage() {
         </div>
 
         <div className="px-4 py-3">
+        {view === "internal" ? (
+          <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+            Each line is cumulative return on capital for one underlying over these trading days. Shares and a
+            long-running synthetic book share one line. A dotted line is that ticker&apos;s stock price return. Capital
+            is share cost basis plus short-put collateral of strike times 100 times contracts. Long-call premium is
+            included. Share cost and short-put collateral both count when the book holds both.
+          </p>
+        ) : (
         <div className="mb-3 flex flex-wrap items-center gap-2 text-sm" role="group" aria-label="Benchmarks">
           <div className="inline-flex items-center gap-2 px-1 text-zinc-700 dark:text-zinc-200">
             <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: PORTFOLIO_LINE_COLOR }} />
@@ -346,6 +413,7 @@ export default function PerformancePage() {
           {returnSummary ? <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">{returnSummary}</span> : null}
           {benchWarn ? <span className="text-xs text-amber-600 dark:text-amber-400">{benchWarn}</span> : null}
         </div>
+        )}
 
         {error ? (
           <div className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">
@@ -363,8 +431,15 @@ export default function PerformancePage() {
             ),
           },
           chart: {
-            title: "Relative performance",
-            children: (
+            title: view === "internal" ? "Internal performance" : "Relative performance",
+            children: view === "internal" ? (
+              <InternalPerformancePanel
+                loading={internalLoading}
+                error={internal && !internal.ok ? (internal.error ?? "Failed to load internal performance") : null}
+                symbols={internal?.symbols ?? []}
+                rows={internal?.chart_data ?? []}
+              />
+            ) : (
               <>
         {histLoading ? (
           <div className="text-sm text-zinc-600 dark:text-zinc-400">Loading chart…</div>
