@@ -11,6 +11,52 @@ const CONTRACT_SHARES = 100;
 const STOCK_MARK_MAX_AGE_DAYS = 5;
 export const INTERNAL_DEFAULT_ON_LIMIT = 8;
 
+export function snapshotMarkPerShare(input: {
+  quantity: number;
+  marketValue: number | null;
+  metadataJson?: string | null;
+}): number | null {
+  const perShare = (marketValue: number, quantity: number): number | null => {
+    if (!Number.isFinite(marketValue) || !Number.isFinite(quantity) || quantity === 0) return null;
+    const mark = Math.abs(marketValue / quantity);
+    return mark > 0 && Number.isFinite(mark) ? mark : null;
+  };
+  if (input.marketValue != null) {
+    const fromColumn = perShare(input.marketValue, input.quantity);
+    if (fromColumn != null) return fromColumn;
+  }
+  if (!input.metadataJson) return null;
+  try {
+    const meta = JSON.parse(input.metadataJson) as {
+      marketValue?: unknown;
+      longQuantity?: unknown;
+      shortQuantity?: unknown;
+    };
+    if (typeof meta.marketValue !== "number" || !Number.isFinite(meta.marketValue)) return null;
+    const longQty = typeof meta.longQuantity === "number" && Number.isFinite(meta.longQuantity) ? meta.longQuantity : 0;
+    const shortQty = typeof meta.shortQuantity === "number" && Number.isFinite(meta.shortQuantity) ? meta.shortQuantity : 0;
+    const qty = longQty !== 0 ? longQty : input.quantity !== 0 ? input.quantity : longQty - shortQty;
+    return perShare(meta.marketValue, qty);
+  } catch {
+    return null;
+  }
+}
+
+export function freshAccountIds(accounts: Array<{ accountId: string; lastSnapshot: string }>): Set<string> {
+  let newest = "";
+  for (const row of accounts) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(row.lastSnapshot) && row.lastSnapshot > newest) newest = row.lastSnapshot;
+  }
+  const fresh = new Set<string>();
+  if (!newest) return fresh;
+  for (const row of accounts) {
+    if (!row.accountId || !/^\d{4}-\d{2}-\d{2}$/.test(row.lastSnapshot)) continue;
+    const age = daysBetween(row.lastSnapshot, newest);
+    if (age != null && age <= STOCK_MARK_MAX_AGE_DAYS) fresh.add(row.accountId);
+  }
+  return fresh;
+}
+
 export type InternalFillLeg = "share" | "call" | "put";
 
 export type InternalFill = {
@@ -745,7 +791,7 @@ function pnlFor(
   includeSynthetic: boolean,
   shareMark: number | null,
   optionMark: (contract: ContractBook) => number | null,
-): { pnl: number; capital: number; shareQty: number; syntheticAbs: number } {
+): { pnl: number; capital: number; unrealized: number; shareQty: number; syntheticAbs: number } {
   let unrealized = 0;
   let shareQty = 0;
   let syntheticAbs = 0;
@@ -768,6 +814,7 @@ function pnlFor(
   return {
     pnl,
     capital: capitalFor(books, includeShares, includeSynthetic),
+    unrealized,
     shareQty,
     syntheticAbs,
   };
@@ -848,6 +895,7 @@ export function buildInternalPerformanceSeries(
 
     const chartDates = new Set(dates);
     let baselinePnl: number | null = null;
+    let unrealizedAtBaseline = 0;
     let maxCapital = 0;
     let lastAudit: InternalAudit | null = null;
     const pointByDate = new Map<string, InternalSeriesPoint>();
@@ -879,7 +927,8 @@ export function buildInternalPerformanceSeries(
           continue;
         }
         baselinePnl = valued.pnl;
-        maxCapital = valued.capital;
+        unrealizedAtBaseline = Math.max(0, valued.unrealized);
+        maxCapital = valued.capital + unrealizedAtBaseline;
         if (chartDates.has(snap.date)) {
           const stockPct = chartStartPrice != null && chartStartPrice > 0 && shareMark != null ? roundPct((shareMark / chartStartPrice - 1) * 100) : null;
           pointByDate.set(snap.date, {
@@ -897,7 +946,7 @@ export function buildInternalPerformanceSeries(
         }
         continue;
       }
-      maxCapital = Math.max(maxCapital, valued.capital);
+      maxCapital = Math.max(maxCapital, valued.capital + unrealizedAtBaseline);
       if (!chartDates.has(snap.date)) continue;
       const returnPct = maxCapital > 0 ? roundPct(((valued.pnl - baselinePnl) / maxCapital) * 100) : null;
       const stockPct =

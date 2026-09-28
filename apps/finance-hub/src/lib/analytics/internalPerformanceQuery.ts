@@ -11,10 +11,12 @@ import {
   buildInternalPerformanceSeries,
   canonicalSymbol,
   cusipTickerMap,
+  freshAccountIds,
   internalFillsFromStoredRow,
   mergeShareMarks,
   seedUnexplainedShareFills,
   shareClosesBySymbol,
+  snapshotMarkPerShare,
   type InternalAudit,
   type InternalFill,
   type OpenHolding,
@@ -25,7 +27,9 @@ import {
 } from "@/lib/analytics/internalPerformance";
 import { bucketFromAccount, type AccountBucket } from "@/lib/accountBuckets";
 import type { FlavorId } from "@/lib/flavor";
+import { resolvePositionAveragePrice } from "@/lib/holdings/positionAveragePrice";
 import { nyYmd } from "@/lib/market/usEquitySession";
+import { optionMarkFromMarketValue, resolveOptionContractMultiplier } from "@/lib/options/optionContractMultiplier";
 import {
   chartDataFromDenseSeries,
   collapseToTradingDays,
@@ -77,17 +81,92 @@ function accountInBucket(
   return bucketFromAccount(name, nickname, accountBucket) === (bucket as AccountBucket);
 }
 
-function snapshotUnitPrice(price: number | null, quantity: number, marketValue: number | null): number | null {
-  if (price != null && price > 0) return price;
-  if (marketValue == null || quantity === 0) return null;
-  const perShare = Math.abs(marketValue / quantity);
-  return perShare > 0 && Number.isFinite(perShare) ? perShare : null;
+function snapshotCostPerShare(
+  price: number | null,
+  quantity: number,
+  marketValue: number | null,
+  metadataJson: string | null,
+): number | null {
+  const average = resolvePositionAveragePrice(price, metadataJson);
+  if (average != null && average > 0) return average;
+  return snapshotMarkPerShare({ quantity, marketValue, metadataJson });
+}
+
+function optionPremiumPerShare(quantity: number, marketValue: number | null, metadataJson: string | null): number | null {
+  const multiplier = resolveOptionContractMultiplier(metadataJson);
+  const fromValues = (value: number, qty: number): number | null => {
+    const mark = optionMarkFromMarketValue(value, qty, multiplier);
+    if (mark == null || !(Math.abs(mark) > 0)) return null;
+    return Math.abs(mark);
+  };
+  if (marketValue != null) {
+    const fromColumn = fromValues(marketValue, quantity);
+    if (fromColumn != null) return fromColumn;
+  }
+  if (!metadataJson) return null;
+  try {
+    const meta = JSON.parse(metadataJson) as { marketValue?: unknown; longQuantity?: unknown; shortQuantity?: unknown };
+    if (typeof meta.marketValue !== "number" || !Number.isFinite(meta.marketValue)) return null;
+    const longQty = typeof meta.longQuantity === "number" && Number.isFinite(meta.longQuantity) ? meta.longQuantity : 0;
+    const shortQty = typeof meta.shortQuantity === "number" && Number.isFinite(meta.shortQuantity) ? meta.shortQuantity : 0;
+    const qty = longQty - shortQty !== 0 ? longQty - shortQty : quantity;
+    return fromValues(meta.marketValue, qty);
+  } catch {
+    return null;
+  }
+}
+
+function holdingMarketValue(
+  quantity: number,
+  marketValue: number | null,
+  metadataJson: string | null,
+  isOption: boolean,
+): number {
+  if (marketValue != null && Number.isFinite(marketValue)) return Math.abs(marketValue);
+  if (isOption) {
+    const premium = optionPremiumPerShare(quantity, null, metadataJson);
+    if (premium == null) return 0;
+    return Math.abs(premium * quantity * resolveOptionContractMultiplier(metadataJson));
+  }
+  const mark = snapshotMarkPerShare({ quantity, marketValue: null, metadataJson });
+  return mark == null ? 0 : Math.abs(mark * quantity);
+}
+
+function freshAccounts(db: Database.Database, flavor: FlavorId, bucket: InternalPerformanceBucket): Set<string> {
+  const accountWhere = strategyTradesAccountWhereSql(flavor, "a");
+  const rows = db
+    .prepare(
+      `
+      SELECT hs.account_id AS account_id,
+             MAX(substr(hs.as_of, 1, 10)) AS last_snapshot,
+             a.name AS account_name,
+             a.nickname AS account_nickname,
+             a.account_bucket AS account_bucket
+      FROM holding_snapshots hs
+      JOIN accounts a ON a.id = hs.account_id
+      WHERE ${accountWhere}
+      GROUP BY hs.account_id
+    `,
+    )
+    .all() as Array<{
+    account_id: string;
+    last_snapshot: string;
+    account_name: string;
+    account_nickname: string | null;
+    account_bucket: string | null;
+  }>;
+  return freshAccountIds(
+    rows
+      .filter((row) => accountInBucket(bucket, row.account_name, row.account_nickname, row.account_bucket))
+      .map((row) => ({ accountId: row.account_id, lastSnapshot: row.last_snapshot })),
+  );
 }
 
 function earliestShareSnapshots(
   db: Database.Database,
   flavor: FlavorId,
   bucket: InternalPerformanceBucket,
+  fresh: Set<string>,
 ): ShareHoldingSnapshot[] {
   const accountWhere = strategyTradesAccountWhereSql(flavor, "a");
   const rows = db
@@ -99,6 +178,7 @@ function earliestShareSnapshots(
              p.quantity AS quantity,
              p.price AS price,
              p.market_value AS market_value,
+             p.metadata_json AS metadata_json,
              a.name AS account_name,
              a.nickname AS account_nickname,
              a.account_bucket AS account_bucket
@@ -121,6 +201,7 @@ function earliestShareSnapshots(
     quantity: number;
     price: number | null;
     market_value: number | null;
+    metadata_json: string | null;
     account_name: string;
     account_nickname: string | null;
     account_bucket: string | null;
@@ -128,10 +209,11 @@ function earliestShareSnapshots(
 
   const earliest = new Map<string, ShareHoldingSnapshot>();
   for (const row of rows) {
+    if (!fresh.has(row.account_id)) continue;
     if (!accountInBucket(bucket, row.account_name, row.account_nickname, row.account_bucket)) continue;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(row.date) || !row.symbol) continue;
     const key = `${row.account_id}|${row.symbol}`;
-    const price = snapshotUnitPrice(row.price, row.quantity, row.market_value);
+    const price = snapshotCostPerShare(row.price, row.quantity, row.market_value, row.metadata_json);
     const prev = earliest.get(key);
     if (!prev) {
       earliest.set(key, {
@@ -193,20 +275,27 @@ function remapFills(fills: InternalFill[], cusips: Map<string, string>): Interna
   return out;
 }
 
-function latestOpenHoldings(db: Database.Database, flavor: FlavorId, bucket: InternalPerformanceBucket, cusips: Map<string, string>): OpenHolding[] {
+function latestOpenHoldings(
+  db: Database.Database,
+  flavor: FlavorId,
+  bucket: InternalPerformanceBucket,
+  cusips: Map<string, string>,
+  fresh: Set<string>,
+): OpenHolding[] {
   const accountWhere = strategyTradesAccountWhereSql(flavor, "a");
   const rows = db
     .prepare(
       `
-      SELECT UPPER(TRIM(sec.symbol)) AS symbol,
+      SELECT hs.account_id AS account_id,
+             UPPER(TRIM(sec.symbol)) AS symbol,
              sec.security_type AS security_type,
              sec.expiration_date AS expiration,
              sec.strike_price AS strike,
              sec.option_type AS option_type,
              UPPER(COALESCE(NULLIF(TRIM(us.symbol), ''), '')) AS underlying,
              p.quantity AS quantity,
-             p.price AS price,
              p.market_value AS market_value,
+             p.metadata_json AS metadata_json,
              a.name AS account_name,
              a.nickname AS account_nickname,
              a.account_bucket AS account_bucket
@@ -225,6 +314,7 @@ function latestOpenHoldings(db: Database.Database, flavor: FlavorId, bucket: Int
     `,
     )
     .all() as Array<{
+    account_id: string;
     symbol: string;
     security_type: string;
     expiration: string | null;
@@ -232,8 +322,8 @@ function latestOpenHoldings(db: Database.Database, flavor: FlavorId, bucket: Int
     option_type: string | null;
     underlying: string;
     quantity: number;
-    price: number | null;
     market_value: number | null;
+    metadata_json: string | null;
     account_name: string;
     account_nickname: string | null;
     account_bucket: string | null;
@@ -241,16 +331,12 @@ function latestOpenHoldings(db: Database.Database, flavor: FlavorId, bucket: Int
 
   const out: OpenHolding[] = [];
   for (const row of rows) {
+    if (!fresh.has(row.account_id)) continue;
     if (!accountInBucket(bucket, row.account_name, row.account_nickname, row.account_bucket)) continue;
     if (!Number.isFinite(row.quantity) || Math.abs(row.quantity) < 1e-9) continue;
     const parsed = parseOptionFromSchwabSymbol(row.symbol);
     const isOption = row.security_type === "option" || parsed != null;
-    const marketValue =
-      row.market_value != null && Number.isFinite(row.market_value)
-        ? Math.abs(row.market_value)
-        : row.price != null && row.price > 0
-          ? Math.abs(row.price * row.quantity) * (isOption ? 100 : 1)
-          : 0;
+    const marketValue = holdingMarketValue(row.quantity, row.market_value, row.metadata_json, isOption);
     if (!isOption) {
       if (row.quantity <= 0) continue;
       const symbol = canonicalSymbol(row.symbol, cusips);
@@ -288,17 +374,19 @@ function snapshotShareMarks(
   flavor: FlavorId,
   bucket: InternalPerformanceBucket,
   cusips: Map<string, string>,
+  fresh: Set<string>,
 ): Record<string, SharePricePoint[]> {
   const accountWhere = strategyTradesAccountWhereSql(flavor, "a");
   const rows = db
     .prepare(
       `
-      SELECT substr(hs.as_of, 1, 10) AS date,
+      SELECT hs.account_id AS account_id,
+             substr(hs.as_of, 1, 10) AS date,
              hs.as_of AS as_of,
              UPPER(TRIM(sec.symbol)) AS symbol,
              p.quantity AS quantity,
-             p.price AS price,
              p.market_value AS market_value,
+             p.metadata_json AS metadata_json,
              a.name AS account_name,
              a.nickname AS account_nickname,
              a.account_bucket AS account_bucket
@@ -314,12 +402,13 @@ function snapshotShareMarks(
     `,
     )
     .all() as Array<{
+    account_id: string;
     date: string;
     as_of: string;
     symbol: string;
     quantity: number;
-    price: number | null;
     market_value: number | null;
+    metadata_json: string | null;
     account_name: string;
     account_nickname: string | null;
     account_bucket: string | null;
@@ -327,10 +416,15 @@ function snapshotShareMarks(
 
   const latest = new Map<string, SharePricePoint & { asOf: string }>();
   for (const row of rows) {
+    if (!fresh.has(row.account_id)) continue;
     if (!accountInBucket(bucket, row.account_name, row.account_nickname, row.account_bucket)) continue;
     const symbol = canonicalSymbol(row.symbol, cusips);
     if (!symbol || !/^\d{4}-\d{2}-\d{2}$/.test(row.date)) continue;
-    const price = snapshotUnitPrice(row.price, row.quantity, row.market_value);
+    const price = snapshotMarkPerShare({
+      quantity: row.quantity,
+      marketValue: row.market_value,
+      metadataJson: row.metadata_json,
+    });
     if (price == null) continue;
     const key = `${symbol}|${row.date}`;
     const prev = latest.get(key);
@@ -369,16 +463,19 @@ export function loadInternalPerformance(
     )
     .all() as AccountRow[];
 
-  const scoped = rows.filter((row) => accountInBucket(bucket, row.account_name, row.account_nickname, row.account_bucket));
+  const fresh = freshAccounts(db, flavor, bucket);
+  const scoped = rows.filter(
+    (row) => fresh.has(row.account_id) && accountInBucket(bucket, row.account_name, row.account_nickname, row.account_bucket),
+  );
   const cusips = tickerByCusip(db);
   const fills = remapFills(
     seedUnexplainedShareFills(
       scoped.flatMap((row) => internalFillsFromStoredRow(row)),
-      earliestShareSnapshots(db, flavor, bucket),
+      earliestShareSnapshots(db, flavor, bucket, fresh),
     ),
     cusips,
   );
-  const openHoldings = latestOpenHoldings(db, flavor, bucket, cusips);
+  const openHoldings = latestOpenHoldings(db, flavor, bucket, cusips, fresh);
   const history = portfolioRows(db, flavor, bucket, now);
   const dates = history.map((row) => row.date);
   const asOf = nyYmd(now);
@@ -399,59 +496,80 @@ export function loadInternalPerformance(
     const closes = shareClosesBySymbol(
       priceRows.map((row) => ({ symbol: row.symbol, date: row.date, price: row.close, provider: row.provider })),
     );
-    const snapshots = snapshotShareMarks(db, flavor, bucket, cusips);
+    const snapshots = snapshotShareMarks(db, flavor, bucket, cusips, fresh);
     for (const symbol of symbols) {
       sharePrices[symbol] = mergeShareMarks(closes[symbol] ?? [], snapshots[symbol] ?? []);
     }
   }
 
-  const optionMarks = (
-    db
-      .prepare(
-        `
-        SELECT substr(hs.as_of, 1, 10) AS date,
-               UPPER(COALESCE(NULLIF(TRIM(us.symbol), ''), '')) AS underlying,
-               sec.expiration_date AS expiration,
-               sec.strike_price AS strike,
-               sec.option_type AS option_type,
-               sec.symbol AS option_symbol,
-               p.price AS price,
-               a.name AS account_name,
-               a.nickname AS account_nickname,
-               a.account_bucket AS account_bucket
-        FROM positions p
-        JOIN holding_snapshots hs ON hs.id = p.snapshot_id
-        JOIN accounts a ON a.id = hs.account_id
-        JOIN securities sec ON sec.id = p.security_id
-        LEFT JOIN securities us ON us.id = sec.underlying_security_id
-        WHERE sec.security_type = 'option'
-          AND p.price IS NOT NULL
-          AND ${accountWhere}
-      `,
-      )
-      .all() as Array<{
-      date: string;
-      underlying: string;
-      expiration: string | null;
-      strike: number | null;
-      option_type: string | null;
-      option_symbol: string | null;
-      price: number;
-      account_name: string;
-      account_nickname: string | null;
-      account_bucket: string | null;
-    }>
-  ).flatMap((row) => {
-    if (!accountInBucket(bucket, row.account_name, row.account_nickname, row.account_bucket)) return [];
+  const optionMarkRows = db
+    .prepare(
+      `
+      SELECT hs.account_id AS account_id,
+             hs.as_of AS as_of,
+             substr(hs.as_of, 1, 10) AS date,
+             UPPER(COALESCE(NULLIF(TRIM(us.symbol), ''), '')) AS underlying,
+             sec.expiration_date AS expiration,
+             sec.strike_price AS strike,
+             sec.option_type AS option_type,
+             sec.symbol AS option_symbol,
+             p.quantity AS quantity,
+             p.market_value AS market_value,
+             p.metadata_json AS metadata_json,
+             a.name AS account_name,
+             a.nickname AS account_nickname,
+             a.account_bucket AS account_bucket
+      FROM positions p
+      JOIN holding_snapshots hs ON hs.id = p.snapshot_id
+      JOIN accounts a ON a.id = hs.account_id
+      JOIN securities sec ON sec.id = p.security_id
+      LEFT JOIN securities us ON us.id = sec.underlying_security_id
+      WHERE sec.security_type = 'option'
+        AND ${accountWhere}
+      ORDER BY hs.as_of ASC
+    `,
+    )
+    .all() as Array<{
+    account_id: string;
+    as_of: string;
+    date: string;
+    underlying: string;
+    expiration: string | null;
+    strike: number | null;
+    option_type: string | null;
+    option_symbol: string | null;
+    quantity: number;
+    market_value: number | null;
+    metadata_json: string | null;
+    account_name: string;
+    account_nickname: string | null;
+    account_bucket: string | null;
+  }>;
+  const optionLatest = new Map<string, { underlying: string; right: "C" | "P"; strike: number; expiration: string; date: string; price: number; asOf: string }>();
+  for (const row of optionMarkRows) {
+    if (!fresh.has(row.account_id)) continue;
+    if (!accountInBucket(bucket, row.account_name, row.account_nickname, row.account_bucket)) continue;
     const parsed = parseOptionFromSchwabSymbol(row.option_symbol);
     const type = (row.option_type ?? "").toUpperCase();
     const right = parsed?.right ?? (type.startsWith("P") ? "P" : type.startsWith("C") ? "C" : null);
     const strike = parsed?.strike ?? row.strike;
     const expiration = parsed?.expiration ?? row.expiration?.slice(0, 10) ?? null;
     const underlying = canonicalSymbol(row.underlying || parsed?.underlying || "", cusips) ?? "";
-    if (!right || strike == null || !expiration || !underlying || !(row.price > 0)) return [];
-    return [{ underlying, right, strike, expiration, date: row.date, price: row.price }];
-  });
+    const price = optionPremiumPerShare(row.quantity, row.market_value, row.metadata_json);
+    if (!right || strike == null || !expiration || !underlying || price == null) continue;
+    const key = `${underlying}|${right}|${strike}|${expiration}|${row.date}`;
+    const prev = optionLatest.get(key);
+    if (prev && row.as_of < prev.asOf) continue;
+    optionLatest.set(key, { underlying, right, strike, expiration, date: row.date, price, asOf: row.as_of });
+  }
+  const optionMarks = [...optionLatest.values()].map((row) => ({
+    underlying: row.underlying,
+    right: row.right,
+    strike: row.strike,
+    expiration: row.expiration,
+    date: row.date,
+    price: row.price,
+  }));
 
   const built =
     dates.length > 0

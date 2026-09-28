@@ -5,11 +5,13 @@ import {
   buildInternalPerformanceSeries,
   canonicalSymbol,
   cusipTickerMap,
+  freshAccountIds,
   internalFillsFromStoredRow,
   mergeShareMarks,
   qualifyInternalUnderlyings,
   seedUnexplainedShareFills,
   shareClosesBySymbol,
+  snapshotMarkPerShare,
   type InternalFill,
   type OpenHolding,
   type StoredBrokerFillRow,
@@ -533,6 +535,58 @@ describe("current holdings and stock closes", () => {
     assert.equal(tslaLine?.find((point) => point.date === "2026-09-28")?.stockPct, null);
     assert.equal(built.bySymbol.GRAB?.find((point) => point.date === "2026-08-28")?.stockPct, -3.846154);
     assert.equal(built.bySymbol.QXO?.find((point) => point.date === "2026-08-28")?.stockPct, -5.555556);
+  });
+
+  it("stock line uses market value over quantity when the snapshot price is cost", () => {
+    const mark = snapshotMarkPerShare({ quantity: 12500, marketValue: 2367500 });
+    assert.equal(mark, 189.4);
+    const fromMetadata = snapshotMarkPerShare({
+      quantity: 12500,
+      marketValue: null,
+      metadataJson: JSON.stringify({
+        averagePrice: 14.11783,
+        marketValue: 2367500,
+        longQuantity: 12500,
+      }),
+    });
+    assert.equal(fromMetadata, 189.4);
+    const closes = shareClosesBySymbol([{ symbol: "PLTR", date: "2026-05-08", price: 137.8, provider: "schwab" }]);
+    const merged = mergeShareMarks(closes.PLTR ?? [], [{ date: "2026-09-28", price: mark! }]);
+    const built = buildInternalPerformanceSeries([share("2026-05-08", 12500, 14.11783, "PLTR")], {
+      asOf: "2026-09-28",
+      dates: ["2026-05-08", "2026-08-28", "2026-09-28"],
+      sharePrices: { PLTR: merged },
+      openHoldings: [
+        { symbol: "PLTR", leg: "share", quantity: 12500, strike: null, expiration: null, marketValue: 2367500 },
+      ],
+    });
+    const line = built.bySymbol.PLTR;
+    assert.equal(line?.find((point) => point.date === "2026-08-28")?.stockPct, null);
+    assert.equal(line?.find((point) => point.date === "2026-09-28")?.stockPct, 37.445573);
+  });
+
+  it("drops an account whose last snapshot is stale", () => {
+    const fresh = freshAccountIds([
+      { accountId: "schwab_99113937", lastSnapshot: "2026-09-28" },
+      { accountId: "schwab_51115831", lastSnapshot: "2026-05-08" },
+      { accountId: "manual_10b6", lastSnapshot: "2026-09-23" },
+    ]);
+    assert.deepEqual([...fresh].sort(), ["manual_10b6", "schwab_99113937"]);
+  });
+
+  it("measures a long book's giveback against the value at the chart start", () => {
+    const built = buildInternalPerformanceSeries([share("2024-01-02", 100, 10, "VSCPX")], {
+      asOf: "2024-07-01",
+      dates: ["2024-06-03", "2024-07-01"],
+      sharePrices: {
+        VSCPX: [
+          { date: "2024-06-03", price: 36 },
+          { date: "2024-07-01", price: 1 },
+        ],
+      },
+    });
+    assert.equal(built.bySymbol.VSCPX?.[1]?.returnPct, -97.222222);
+    assert.equal(built.audit.find((row) => row.symbol === "VSCPX")?.capital, 3600);
   });
 
   it("qualifies a snapshot synthetic only when the current episode exceeds 180 days", () => {
