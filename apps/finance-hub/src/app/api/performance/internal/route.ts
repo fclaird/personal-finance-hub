@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { parseInternalReturnMethod } from "@/lib/analytics/internalPerformance";
 import { loadInternalPerformance, type InternalPerformanceBucket } from "@/lib/analytics/internalPerformanceQuery";
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
@@ -14,8 +15,12 @@ export async function GET(req: Request) {
     if (!VALID_BUCKET.has(bucket)) {
       return NextResponse.json({ ok: false, error: "Invalid bucket" }, { status: 400 });
     }
+    const method = parseInternalReturnMethod(url.searchParams.get("method"));
+    if (!method) {
+      return NextResponse.json({ ok: false, error: "Invalid method" }, { status: 400 });
+    }
     const { flavor } = await resolveViewScope();
-    const chart = loadInternalPerformance(getDb(), flavor, bucket);
+    const chart = loadInternalPerformance(getDb(), flavor, bucket, method);
     return NextResponse.json({ ok: true, flavor, bucket, ...chart });
   } catch (e) {
     logError("performance_internal_get_failed", e);

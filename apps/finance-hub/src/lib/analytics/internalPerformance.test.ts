@@ -173,10 +173,14 @@ describe("internal performance return", () => {
     assert.equal(line?.[1]?.stockPct, 20);
     assert.deepEqual(built.audit.find((row) => row.symbol === "TSLA"), {
       symbol: "TSLA",
+      method: "capital",
       pnl: 250,
+      denominator: 2000,
       capital: 2000,
       returnPct: 12.5,
       stockPct: 20,
+      fallback: false,
+      approx: false,
     });
   });
 
@@ -661,6 +665,149 @@ describe("current holdings and stock closes", () => {
     const audit = built.audit.find((row) => row.symbol === "TSLA");
     assert.equal(audit?.pnl, Math.round((5 * end - 3 * start - buyCost) * 100) / 100);
     assert.equal(audit?.capital, Math.round((3 * start + buyCost) * 100) / 100);
+  });
+
+  it("matches the stock return for every method when a share book has no trades", () => {
+    for (const method of ["capital", "twr", "dietz", "exposure"] as const) {
+      const built = buildInternalPerformanceSeries([share("2024-01-02", 100, 10, "PLTR")], {
+        method,
+        asOf: "2024-07-01",
+        dates: ["2024-06-03", "2024-07-01"],
+        sharePrices: {
+          PLTR: [
+            { date: "2024-06-03", price: 50 },
+            { date: "2024-07-01", price: 80 },
+          ],
+        },
+      });
+      const end = built.bySymbol.PLTR?.[1];
+      const audit = built.audit.find((row) => row.symbol === "PLTR");
+      assert.equal(end?.returnPct, end?.stockPct, method);
+      assert.equal(audit?.returnPct, end?.stockPct, method);
+      assert.equal(audit?.method, method);
+      assert.equal(audit?.pnl, 3000);
+      assert.equal(audit?.fallback, false);
+      assert.equal(audit?.approx, false);
+    }
+  });
+
+  it("time-weights the two buys back to the stock return and leaves Dietz between that and capital", () => {
+    const start = 416;
+    const end = 371.75;
+    const buyCost = 347.39 + 362;
+    const snaps = [
+      { accountId: "a", symbol: "TSLA", date: "2026-09-28", asOf: "2026-09-28T01:00:14Z", quantity: 5, price: 250 },
+    ];
+    const fills = seedUnexplainedShareFills(
+      [share("2026-08-19", 1, 347.39, "TSLA"), share("2026-08-31", 1, 362, "TSLA")],
+      snaps,
+    );
+    const series = (method: "capital" | "twr" | "dietz") =>
+      buildInternalPerformanceSeries(fills, {
+        method,
+        asOf: "2026-09-28",
+        dates: ["2026-06-01", "2026-09-28"],
+        sharePrices: {
+          TSLA: [
+            { date: "2026-06-01", price: start },
+            { date: "2026-09-28", price: end },
+          ],
+        },
+        shareSnapshots: snaps,
+        openHoldings: [
+          { symbol: "TSLA", leg: "share", quantity: 5, strike: null, expiration: null, marketValue: 5 * end },
+        ],
+      });
+    const capital = series("capital").audit.find((row) => row.symbol === "TSLA");
+    const twr = series("twr").audit.find((row) => row.symbol === "TSLA");
+    const dietz = series("dietz").audit.find((row) => row.symbol === "TSLA");
+    const stock = series("twr").bySymbol.TSLA?.[1]?.stockPct;
+    assert.equal(capital?.pnl, Math.round((5 * end - 3 * start - buyCost) * 100) / 100);
+    assert.equal(capital?.returnPct, Math.round((((capital?.pnl ?? 0) / (3 * start + buyCost)) * 100) * 1e6) / 1e6);
+    assert.equal(twr?.returnPct, stock);
+    assert.equal(dietz?.fallback, false);
+    assert.ok((dietz?.returnPct ?? 0) < (capital?.returnPct ?? 0));
+    assert.ok((dietz?.returnPct ?? 0) > (twr?.returnPct ?? 0));
+  });
+
+  it("falls Dietz back to capital when a short put liability makes the denominator negative", () => {
+    const fills = [opt("2024-01-02", "BMNR", "put", 28, -100, 2, "2026-10-16")];
+    const opts = {
+      asOf: "2024-07-02",
+      dates: ["2024-01-02", "2024-07-02"],
+      sharePrices: {
+        BMNR: [
+          { date: "2024-01-02", price: 30 },
+          { date: "2024-07-02", price: 30 },
+        ],
+      },
+      optionMarks: [
+        { underlying: "BMNR", right: "P" as const, strike: 28, expiration: "2026-10-16", date: "2024-01-02", price: 2 },
+        { underlying: "BMNR", right: "P" as const, strike: 28, expiration: "2026-10-16", date: "2024-07-02", price: 1 },
+      ],
+    };
+    const capital = buildInternalPerformanceSeries(fills, { ...opts, method: "capital" }).audit.find((row) => row.symbol === "BMNR");
+    const dietz = buildInternalPerformanceSeries(fills, { ...opts, method: "dietz" }).audit.find((row) => row.symbol === "BMNR");
+    assert.equal(dietz?.fallback, true);
+    assert.equal(dietz?.returnPct, capital?.returnPct);
+    assert.equal(dietz?.denominator, capital?.denominator);
+    assert.ok((dietz?.returnPct ?? 0) > 0);
+  });
+
+  it("marks exposure approximate when a deep in the money call has no stored delta", () => {
+    const built = buildInternalPerformanceSeries([opt("2024-01-02", "NVDA", "call", 10, 100, 5, "2026-10-16")], {
+      method: "exposure",
+      asOf: "2024-07-02",
+      dates: ["2024-01-02", "2024-07-02"],
+      sharePrices: {
+        NVDA: [
+          { date: "2024-01-02", price: 20 },
+          { date: "2024-07-02", price: 22 },
+        ],
+      },
+      optionMarks: [
+        { underlying: "NVDA", right: "C", strike: 10, expiration: "2026-10-16", date: "2024-01-02", price: 5 },
+        { underlying: "NVDA", right: "C", strike: 10, expiration: "2026-10-16", date: "2024-07-02", price: 5 },
+      ],
+    });
+    const audit = built.audit.find((row) => row.symbol === "NVDA");
+    assert.equal(audit?.approx, true);
+    assert.equal(audit?.fallback, false);
+    assert.equal(audit?.pnl, 0);
+    assert.equal(audit?.returnPct, 0);
+    assert.ok((audit?.denominator ?? 0) > 0);
+  });
+
+  it("prefers a stored delta within five days over the deep in the money guess", () => {
+    const fills = [opt("2024-01-02", "NVDA", "call", 10, 100, 5, "2026-10-16")];
+    const common = {
+      asOf: "2024-07-02",
+      dates: ["2024-07-01", "2024-07-02"],
+      sharePrices: {
+        NVDA: [
+          { date: "2024-07-01", price: 20 },
+          { date: "2024-07-02", price: 20 },
+        ],
+      },
+      optionMarks: [
+        { underlying: "NVDA", right: "C" as const, strike: 10, expiration: "2026-10-16", date: "2024-07-01", price: 5 },
+        { underlying: "NVDA", right: "C" as const, strike: 10, expiration: "2026-10-16", date: "2024-07-02", price: 8 },
+      ],
+    };
+    const guessed = buildInternalPerformanceSeries(fills, { ...common, method: "exposure" }).audit.find((row) => row.symbol === "NVDA");
+    const stored = buildInternalPerformanceSeries(fills, {
+      ...common,
+      method: "exposure",
+      optionDeltas: [
+        { underlying: "NVDA", right: "C", strike: 10, expiration: "2026-10-16", date: "2024-07-01", delta: 0.4 },
+        { underlying: "NVDA", right: "C", strike: 10, expiration: "2026-10-16", date: "2024-07-02", delta: 0.4 },
+      ],
+    }).audit.find((row) => row.symbol === "NVDA");
+    assert.equal(guessed?.approx, true);
+    assert.equal(stored?.approx, false);
+    assert.equal(stored?.denominator, 800);
+    assert.equal(stored?.pnl, 300);
+    assert.ok((stored?.denominator ?? 0) < (guessed?.denominator ?? 0));
   });
 
   it("measures a long book's giveback against the value at the chart start", () => {

@@ -9,7 +9,16 @@ const SYNTHETIC_SPAN_MUST_EXCEED_DAYS = 180;
 const FLAT_GAP_TRADING_DAYS = 5;
 const CONTRACT_SHARES = 100;
 const STOCK_MARK_MAX_AGE_DAYS = 5;
+const DEEP_ITM_MARK_OVER_STRIKE = 1.1;
+const TINY_DENOMINATOR = 1;
 export const INTERNAL_DEFAULT_ON_LIMIT = 8;
+export const INTERNAL_RETURN_METHODS = ["capital", "twr", "dietz", "exposure"] as const;
+export type InternalReturnMethod = (typeof INTERNAL_RETURN_METHODS)[number];
+
+export function parseInternalReturnMethod(value: string | null | undefined): InternalReturnMethod | null {
+  if (value == null || value === "") return "capital";
+  return (INTERNAL_RETURN_METHODS as readonly string[]).includes(value) ? (value as InternalReturnMethod) : null;
+}
 
 export function snapshotMarkPerShare(input: {
   quantity: number;
@@ -92,10 +101,23 @@ export type OpenHolding = {
 
 export type InternalAudit = {
   symbol: string;
+  method: InternalReturnMethod;
   pnl: number;
+  denominator: number;
   capital: number;
   returnPct: number | null;
   stockPct: number | null;
+  fallback: boolean;
+  approx: boolean;
+};
+
+export type OptionDeltaPoint = {
+  underlying: string;
+  right: "C" | "P";
+  strike: number;
+  expiration: string;
+  date: string;
+  delta: number;
 };
 
 export type InternalSeriesPoint = {
@@ -953,6 +975,209 @@ function shareQtyByAccount(books: DayBooks): Map<string, number> {
   return out;
 }
 
+type LineValuation = {
+  date: string;
+  value: number | null;
+  flow: number;
+  pnl: number;
+  capital: number;
+  shareEq: number;
+  approx: boolean;
+};
+
+function signedSyntheticValue(books: DayBooks, markAt: (contract: ContractBook) => number | null): number {
+  let value = 0;
+  for (const book of books.values()) {
+    const synthetic = syntheticQtyByContract(book.contracts);
+    for (const [key, synQty] of synthetic) {
+      const contract = book.contracts.get(key);
+      if (!contract) continue;
+      const mark = markAt(contract);
+      if (mark == null) continue;
+      value += synQty * mark;
+    }
+  }
+  return value;
+}
+
+function optionFlowOnDate(fills: InternalFill[], books: DayBooks, date: string): number {
+  let cash = 0;
+  for (const fill of fills) {
+    if (fill.seeded || fill.leg === "share" || fill.date !== date) continue;
+    if (fill.strike == null || !fill.expiration) continue;
+    const book = books.get(fill.accountId || "default");
+    if (!book) continue;
+    const right: "C" | "P" = fill.leg === "put" ? "P" : "C";
+    const key = contractKey(right, fill.strike, fill.expiration);
+    const contract = book.contracts.get(key);
+    const open = contract ? qtyOf(contract.lots) : 0;
+    const syn = contract ? (syntheticQtyByContract(book.contracts).get(key) ?? 0) : 0;
+    const closingSynthetic =
+      Math.abs(open) < 1e-6 &&
+      ((fill.leg === "put" && fill.signedShares > 0) || (fill.leg === "call" && fill.signedShares < 0));
+    if (Math.abs(syn) < 1e-6 && !closingSynthetic) continue;
+    const fraction = Math.abs(open) > 1e-6 ? Math.min(1, Math.abs(syn) / Math.abs(open)) : 1;
+    cash += fill.signedShares * fill.price * fraction;
+  }
+  return cash;
+}
+
+function shareFillMark(fills: InternalFill[], symbol: string, date: string): number | null {
+  let cash = 0;
+  let qty = 0;
+  for (const fill of fills) {
+    if (fill.seeded || fill.leg !== "share" || fill.underlying !== symbol || fill.date !== date) continue;
+    cash += fill.signedShares * fill.price;
+    qty += fill.signedShares;
+  }
+  if (!(Math.abs(qty) > 1e-9)) return null;
+  const mark = cash / qty;
+  return mark > 0 ? mark : null;
+}
+
+function deltaLists(points: OptionDeltaPoint[] | undefined, symbol: string): Map<string, OptionDeltaPoint[]> {
+  const map = new Map<string, OptionDeltaPoint[]>();
+  for (const point of points ?? []) {
+    if (point.underlying.trim().toUpperCase() !== symbol) continue;
+    if (!Number.isFinite(point.delta)) continue;
+    const key = contractKey(point.right, point.strike, point.expiration);
+    const list = map.get(key) ?? [];
+    list.push(point);
+    map.set(key, list);
+  }
+  return map;
+}
+
+function nearestDelta(points: OptionDeltaPoint[], date: string): number | null {
+  let best: { age: number; date: string; delta: number } | null = null;
+  for (const point of points) {
+    const age = daysBetween(point.date, date);
+    if (age == null || age > STOCK_MARK_MAX_AGE_DAYS) continue;
+    if (!best || age < best.age || (age === best.age && point.date >= best.date)) best = { age, date: point.date, delta: point.delta };
+  }
+  return best ? best.delta : null;
+}
+
+function optionShareEquivalent(
+  books: DayBooks,
+  date: string,
+  spot: number | null,
+  deltas: Map<string, OptionDeltaPoint[]>,
+): { eq: number; approx: boolean } {
+  let eq = 0;
+  let approx = false;
+  for (const book of books.values()) {
+    const synthetic = syntheticQtyByContract(book.contracts);
+    for (const [key, synQty] of synthetic) {
+      const contract = book.contracts.get(key);
+      if (!contract) continue;
+      const stored = nearestDelta(deltas.get(key) ?? [], date);
+      if (stored != null) {
+        eq += stored * synQty;
+        continue;
+      }
+      approx = true;
+      const deep =
+        contract.right === "C" && synQty > 0 && spot != null && spot >= contract.strike * DEEP_ITM_MARK_OVER_STRIKE;
+      if (deep) eq += synQty;
+    }
+  }
+  return { eq, approx };
+}
+
+function addIsoDays(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+function averageShareEquivalents(rows: LineValuation[], from: string, to: string): number {
+  const span = (daysBetween(from, to) ?? 0) + 1;
+  if (span <= 0) return 0;
+  const ordered = rows.filter((row) => row.date <= to).sort((a, b) => a.date.localeCompare(b.date));
+  let sum = 0;
+  let cursor = from;
+  for (let i = 0; i < span; i++) {
+    let eq = 0;
+    for (const row of ordered) {
+      if (row.date > cursor) break;
+      eq = row.shareEq;
+    }
+    sum += eq;
+    cursor = addIsoDays(cursor, 1);
+  }
+  return sum / span;
+}
+
+function valuationAt(rows: LineValuation[], through: string): LineValuation | null {
+  let found: LineValuation | null = null;
+  for (const row of rows) {
+    if (row.date > through) break;
+    found = row;
+  }
+  return found;
+}
+
+function chainedTwr(rows: LineValuation[], through: string): number | null {
+  let growth = 1;
+  let pending = 0;
+  let prev: number | null = null;
+  let linked = false;
+  for (const row of rows) {
+    if (row.date > through) break;
+    if (row.value == null) {
+      pending += row.flow;
+      continue;
+    }
+    if (prev == null) {
+      prev = row.value;
+      continue;
+    }
+    const flow = row.flow + pending;
+    pending = 0;
+    if (prev > TINY_DENOMINATOR) {
+      growth *= 1 + (row.value - prev - flow) / prev;
+      linked = true;
+    }
+    prev = row.value;
+  }
+  return linked || prev != null ? roundPct((growth - 1) * 100) : null;
+}
+
+function modifiedDietz(
+  rows: LineValuation[],
+  through: string,
+): { pnl: number; denominator: number; fallback: boolean } {
+  const at = valuationAt(rows, through);
+  const start = rows.find((row) => row.value != null && row.date <= through);
+  let end: LineValuation | null = null;
+  for (const row of rows) {
+    if (row.date > through) break;
+    if (row.value != null) end = row;
+  }
+  const capitalPnl = at?.pnl ?? 0;
+  const capital = at?.capital ?? 0;
+  if (!start || !end || start.value == null || end.value == null) {
+    return { pnl: capitalPnl, denominator: capital, fallback: true };
+  }
+  const span = daysBetween(start.date, end.date) ?? 0;
+  let flowSum = 0;
+  let weighted = 0;
+  for (const row of rows) {
+    if (row.date <= start.date || row.date > end.date) continue;
+    if (Math.abs(row.flow) < 1e-9) continue;
+    flowSum += row.flow;
+    const elapsed = daysBetween(start.date, row.date) ?? 0;
+    const weight = span > 0 ? (span - elapsed) / span : 0;
+    weighted += row.flow * weight;
+  }
+  const pnl = end.value - start.value - flowSum;
+  const denominator = start.value + weighted;
+  if (!(denominator > TINY_DENOMINATOR)) return { pnl: capitalPnl, denominator: capital, fallback: true };
+  return { pnl, denominator, fallback: false };
+}
+
 export function buildInternalPerformanceSeries(
   fills: InternalFill[],
   opts: {
@@ -960,10 +1185,13 @@ export function buildInternalPerformanceSeries(
     dates: string[];
     sharePrices?: Record<string, SharePricePoint[]>;
     optionMarks?: OptionMarkPoint[];
+    optionDeltas?: OptionDeltaPoint[];
     openHoldings?: OpenHolding[];
     shareSnapshots?: ShareSnapshotRow[];
+    method?: InternalReturnMethod;
   },
 ): { symbols: QualifiedUnderlying[]; bySymbol: Record<string, InternalSeriesPoint[]>; audit: InternalAudit[] } {
+  const method = opts.method ?? "capital";
   const dates = [...opts.dates].filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)).sort();
   if (dates.length === 0) return { symbols: [], bySymbol: {}, audit: [] };
   const window = { start: dates[0]!, end: dates[dates.length - 1]! };
@@ -1042,15 +1270,41 @@ export function buildInternalPerformanceSeries(
     };
 
     const chartDates = new Set(dates);
+    const deltas = deltaLists(opts.optionDeltas, symbol);
     let baselineDate: string | null = null;
     let shareQty0 = 0;
     let shareMark0: number | null = null;
+    let underlyingMark0: number | null = null;
     let optionRealized0 = 0;
     let syntheticCapital0 = 0;
     let startQtyByAccount = new Map<string, number>();
     let maxCapital = 0;
+    let prevShareCash = 0;
     let lastAudit: InternalAudit | null = null;
+    let auditDate: string | null = null;
+    const valuations: LineValuation[] = [];
     const pointByDate = new Map<string, InternalSeriesPoint>();
+    const lineValue = (books: DayBooks, shareQty: number, shareMark: number | null, date: string): number | null => {
+      const optionValue = includeSynthetic ? signedSyntheticValue(books, (contract) => optionMarkAt(contract, date)) : 0;
+      if (shareQty > 1e-6) {
+        const link = shareMark ?? shareFillMark(symbolFills, symbol, date);
+        return link != null ? shareQty * link + optionValue : null;
+      }
+      return optionValue;
+    };
+    const remember = (date: string, books: DayBooks, shareQty: number, shareMark: number | null, flow: number, pnl: number) => {
+      const spot = shareMark ?? underlyingMark0;
+      const optionEq = includeSynthetic ? optionShareEquivalent(books, date, spot, deltas) : { eq: 0, approx: false };
+      valuations.push({
+        date,
+        value: lineValue(books, shareQty, shareMark, date),
+        flow,
+        pnl,
+        capital: maxCapital,
+        shareEq: (includeShares ? shareQty : 0) + optionEq.eq,
+        approx: optionEq.approx,
+      });
+    };
     for (const snap of snaps) {
       const shareMark = markOn(shareMarks, snap.date);
       const valued = pnlFor(
@@ -1077,6 +1331,7 @@ export function buildInternalPerformanceSeries(
         baselineDate = snap.date;
         shareQty0 = shareQty;
         shareMark0 = shareActive ? shareMark : null;
+        underlyingMark0 = shareMark;
         optionRealized0 = includeSynthetic ? snap.syntheticRealized : 0;
         syntheticCapital0 = includeSynthetic ? capitalFor(snap.books, false, true) : 0;
         startQtyByAccount = new Map();
@@ -1087,6 +1342,7 @@ export function buildInternalPerformanceSeries(
         }
         const shareCapital = shareMark0 != null && shareQty0 > 1e-6 ? shareQty0 * shareMark0 : includeShares ? valued.capital - syntheticCapital0 : 0;
         maxCapital = Math.max(0, shareCapital) + syntheticCapital0;
+        remember(snap.date, snap.books, shareQty, shareMark, 0, 0);
         if (chartDates.has(snap.date)) {
           const stockPct = chartStartPrice != null && chartStartPrice > 0 && shareMark != null ? roundPct((shareMark / chartStartPrice - 1) * 100) : null;
           pointByDate.set(snap.date, {
@@ -1094,12 +1350,17 @@ export function buildInternalPerformanceSeries(
             returnPct: maxCapital > 0 ? 0 : null,
             stockPct,
           });
+          auditDate = snap.date;
           lastAudit = {
             symbol,
+            method: "capital",
             pnl: 0,
+            denominator: roundMoney(maxCapital),
             capital: roundMoney(maxCapital),
             returnPct: maxCapital > 0 ? 0 : null,
             stockPct,
+            fallback: false,
+            approx: false,
           };
         }
         continue;
@@ -1112,18 +1373,73 @@ export function buildInternalPerformanceSeries(
         : 0;
       const syntheticCapital = includeSynthetic ? capitalFor(snap.books, false, true) : 0;
       maxCapital = Math.max(maxCapital, Math.max(0, (shareMark0 != null ? shareQty0 * shareMark0 : 0) + cash) + syntheticCapital);
-      if (!chartDates.has(snap.date)) continue;
       const pnl = sharePnl + optionPnl;
+      const shareFlow = cash - prevShareCash;
+      prevShareCash = cash;
+      const flow = shareFlow + (includeSynthetic ? optionFlowOnDate(symbolFills, snap.books, snap.date) : 0);
+      remember(snap.date, snap.books, shareQty, shareMark, flow, pnl);
+      if (!chartDates.has(snap.date)) continue;
       const returnPct = maxCapital > 0 ? roundPct((pnl / maxCapital) * 100) : null;
       const stockPct =
         chartStartPrice != null && chartStartPrice > 0 && shareMark != null ? roundPct((shareMark / chartStartPrice - 1) * 100) : null;
       pointByDate.set(snap.date, { date: snap.date, returnPct, stockPct });
+      auditDate = snap.date;
       lastAudit = {
         symbol,
+        method: "capital",
         pnl: roundMoney(pnl),
+        denominator: roundMoney(maxCapital),
         capital: roundMoney(maxCapital),
         returnPct,
         stockPct,
+        fallback: false,
+        approx: false,
+      };
+    }
+    if (method !== "capital" && baselineDate && auditDate && lastAudit) {
+      const apply = (through: string) => {
+        const at = valuationAt(valuations, through);
+        const capitalPnl = at?.pnl ?? 0;
+        const capitalBase = at?.capital ?? 0;
+        const approx = valuations.some((row) => row.date <= through && row.approx);
+        if (method === "twr") {
+          return {
+            pnl: capitalPnl,
+            denominator: valuations.find((row) => row.value != null)?.value ?? capitalBase,
+            returnPct: chainedTwr(valuations, through),
+            fallback: false,
+            approx,
+          };
+        }
+        if (method === "dietz") {
+          const dietz = modifiedDietz(valuations, through);
+          const returnPct = dietz.denominator > TINY_DENOMINATOR ? roundPct((dietz.pnl / dietz.denominator) * 100) : null;
+          return { pnl: dietz.pnl, denominator: dietz.denominator, returnPct, fallback: dietz.fallback, approx };
+        }
+        const denom = underlyingMark0 != null && underlyingMark0 > 0 ? averageShareEquivalents(valuations, baselineDate, through) * underlyingMark0 : 0;
+        return {
+          pnl: capitalPnl,
+          denominator: denom,
+          returnPct: denom > TINY_DENOMINATOR ? roundPct((capitalPnl / denom) * 100) : null,
+          fallback: false,
+          approx,
+        };
+      };
+      for (const date of dates) {
+        if (date < baselineDate) continue;
+        const existing = pointByDate.get(date);
+        if (!existing || existing.returnPct == null) continue;
+        pointByDate.set(date, { ...existing, returnPct: apply(date).returnPct });
+      }
+      const end = apply(auditDate);
+      lastAudit = {
+        ...lastAudit,
+        method,
+        pnl: roundMoney(end.pnl),
+        denominator: roundMoney(end.denominator),
+        returnPct: end.returnPct,
+        fallback: end.fallback,
+        approx: end.approx,
       };
     }
     if (lastAudit) audit.push(lastAudit);

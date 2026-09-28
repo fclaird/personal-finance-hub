@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
@@ -16,6 +16,70 @@ import {
 } from "@/lib/market/performanceBenchmarks";
 
 const BENCHMARK_PREF_KEY = "fh.performance.benchmarks.v1";
+const INTERNAL_METHOD_KEY = "fh.performance.internalMethod.v1";
+
+const INTERNAL_METHODS = [
+  {
+    id: "capital",
+    label: "Capital",
+    hint: "Profit divided by the money at risk: shares at the starting price, short-put collateral, long-call premium, and later buys.",
+  },
+  {
+    id: "twr",
+    label: "Time-weighted",
+    hint: "Daily returns chained together, with each buy or sell removed so new cash does not count as a gain.",
+  },
+  {
+    id: "dietz",
+    label: "Modified Dietz",
+    hint: "One return for the whole window that gives more weight to cash invested for longer.",
+  },
+  {
+    id: "exposure",
+    label: "Exposure",
+    hint: "Profit divided by average daily share exposure, priced at the starting stock price, using option delta when it is on file.",
+  },
+] as const;
+
+type InternalMethod = (typeof INTERNAL_METHODS)[number]["id"];
+
+function parseInternalMethod(value: string | null): InternalMethod | null {
+  return INTERNAL_METHODS.some((method) => method.id === value) ? (value as InternalMethod) : null;
+}
+
+function readInternalMethod(): InternalMethod {
+  if (typeof window === "undefined") return "capital";
+  const fromUrl = parseInternalMethod(new URLSearchParams(window.location.search).get("method"));
+  if (fromUrl) return fromUrl;
+  try {
+    return parseInternalMethod(window.localStorage.getItem(INTERNAL_METHOD_KEY)) ?? "capital";
+  } catch {
+    return "capital";
+  }
+}
+
+const methodListeners = new Set<() => void>();
+
+function subscribeInternalMethod(listener: () => void) {
+  methodListeners.add(listener);
+  window.addEventListener("popstate", listener);
+  return () => {
+    methodListeners.delete(listener);
+    window.removeEventListener("popstate", listener);
+  };
+}
+
+function publishInternalMethod(method: InternalMethod) {
+  try {
+    window.localStorage.setItem(INTERNAL_METHOD_KEY, method);
+  } catch {
+    /* ignore private mode */
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set("method", method);
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  for (const listener of methodListeners) listener();
+}
 
 type HistoryChartRow = {
   date: string;
@@ -155,6 +219,8 @@ export default function PerformancePage() {
     PERFORMANCE_BENCHMARKS.map((b) => b.id),
   );
   const [prefsReady, setPrefsReady] = useState(false);
+  const method = useSyncExternalStore(subscribeInternalMethod, readInternalMethod, () => "capital" as InternalMethod);
+  const methodLabel = INTERNAL_METHODS.find((item) => item.id === method)?.label ?? "Capital";
 
   useEffect(() => {
     const stored = storedBenchmarkIds();
@@ -166,6 +232,19 @@ export default function PerformancePage() {
     if (!prefsReady) return;
     window.localStorage.setItem(BENCHMARK_PREF_KEY, JSON.stringify(enabledIds));
   }, [enabledIds, prefsReady]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(INTERNAL_METHOD_KEY, method);
+    } catch {
+      /* ignore private mode */
+    }
+    if (view !== "internal") return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("method") === method) return;
+    url.searchParams.set("method", method);
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [method, view]);
 
   const enabled = useMemo(() => new Set(enabledIds), [enabledIds]);
 
@@ -202,7 +281,7 @@ export default function PerformancePage() {
     setInternalLoading(true);
     void (async () => {
       try {
-        const url = `/api/performance/internal?bucket=${encodeURIComponent(bucket)}`;
+        const url = `/api/performance/internal?bucket=${encodeURIComponent(bucket)}&method=${encodeURIComponent(method)}`;
         const resp = await fetch(url, { cache: "no-store" });
         const json = (await safeJson(resp)) as InternalPayload;
         if (!cancelled) {
@@ -218,7 +297,7 @@ export default function PerformancePage() {
     return () => {
       cancelled = true;
     };
-  }, [bucket, view]);
+  }, [bucket, method, view]);
 
   const chartData = useMemo((): ChartRow[] => {
     const rows = hist?.chart_data ?? [];
@@ -347,6 +426,28 @@ export default function PerformancePage() {
                   {label}
                 </button>
               ))}
+              {view === "internal" ? (
+                <>
+                  <div className="text-sm font-medium text-teal-900 dark:text-teal-100">Return</div>
+                  {INTERNAL_METHODS.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      aria-pressed={method === item.id}
+                      title={item.hint}
+                      onClick={() => publishInternalMethod(item.id)}
+                      className={
+                        "cursor-help rounded-full px-4 py-2 text-sm font-medium " +
+                        (method === item.id
+                          ? "bg-teal-800 text-white shadow-sm dark:bg-teal-200 dark:text-teal-950"
+                          : "border border-teal-300/80 bg-white/80 text-teal-950 shadow-sm hover:bg-white dark:border-teal-800/60 dark:bg-teal-950/40 dark:text-teal-50 dark:hover:bg-teal-950/60")
+                      }
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </>
+              ) : null}
               <div className="text-sm font-medium text-teal-900 dark:text-teal-100">Bucket</div>
               {(["combined", "retirement", "brokerage"] as const).map((b) => (
                 <button
@@ -373,12 +474,11 @@ export default function PerformancePage() {
         <div className="px-4 py-3">
         {view === "internal" ? (
           <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Each line is cumulative return on capital for one underlying over these trading days. Only positions
-            open on the latest holdings snapshot are included. The eight largest by market value start on. A dotted
-            line is that ticker&apos;s close-to-close stock return from the first chart date, and it stops when the
-            last mark is more than five days old. Capital is share cost basis plus short-put collateral of strike
-            times 100 times contracts. Long-call premium is included. Share cost and short-put collateral both count
-            when the book holds both.
+            Each line uses the return method selected above. The portfolio line and the dotted stock line stay on
+            their own scale. Only positions open on the latest holdings snapshot are included. The eight largest by
+            market value start on. A dotted line is that ticker&apos;s close-to-close stock return from the first
+            chart date, and it stops when the last mark is more than five days old. Hover a return method for what
+            it divides by.
           </p>
         ) : (
         <div className="mb-3 flex flex-wrap items-center gap-2 text-sm" role="group" aria-label="Benchmarks">
@@ -440,6 +540,7 @@ export default function PerformancePage() {
                 error={internal && !internal.ok ? (internal.error ?? "Failed to load internal performance") : null}
                 symbols={internal?.symbols ?? []}
                 rows={internal?.chart_data ?? []}
+                methodLabel={methodLabel}
               />
             ) : (
               <>

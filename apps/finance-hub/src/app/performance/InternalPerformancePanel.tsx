@@ -32,11 +32,13 @@ export function InternalPerformancePanel({
   error,
   symbols,
   rows,
+  methodLabel,
 }: {
   loading: boolean;
   error: string | null;
   symbols: InternalSymbol[];
   rows: InternalChartRow[];
+  methodLabel: string;
 }) {
   const [stockOff, setStockOff] = useState<string[]>([]);
   const symbolKey = symbols.map((symbol) => `${symbol.symbol}:${symbol.defaultOn === false ? 0 : 1}`).join("|");
@@ -183,7 +185,7 @@ export function InternalPerformancePanel({
                           <div key={symbol.symbol}>
                             {position != null ? (
                               <div style={{ color: symbol.color }}>
-                                {symbol.symbol}: {formatPct(Number(position))}
+                                {symbol.symbol} {methodLabel}: {formatPct(Number(position))}
                               </div>
                             ) : null}
                             {stock != null ? (

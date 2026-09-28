@@ -21,7 +21,9 @@ import {
   type ShareSnapshotRow,
   type InternalAudit,
   type InternalFill,
+  type InternalReturnMethod,
   type OpenHolding,
+  type OptionDeltaPoint,
   type QualifyReason,
   type ShareHoldingSnapshot,
   type SharePricePoint,
@@ -56,6 +58,7 @@ const POSITION_COLORS = [
 export type InternalPerformanceBucket = "combined" | "retirement" | "brokerage";
 
 export type InternalPerformanceChart = {
+  method: InternalReturnMethod;
   symbols: Array<{ symbol: string; reason: QualifyReason; color: string; defaultOn: boolean; marketValue: number }>;
   audit: InternalAudit[];
   chart_data: Array<{
@@ -455,10 +458,86 @@ function snapshotShareMarks(
   return out;
 }
 
+function optionDeltaPoints(
+  db: Database.Database,
+  flavor: FlavorId,
+  bucket: InternalPerformanceBucket,
+  cusips: Map<string, string>,
+  fresh: Set<string>,
+): OptionDeltaPoint[] {
+  const accountWhere = strategyTradesAccountWhereSql(flavor, "a");
+  const rows = db
+    .prepare(
+      `
+      SELECT hs.account_id AS account_id,
+             hs.as_of AS as_of,
+             substr(hs.as_of, 1, 10) AS date,
+             UPPER(COALESCE(NULLIF(TRIM(us.symbol), ''), '')) AS underlying,
+             sec.expiration_date AS expiration,
+             sec.strike_price AS strike,
+             sec.option_type AS option_type,
+             sec.symbol AS option_symbol,
+             og.delta AS delta,
+             a.name AS account_name,
+             a.nickname AS account_nickname,
+             a.account_bucket AS account_bucket
+      FROM option_greeks og
+      JOIN positions p ON p.id = og.position_id
+      JOIN holding_snapshots hs ON hs.id = p.snapshot_id
+      JOIN accounts a ON a.id = hs.account_id
+      JOIN securities sec ON sec.id = p.security_id
+      LEFT JOIN securities us ON us.id = sec.underlying_security_id
+      WHERE sec.security_type = 'option'
+        AND og.delta IS NOT NULL
+        AND ${accountWhere}
+      ORDER BY hs.as_of ASC
+    `,
+    )
+    .all() as Array<{
+    account_id: string;
+    as_of: string;
+    date: string;
+    underlying: string;
+    expiration: string | null;
+    strike: number | null;
+    option_type: string | null;
+    option_symbol: string | null;
+    delta: number;
+    account_name: string;
+    account_nickname: string | null;
+    account_bucket: string | null;
+  }>;
+  const latest = new Map<string, OptionDeltaPoint & { asOf: string }>();
+  for (const row of rows) {
+    if (!fresh.has(row.account_id)) continue;
+    if (!accountInBucket(bucket, row.account_name, row.account_nickname, row.account_bucket)) continue;
+    const parsed = parseOptionFromSchwabSymbol(row.option_symbol);
+    const type = (row.option_type ?? "").toUpperCase();
+    const right = parsed?.right ?? (type.startsWith("P") ? "P" : type.startsWith("C") ? "C" : null);
+    const strike = parsed?.strike ?? row.strike;
+    const expiration = parsed?.expiration ?? row.expiration?.slice(0, 10) ?? null;
+    const underlying = canonicalSymbol(row.underlying || parsed?.underlying || "", cusips) ?? "";
+    if (!right || strike == null || !expiration || !underlying || !Number.isFinite(row.delta)) continue;
+    const key = `${underlying}|${right}|${strike}|${expiration}|${row.date}`;
+    const prev = latest.get(key);
+    if (prev && row.as_of < prev.asOf) continue;
+    latest.set(key, { underlying, right, strike, expiration, date: row.date, delta: row.delta, asOf: row.as_of });
+  }
+  return [...latest.values()].map((row) => ({
+    underlying: row.underlying,
+    right: row.right,
+    strike: row.strike,
+    expiration: row.expiration,
+    date: row.date,
+    delta: row.delta,
+  }));
+}
+
 export function loadInternalPerformance(
   db: Database.Database,
   flavor: FlavorId,
   bucket: InternalPerformanceBucket,
+  method: InternalReturnMethod = "capital",
   now = new Date(),
 ): InternalPerformanceChart {
   const accountWhere = strategyTradesAccountWhereSql(flavor, "a");
@@ -590,9 +669,19 @@ export function loadInternalPerformance(
     price: row.price,
   }));
 
+  const optionDeltas = optionDeltaPoints(db, flavor, bucket, cusips, fresh);
   const built =
     dates.length > 0
-      ? buildInternalPerformanceSeries(fills, { asOf, dates, sharePrices, optionMarks, openHoldings, shareSnapshots })
+      ? buildInternalPerformanceSeries(fills, {
+          asOf,
+          dates,
+          sharePrices,
+          optionMarks,
+          optionDeltas,
+          openHoldings,
+          shareSnapshots,
+          method,
+        })
       : { symbols: [], bySymbol: {}, audit: [] };
 
   const ranked = [...built.symbols].sort(
@@ -612,6 +701,7 @@ export function loadInternalPerformance(
   }
 
   return {
+    method,
     symbols: colored,
     audit: built.audit,
     chart_data: dates.map((date, index) => {
