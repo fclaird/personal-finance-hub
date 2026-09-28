@@ -4,7 +4,9 @@ import { getGlanceAlignedPortfolioValueSeriesByBucket, resolvePerformanceTrackin
 import { resolveViewScope } from "@/lib/viewScope";
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
-import { countBenchmarkPriceRows, ensureBenchmarkHistory } from "@/lib/market/benchmarks";
+import { countBenchmarkPriceRows, ensureBenchmarkHistory, ensureYahooBenchmarkHistory } from "@/lib/market/benchmarks";
+import { PERFORMANCE_BENCHMARKS, type ExtraPerformanceBenchmarkId } from "@/lib/market/performanceBenchmarks";
+import { yahooChartSymbol } from "@/lib/market/yahooChartFetch";
 import {
   chartDataFromDenseSeries,
   chartDataFromSnapshotRows,
@@ -13,6 +15,7 @@ import {
   getCachedBenchmarkSeriesLocal,
   portfolioAsOfIsoDate,
   shouldUseSnapshotFallback,
+  withExtraBenchmarkSeries,
 } from "@/lib/portfolio/snapshots";
 import {
   timeframeToCutoffIso,
@@ -83,6 +86,19 @@ export async function GET(req: Request) {
     await ensureBenchmarkHistory("SPY", needThrough);
     await ensureBenchmarkHistory("QQQ", needThrough);
 
+    const extraBenchmarks = PERFORMANCE_BENCHMARKS.filter(
+      (b): b is (typeof PERFORMANCE_BENCHMARKS)[number] & { id: ExtraPerformanceBenchmarkId } =>
+        b.id !== "spy" && b.id !== "qqq",
+    );
+    for (const b of extraBenchmarks) {
+      try {
+        if (b.provider === "schwab") await ensureBenchmarkHistory(b.symbol, needThrough);
+        else await ensureYahooBenchmarkHistory(b.symbol, needThrough);
+      } catch (e) {
+        logError(`performance_benchmark_${b.id}`, e);
+      }
+    }
+
     const snapRows = (
       cutoff
         ? db.prepare(
@@ -110,6 +126,14 @@ export async function GET(req: Request) {
 
     const benchSpy = getCachedBenchmarkSeriesLocal(db, "SPY");
     const benchQq = getCachedBenchmarkSeriesLocal(db, "QQQ");
+    const extraSeries = extraBenchmarks.map((b) => ({
+      id: b.id,
+      series: getCachedBenchmarkSeriesLocal(
+        db,
+        b.provider === "yahoo" ? yahooChartSymbol(b.symbol) : b.symbol,
+        b.provider,
+      ),
+    }));
     const spyRows = countBenchmarkPriceRows("SPY");
     const qqqRows = countBenchmarkPriceRows("QQQ");
 
@@ -164,6 +188,7 @@ export async function GET(req: Request) {
 
     if (chart_data.length > 0) {
       chart_data = extendChartDataThroughNow(chart_data, benchSpy, benchQq, nowMs);
+      chart_data = withExtraBenchmarkSeries(chart_data, extraSeries);
       chart_data = chart_data.map((row, idx) => ({ ...row, seq_index: idx }));
     }
 

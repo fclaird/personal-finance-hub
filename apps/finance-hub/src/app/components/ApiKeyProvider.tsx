@@ -43,7 +43,9 @@ export function ApiKeyProvider({ children }: { children: ReactNode }) {
     window.location.reload();
   }
 
-  const showGate = checked && apiKeyRequired && !unlocked && !getStoredApiKey();
+  if (!checked) return <div className="min-h-dvh" />;
+
+  const showGate = apiKeyRequired && !unlocked && !getStoredApiKey();
 
   if (showGate) {
     return (

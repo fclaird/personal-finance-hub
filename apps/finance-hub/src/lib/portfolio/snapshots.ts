@@ -4,6 +4,7 @@ import type { PortfolioValuePoint } from "@/lib/analytics/performance";
 import { getPortfolioValueSeriesByBucket } from "@/lib/analytics/performance";
 import type { DataMode } from "@/lib/dataMode";
 import { newId } from "@/lib/id";
+import type { ExtraPerformanceBenchmarkId } from "@/lib/market/performanceBenchmarks";
 import type { PerformanceHistoryTimeframe } from "@/lib/portfolio/performanceWindow";
 
 export type PortfolioSnapshotBucket = "combined" | "retirement" | "brokerage";
@@ -262,6 +263,11 @@ export type PerformanceHistoryChartRow = {
   portfolio: number;
   spy: number | null;
   qqq: number | null;
+  /** Extra benchmarks, indexed the same way as SPY/QQQ (0 at the first chart date). */
+  iwm?: number | null;
+  wti?: number | null;
+  btc?: number | null;
+  eth?: number | null;
   raw_portfolio_value: number;
   spy_close: number | null;
   qqq_close: number | null;
@@ -292,6 +298,30 @@ function benchPctSeries(bench: BenchRow[], isoDate: string, baseline: number | n
   const close = baselineCloseOnOrBefore(bench, isoDate);
   if (close == null) return null;
   return ((close / baseline) - 1) * 100;
+}
+
+/** Cumulative % vs the close on or before the first date. Missing baseline yields nulls. */
+export function benchmarkIndexedPctByDate(
+  bench: Array<{ date: string; close: number }>,
+  dates: string[],
+): Array<number | null> {
+  if (dates.length === 0) return [];
+  const baseline = baselineCloseOnOrBefore(bench, dates[0]!);
+  return dates.map((d) => benchPctSeries(bench, d, baseline));
+}
+
+export function withExtraBenchmarkSeries(
+  rows: PerformanceHistoryChartRow[],
+  extras: Array<{ id: ExtraPerformanceBenchmarkId; series: Array<{ date: string; close: number }> }>,
+): PerformanceHistoryChartRow[] {
+  if (rows.length === 0 || extras.length === 0) return rows;
+  const dates = rows.map((r) => r.date);
+  const pcts = extras.map((e) => ({ id: e.id, values: benchmarkIndexedPctByDate(e.series, dates) }));
+  return rows.map((row, i) => {
+    const next: PerformanceHistoryChartRow = { ...row };
+    for (const p of pcts) next[p.id] = p.values[i] ?? null;
+    return next;
+  });
 }
 
 /** Build indexed % series from weekly snapshot rows (normalize first point in window to 0% change / index 100 base for stats). */
@@ -403,14 +433,18 @@ export function shouldUseSnapshotFallback(snapshotCountInWindow: number, tf: Per
   return false;
 }
 
-export function getCachedBenchmarkSeriesLocal(db: Database.Database, symbol: string): BenchRow[] {
+export function getCachedBenchmarkSeriesLocal(
+  db: Database.Database,
+  symbol: string,
+  provider: "schwab" | "yahoo" = "schwab",
+): BenchRow[] {
   return db
     .prepare(
       `
       SELECT date, close FROM price_points
-      WHERE provider = 'schwab' AND symbol = ?
+      WHERE provider = ? AND symbol = ?
       ORDER BY date ASC
     `,
     )
-    .all(symbol) as BenchRow[];
+    .all(provider, symbol) as BenchRow[];
 }
