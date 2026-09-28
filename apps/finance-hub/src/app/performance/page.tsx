@@ -8,6 +8,13 @@ import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { filletLinearCurve } from "@/lib/charts/curveFilletLinear";
 import { formatDisplayDate } from "@/lib/formatDate";
+import {
+  PERFORMANCE_BENCHMARKS,
+  PORTFOLIO_LINE_COLOR,
+  type PerformanceBenchmarkId,
+} from "@/lib/market/performanceBenchmarks";
+
+const BENCHMARK_PREF_KEY = "fh.performance.benchmarks.v1";
 
 type HistoryChartRow = {
   date: string;
@@ -15,6 +22,10 @@ type HistoryChartRow = {
   portfolio: number;
   spy: number | null;
   qqq: number | null;
+  iwm?: number | null;
+  wti?: number | null;
+  btc?: number | null;
+  eth?: number | null;
 };
 
 type HistoryPayload = {
@@ -40,9 +51,26 @@ type ChartRow = {
   asOfLabel: string;
   seqIndex: number;
   Portfolio: number;
-  SPY: number | null;
-  QQQ: number | null;
+  spy: number | null;
+  qqq: number | null;
+  iwm: number | null;
+  wti: number | null;
+  btc: number | null;
+  eth: number | null;
 };
+
+function storedBenchmarkIds(): PerformanceBenchmarkId[] | null {
+  try {
+    const raw = window.localStorage.getItem(BENCHMARK_PREF_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const allowed = new Set<string>(PERFORMANCE_BENCHMARKS.map((b) => b.id));
+    return parsed.filter((id): id is PerformanceBenchmarkId => typeof id === "string" && allowed.has(id));
+  } catch {
+    return null;
+  }
+}
 
 function formatPct(v: number) {
   const sign = v >= 0 ? "+" : "";
@@ -110,6 +138,27 @@ export default function PerformancePage() {
   const [hist, setHist] = useState<HistoryPayload | null>(null);
   const [histLoading, setHistLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [enabledIds, setEnabledIds] = useState<PerformanceBenchmarkId[]>(() =>
+    PERFORMANCE_BENCHMARKS.map((b) => b.id),
+  );
+  const [prefsReady, setPrefsReady] = useState(false);
+
+  useEffect(() => {
+    const stored = storedBenchmarkIds();
+    if (stored) setEnabledIds(stored);
+    setPrefsReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!prefsReady) return;
+    window.localStorage.setItem(BENCHMARK_PREF_KEY, JSON.stringify(enabledIds));
+  }, [enabledIds, prefsReady]);
+
+  const enabled = useMemo(() => new Set(enabledIds), [enabledIds]);
+
+  function toggleBenchmark(id: PerformanceBenchmarkId) {
+    setEnabledIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -143,8 +192,12 @@ export default function PerformancePage() {
       asOfLabel: formatDisplayDate(r.date, { fallback: r.date }),
       seqIndex: r.seq_index,
       Portfolio: r.portfolio,
-      SPY: r.spy,
-      QQQ: r.qqq,
+      spy: r.spy,
+      qqq: r.qqq,
+      iwm: r.iwm ?? null,
+      wti: r.wti ?? null,
+      btc: r.btc ?? null,
+      eth: r.eth ?? null,
     }));
   }, [hist]);
 
@@ -154,19 +207,16 @@ export default function PerformancePage() {
     return m;
   }, [chartData]);
 
-  const COLORS = {
-    portfolio: "#0f766e",
-    SPY: "#2563eb",
-    QQQ: "#0891b2",
-  } as const;
-
   const trackingStart = hist?.ok ? hist.meta?.tracking_start : null;
   const trackingResetForward = hist?.ok ? hist.meta?.tracking_reset_forward === true : false;
   const trackingStartLabel = trackingStart ? formatDisplayDate(trackingStart) : "today";
 
+  const missingBenchmarks = PERFORMANCE_BENCHMARKS.filter(
+    (b) => enabled.has(b.id) && chartData.length > 0 && chartData.every((row) => row[b.id] == null),
+  );
   const benchWarn =
-    hist?.ok && (hist.meta?.benchmark_spy_rows ?? 0) === 0
-      ? "No SPY daily prices in the local cache yet. Benchmark lines stay hidden until Schwab price history loads."
+    missingBenchmarks.length > 0
+      ? `No daily prices cached yet for ${missingBenchmarks.map((b) => b.label).join(", ")}.`
       : null;
 
   const returnSummary =
@@ -186,7 +236,7 @@ export default function PerformancePage() {
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
             Cumulative % change from the first tracked trading day (weekdays only). Portfolio totals match the
             terminal quick glance: Schwab liquidation value plus external holdings, not reverse-engineered position
-            math. SPY and QQQ use the same scale.
+            math. Benchmarks share that scale — toggle a name to show or hide its line.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -262,19 +312,37 @@ export default function PerformancePage() {
         </div>
 
         <div className="px-4 py-3">
-        <div className="mb-3 flex flex-wrap items-center gap-4 text-sm text-zinc-600 dark:text-zinc-400">
-          <div className="inline-flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: COLORS.portfolio }} />
-            <span>Portfolio</span>
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-sm" role="group" aria-label="Benchmarks">
+          <div className="inline-flex items-center gap-2 px-1 text-zinc-700 dark:text-zinc-200">
+            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: PORTFOLIO_LINE_COLOR }} />
+            <span style={{ color: PORTFOLIO_LINE_COLOR }}>Portfolio</span>
           </div>
-          <div className="inline-flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: COLORS.SPY }} />
-            <span>SPY</span>
-          </div>
-          <div className="inline-flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: COLORS.QQQ }} />
-            <span>QQQ</span>
-          </div>
+          {PERFORMANCE_BENCHMARKS.map((b) => {
+            const on = enabled.has(b.id);
+            return (
+              <button
+                key={b.id}
+                type="button"
+                aria-pressed={on}
+                onClick={() => toggleBenchmark(b.id)}
+                className={
+                  "inline-flex items-center gap-2 rounded-full border bg-white/80 px-2.5 py-1 text-sm font-medium dark:bg-zinc-950/40 " +
+                  (on ? "" : "opacity-45")
+                }
+                style={{ color: b.color, borderColor: b.color }}
+              >
+                <span
+                  className="h-2.5 w-2.5 rounded-full"
+                  style={
+                    on
+                      ? { backgroundColor: b.color }
+                      : { backgroundColor: "transparent", boxShadow: `inset 0 0 0 1.5px ${b.color}` }
+                  }
+                />
+                <span style={{ color: b.color }}>{b.label}</span>
+              </button>
+            );
+          })}
           {returnSummary ? <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">{returnSummary}</span> : null}
           {benchWarn ? <span className="text-xs text-amber-600 dark:text-amber-400">{benchWarn}</span> : null}
         </div>
@@ -340,42 +408,39 @@ export default function PerformancePage() {
                     return (
                       <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs shadow-md dark:border-white/20 dark:bg-zinc-950">
                         <div className="font-medium text-zinc-900 dark:text-zinc-100">{row.asOfLabel}</div>
-                        <div className="mt-1 space-y-0.5 text-zinc-700 dark:text-zinc-300">
-                          <div>Portfolio: {formatPct(row.Portfolio)}</div>
-                          {row.SPY != null ? <div>SPY: {formatPct(row.SPY)}</div> : null}
-                          {row.QQQ != null ? <div>QQQ: {formatPct(row.QQQ)}</div> : null}
+                        <div className="mt-1 space-y-0.5">
+                          <div style={{ color: PORTFOLIO_LINE_COLOR }}>Portfolio: {formatPct(row.Portfolio)}</div>
+                          {PERFORMANCE_BENCHMARKS.filter((b) => enabled.has(b.id) && row[b.id] != null).map((b) => (
+                            <div key={b.id} style={{ color: b.color }}>
+                              {b.label}: {formatPct(row[b.id]!)}
+                            </div>
+                          ))}
                         </div>
                       </div>
                     );
                   }}
                 />
+                {PERFORMANCE_BENCHMARKS.filter((b) => enabled.has(b.id)).map((b) => (
+                  <Line
+                    key={b.id}
+                    type={filletLinearCurve}
+                    dataKey={b.id}
+                    name={b.label}
+                    strokeWidth={2}
+                    dot={false}
+                    stroke={b.color}
+                    connectNulls={false}
+                    isAnimationActive={false}
+                  />
+                ))}
+                {/* Rendered last so the portfolio line draws on top of the benchmarks. */}
                 <Line
                   type={filletLinearCurve}
                   dataKey="Portfolio"
                   name="Portfolio"
                   strokeWidth={2}
                   dot={false}
-                  stroke={COLORS.portfolio}
-                  isAnimationActive={false}
-                />
-                <Line
-                  type={filletLinearCurve}
-                  dataKey="SPY"
-                  name="SPY"
-                  strokeWidth={2}
-                  dot={false}
-                  stroke={COLORS.SPY}
-                  connectNulls={false}
-                  isAnimationActive={false}
-                />
-                <Line
-                  type={filletLinearCurve}
-                  dataKey="QQQ"
-                  name="QQQ"
-                  strokeWidth={2}
-                  dot={false}
-                  stroke={COLORS.QQQ}
-                  connectNulls={false}
+                  stroke={PORTFOLIO_LINE_COLOR}
                   isAnimationActive={false}
                 />
               </LineChart>

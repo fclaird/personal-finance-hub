@@ -1076,7 +1076,7 @@ export default function TerminalPage() {
             <EditablePageHeading pageId="terminal" defaultTitle="Terminal" />
           </h1>
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Portfolio-aware quote monitor (holdings + option underlyings) with a big-name movers board. Live equity refresh runs every 60 seconds during US RTH only (09:30–16:00 ET).
+            Holdings, option underlyings, and movers.
           </p>
           {!rthOpen ? (
             <p className="mt-2 text-xs font-medium text-amber-800 dark:text-amber-200">
@@ -1125,9 +1125,8 @@ export default function TerminalPage() {
             children: (
               <>
                 <div className="text-[11px] text-zinc-600 dark:text-zinc-400">
-                  From <span className="font-mono">TERMINAL_FUTURES_SYMBOLS</span> (e.g.{" "}
-                  <span className="font-mono">/ESM6,/NQM6</span>). Global ES/NQ/Nikkei/Russell are in Quick glance →
-                  Alternative. Markets slots 2–4 and all Alternative tiles are selectable (Russell, Gold, Bitcoin, Ethereum, VIX, WTI, Nikkei, FTSE).
+                  Contracts from <span className="font-mono">TERMINAL_FUTURES_SYMBOLS</span>. ES, NQ, and the other
+                  indexes sit on Quick glance.
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {futuresItems.map((row) => {

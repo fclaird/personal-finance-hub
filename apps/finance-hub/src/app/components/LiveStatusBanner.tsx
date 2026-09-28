@@ -26,30 +26,21 @@ export function LiveStatusBanner() {
     return () => clearTimeout(t);
   }, []);
 
-  const view = useMemo(() => {
-    if (!status) return { live: null as null | boolean, text: "Checking Schwab status…" };
-    if (status.ok === false) return { live: false, text: `LIVE status error: ${status.error}` };
-    if (!status.connected) return { live: false, text: "NOT LIVE: Connect Schwab to view live data." };
-    return { live: true, text: status.accessValid ? "LIVE (Schwab): Connected." : "LIVE (Schwab): Connected (token will refresh on next API call)." };
+  const problem = useMemo(() => {
+    if (!status || (status.ok && status.connected)) return null;
+    if (status.ok === false) return `Schwab status error: ${status.error}`;
+    return "Schwab is not connected.";
   }, [status]);
 
-  const live = view.live;
-  const bg =
-    live === true
-      ? "bg-blue-600 text-white"
-      : live === false
-        ? "bg-red-600 text-white"
-        : "bg-zinc-200 text-zinc-900 dark:bg-white/10 dark:text-zinc-200";
+  if (!problem) return null;
 
   return (
-    <div className={bg}>
+    <div className="bg-red-600 text-white">
       <div className="flex w-full max-w-[120rem] items-center justify-between gap-4 py-2.5 pl-5 pr-7 text-[15px] leading-snug">
-        <div className="min-w-0 truncate font-semibold">{view.text}</div>
-        {live !== true ? (
-          <Link href="/connections" className="shrink-0 rounded-full bg-white/15 px-3.5 py-1.5 text-[13px] font-bold hover:bg-white/25">
-            Connections
-          </Link>
-        ) : null}
+        <div className="min-w-0 truncate font-semibold">{problem}</div>
+        <Link href="/connections" className="shrink-0 rounded-full bg-white/15 px-3.5 py-1.5 text-[13px] font-bold hover:bg-white/25">
+          Connections
+        </Link>
       </div>
     </div>
   );

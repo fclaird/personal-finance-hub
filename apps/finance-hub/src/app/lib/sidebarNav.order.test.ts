@@ -82,3 +82,22 @@ test("readSidebarNavOrderFromStorage uses per-flavor key for rorie", () => {
     Object.defineProperty(globalThis, "localStorage", { value: prev, configurable: true });
   }
 });
+
+test("readSidebarNavOrderFromStorage returns a saved custom order instead of the default", () => {
+  const ls = createLocalStorageMock();
+  const key = sidebarNavOrderStorageKeyForFlavor("main");
+  const saved = ["/performance", "/alerts", "/terminal"];
+  ls.setItem(key, JSON.stringify(saved));
+  const prev = globalThis.localStorage;
+  Object.defineProperty(globalThis, "localStorage", { value: ls, configurable: true });
+  try {
+    const order = readSidebarNavOrderFromStorage("main");
+    assert.equal(order[0], "/performance");
+    assert.equal(order[1], "/alerts");
+    assert.equal(order[2], "/terminal");
+    assert.notDeepEqual(order, defaultSidebarNavOrder("main"));
+    assert.equal(ls.getItem(key), JSON.stringify(saved));
+  } finally {
+    Object.defineProperty(globalThis, "localStorage", { value: prev, configurable: true });
+  }
+});

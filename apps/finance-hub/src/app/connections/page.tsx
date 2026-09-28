@@ -217,8 +217,7 @@ export default function ConnectionsPage() {
           <EditablePageHeading pageId="connections" defaultTitle="Welcome" />
         </h1>
         <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-          Choose a flavor to scope accounts and navigation, then connect Schwab. Tokens are stored encrypted on disk
-          using `FINANCE_HUB_PASSPHRASE`.
+          Choose a flavor, then connect Schwab. Tokens stay encrypted on this machine.
         </p>
       </div>
 
@@ -327,9 +326,12 @@ export default function ConnectionsPage() {
           </button>
         </div>
 
-        <div className="mt-3 text-xs text-zinc-600 dark:text-zinc-400">
-          Note: Schwab connect requires `SCHWAB_CLIENT_ID`, `SCHWAB_CLIENT_SECRET`, and `SCHWAB_REDIRECT_URI` in `.env.local`.
-        </div>
+        <details className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+          <summary className="cursor-pointer select-none">Setup notes</summary>
+          <p className="mt-1.5">
+            Schwab connect needs SCHWAB_CLIENT_ID, SCHWAB_CLIENT_SECRET, and SCHWAB_REDIRECT_URI in .env.local.
+          </p>
+        </details>
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <button

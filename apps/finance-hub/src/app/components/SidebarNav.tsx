@@ -33,6 +33,7 @@ export function SidebarNav({
   const [avail, setAvail] = useState<{ hasSchwab: boolean }>({ hasSchwab: false });
   const [flavor, setFlavor] = useState<FlavorId>(() => readFlavorCookieClient() ?? "main");
   const [flavorLabel, setFlavorLabel] = useState("Main");
+  const [schwabLive, setSchwabLive] = useState<boolean | null>(null);
   const privacy = usePrivacy();
   const defaultOrder = useMemo(() => defaultSidebarNavOrder(flavor), [flavor]);
   const storageKey = useMemo(() => sidebarNavOrderStorageKeyForFlavor(flavor), [flavor]);
@@ -68,9 +69,10 @@ export function SidebarNav({
   useEffect(() => {
     void (async () => {
       try {
-        const [modeResp, flavorResp] = await Promise.all([
+        const [modeResp, flavorResp, schwabResp] = await Promise.all([
           fetch("/api/data-mode", { cache: "no-store" }),
           fetch("/api/flavor", { cache: "no-store" }),
+          fetch("/api/schwab/status", { cache: "no-store" }),
         ]);
         const modeJson = (await modeResp.json()) as {
           ok: boolean;
@@ -91,6 +93,8 @@ export function SidebarNav({
           const match = flavorJson.flavors?.find((f) => f.id === flavorJson.flavor);
           if (match) setFlavorLabel(match.label);
         }
+        const schwabJson = (await schwabResp.json()) as { ok?: boolean; connected?: boolean };
+        setSchwabLive(schwabJson.ok === true && schwabJson.connected === true);
       } catch {
         // ignore
       }
@@ -118,6 +122,16 @@ export function SidebarNav({
         <div className="flex items-center justify-between gap-2">
           <div className="text-[15px] font-semibold tracking-tight">Finance Hub</div>
           <div className="flex shrink-0 items-center gap-1.5">
+            {schwabLive != null ? (
+              <span
+                className={
+                  "inline-block h-2 w-2 shrink-0 rounded-full " +
+                  (schwabLive ? "bg-emerald-500" : "bg-red-500")
+                }
+                title={schwabLive ? "Schwab connected" : "Schwab not connected"}
+                aria-label={schwabLive ? "Schwab connected" : "Schwab not connected"}
+              />
+            ) : null}
             <div
               className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-bold tracking-wide text-zinc-700 dark:bg-white/10 dark:text-zinc-300"
               title="Active flavor"
@@ -154,13 +168,13 @@ export function SidebarNav({
 
       <div className="mt-5 rounded-xl border border-zinc-300 bg-white/70 p-3 dark:border-white/20 dark:bg-black/30">
         <div className="px-0.5 text-xs font-semibold tracking-wide text-zinc-700 dark:text-zinc-300">Data source</div>
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        <div className="mt-3 flex flex-col gap-2">
           <button
             type="button"
             onClick={() => void setDataMode("schwab")}
             disabled={!avail.hasSchwab}
             className={
-              "rounded-lg px-2.5 py-2 text-[13px] font-semibold transition " +
+              "w-full rounded-lg px-2.5 py-2 text-[13px] font-semibold transition " +
               (mode === "schwab"
                 ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
                 : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 disabled:opacity-40 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
@@ -169,23 +183,22 @@ export function SidebarNav({
           >
             Schwab
           </button>
+          <button
+            type="button"
+            onClick={() => void setDataMode("auto")}
+            className={
+              "w-full rounded-lg px-2.5 py-2 text-[13px] font-semibold transition " +
+              (mode === "auto"
+                ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
+                : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
+            }
+            title="All synced accounts (Schwab, external/manual, and any other connections)"
+          >
+            Auto (latest)
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => void setDataMode("auto")}
-          className={
-            "mt-3 w-full rounded-lg px-2.5 py-2 text-[13px] font-semibold transition " +
-            (mode === "auto"
-              ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
-              : "border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5")
-          }
-          title="All synced accounts (Schwab, external/manual, and any other connections)"
-        >
-          Auto (latest)
-        </button>
       </div>
       <nav className="mt-5 flex flex-col gap-1.5" aria-label="Main navigation">
-        <p className="px-1 text-[11px] text-zinc-500 dark:text-zinc-400">Drag ⠿ to reorder</p>
         {orderedItems.map((item) => {
           const active = item.prefix ? pathname.startsWith(item.prefix) : pathname === item.href;
           return (
