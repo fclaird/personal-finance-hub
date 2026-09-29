@@ -8,6 +8,8 @@ import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatUsdCompact } from "@/lib/format";
 import { formatDisplayDate } from "@/lib/formatDate";
+import { oncePerPageOpen } from "@/lib/pageOpenSync";
+import { SYNC_STAMP } from "@/lib/syncFreshness";
 
 type Row = {
   id: string;
@@ -73,15 +75,8 @@ async function postFinnhubSync(force: boolean): Promise<FinnhubSyncJson> {
   return (await resp.json()) as FinnhubSyncJson;
 }
 
-let finnhubAutoSyncFlight: Promise<FinnhubSyncJson> | null = null;
-
 function postFinnhubSyncOnce(): Promise<FinnhubSyncJson> {
-  if (!finnhubAutoSyncFlight) {
-    finnhubAutoSyncFlight = postFinnhubSync(false).finally(() => {
-      finnhubAutoSyncFlight = null;
-    });
-  }
-  return finnhubAutoSyncFlight;
+  return oncePerPageOpen(SYNC_STAMP.earningsFinnhub, () => postFinnhubSync(false));
 }
 
 function finnhubSyncSummary(json: FinnhubSyncJson): string {

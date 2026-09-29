@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { ensureFundamentalsSnapshotsFresh } from "@/lib/dividends/ensureFundamentals";
+import { SYNC_STAMP } from "@/lib/syncFreshness";
+import { claimSync, recordSyncStamp } from "@/lib/syncStamp";
 import {
   aggregateBySymbol,
   buildSchwabDividendBook,
@@ -9,8 +11,12 @@ import {
 } from "@/lib/dividends/schwabDividendBook";
 import { ensureBookLiveStartedAt, syncBookForwardSnaps } from "@/lib/dividends/bookForwardSnap";
 
-export async function POST() {
+export async function POST(req: Request) {
   const db = getDb();
+  const body = (await req.json().catch(() => ({}))) as { force?: boolean };
+  if (claimSync(db, SYNC_STAMP.dividendsLive, body.force === true) === "skip") {
+    return NextResponse.json({ ok: true, skipped: true });
+  }
   try {
     const raw = loadLatestSchwabPositionRows(db);
     const symbols = [...new Set(raw.map((r) => r.symbol.toUpperCase()))];
@@ -24,8 +30,10 @@ export async function POST() {
     ensureBookLiveStartedAt(db);
     const snap = await syncBookForwardSnaps(db, new Date(), { fetchLiveQuotes: true, backfill: true });
 
+    recordSyncStamp(db, SYNC_STAMP.dividendsLive, new Date().toISOString());
     return NextResponse.json({
       ok: true,
+      skipped: false,
       symbols: book.dividendRows.length,
       equitySymbols: aggregateBySymbol(raw).length,
       fundamentalsCaptured: symbols.length,
