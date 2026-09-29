@@ -9,7 +9,9 @@ import { FlavorPasswordDialog } from "@/app/components/FlavorPasswordDialog";
 import type { FlavorId } from "@/lib/flavor";
 import { getFlavorConfig } from "@/lib/flavors/registry";
 import { formatDisplayDateTime } from "@/lib/formatDate";
+import { fetchSyncFresh, oncePerPageOpen } from "@/lib/pageOpenSync";
 import { MAX_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
+import { SYNC_STAMP } from "@/lib/syncFreshness";
 
 type FlavorOption = {
   id: FlavorId;
@@ -19,7 +21,7 @@ type FlavorOption = {
   pillActiveClass?: string;
 };
 
-type SyncResult = { ok: boolean; accounts?: number; error?: string };
+type SyncResult = { ok: boolean; accounts?: number; error?: string; skipped?: boolean };
 type TxSyncResult = {
   ok: boolean;
   lookbackDays?: number;
@@ -28,7 +30,7 @@ type TxSyncResult = {
   classified?: number;
   error?: string;
 };
-type GreeksResult = { ok: boolean; updated?: number; error?: string };
+type GreeksResult = { ok: boolean; updated?: number; error?: string; skipped?: boolean };
 type SchwabStatus =
   | { ok: true; connected: false }
   | {
@@ -91,14 +93,17 @@ export default function ConnectionsPage() {
     return `Transactions: ${txResult.transactionsUpserted ?? 0} upserted, ${txResult.classified ?? 0} classified across ${txResult.accountsUpdated ?? 0} account(s)${lb}.`;
   }, [txResult]);
 
-  async function loadSchwabStatus() {
+  async function loadSchwabStatus(): Promise<SchwabStatus> {
     setCheckingStatus(true);
     try {
       const resp = await fetch("/api/schwab/status", { cache: "no-store" });
       const json = (await resp.json()) as SchwabStatus;
       setSchwabStatus(json);
+      return json;
     } catch (e) {
-      setSchwabStatus({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      const failed: SchwabStatus = { ok: false, error: e instanceof Error ? e.message : String(e) };
+      setSchwabStatus(failed);
+      return failed;
     } finally {
       setCheckingStatus(false);
     }
@@ -144,24 +149,40 @@ export default function ConnectionsPage() {
     pendingFlavor != null ? flavorOptions.find((f) => f.id === pendingFlavor)?.passwordRequired : undefined;
 
   useEffect(() => {
+    let cancelled = false;
     const t = setTimeout(() => {
-      void loadFlavor();
-      void loadSchwabStatus();
+      void (async () => {
+        void loadFlavor();
+        const status = await loadSchwabStatus();
+        if (cancelled || !status.ok || !status.connected) return;
+        await oncePerPageOpen("connections.schwab", async () => {
+          if (!(await fetchSyncFresh(SYNC_STAMP.schwabHoldings))) await syncNow(false);
+          if (cancelled) return;
+          if (!(await fetchSyncFresh(SYNC_STAMP.schwabGreeks))) await refreshGreeks(false);
+        });
+      })();
     }, 0);
-    return () => clearTimeout(t);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
   }, []);
 
   const showPlaid = flavor == null || flavorOptions.find((f) => f.id === flavor)?.features.plaid !== false;
   const tileOrder = showPlaid ? (["flavor", "schwab", "plaid"] as const) : (["flavor", "schwab"] as const);
 
-  async function syncNow() {
+  async function syncNow(force: boolean) {
     setSyncing(true);
     setResult(null);
     setGreeks(null);
     try {
-      const resp = await fetch("/api/schwab/sync", { method: "POST" });
+      const resp = await fetch("/api/schwab/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force }),
+      });
       const json = (await resp.json()) as SyncResult;
-      setResult(json);
+      if (!json.skipped) setResult(json);
       await loadSchwabStatus();
     } catch (e) {
       setResult({ ok: false, error: e instanceof Error ? e.message : String(e) });
@@ -189,13 +210,17 @@ export default function ConnectionsPage() {
     }
   }
 
-  async function refreshGreeks() {
+  async function refreshGreeks(force: boolean) {
     setRefreshingGreeks(true);
     setGreeks(null);
     try {
-      const resp = await fetch("/api/schwab/refresh-greeks", { method: "POST" });
+      const resp = await fetch("/api/schwab/refresh-greeks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force }),
+      });
       const json = (await resp.json()) as GreeksResult;
-      setGreeks(json);
+      if (!json.skipped) setGreeks(json);
       await loadSchwabStatus();
     } catch (e) {
       setGreeks({ ok: false, error: e instanceof Error ? e.message : String(e) });
@@ -341,7 +366,7 @@ export default function ConnectionsPage() {
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <button
             type="button"
-            onClick={syncNow}
+            onClick={() => void syncNow(true)}
             disabled={syncing}
             className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
           >
@@ -358,7 +383,7 @@ export default function ConnectionsPage() {
           </button>
           <button
             type="button"
-            onClick={refreshGreeks}
+            onClick={() => void refreshGreeks(true)}
             disabled={refreshingGreeks}
             className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
           >
