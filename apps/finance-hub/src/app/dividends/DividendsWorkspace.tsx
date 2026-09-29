@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CartesianGrid,
   ComposedChart,
@@ -26,7 +26,9 @@ import {
   formatModeledChartMonthEndLabel,
   formatPeriodEndingLabel,
 } from "@/lib/formatDate";
+import { fetchSyncFresh, oncePerPageOpen } from "@/lib/pageOpenSync";
 import { symbolPageHref } from "@/lib/symbolPage";
+import { SYNC_STAMP } from "@/lib/syncFreshness";
 import { holdingYieldPct as rowYieldPct } from "@/lib/dividends/holdingYieldPct";
 import type { PortfolioDashboard } from "@/lib/dividends/portfolioDashboard";
 import type { DividendBookBanner } from "@/lib/dividends/schwabDividendBook";
@@ -256,6 +258,9 @@ export function DividendsWorkspace() {
     await Promise.all([loadBook(), loadTable(), loadDashboard(), loadTimeline()]);
   }, [loadBook, loadTable, loadDashboard, loadTimeline]);
 
+  const loadAllRef = useRef(loadAll);
+  loadAllRef.current = loadAll;
+
   useEffect(() => {
     void (async () => {
       setError(null);
@@ -266,6 +271,39 @@ export function DividendsWorkspace() {
       }
     })();
   }, [loadAll]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const fresh = await oncePerPageOpen(`${SYNC_STAMP.dividendsLive}:probe`, () =>
+          fetchSyncFresh(SYNC_STAMP.dividendsLive),
+        );
+        if (cancelled || fresh) return;
+        const bookResp = await fetch("/api/dividends/book", { cache: "no-store" });
+        const book = (await bookResp.json()) as { ok?: boolean; hasSchwabSnapshots?: boolean };
+        if (cancelled || !book.ok || !book.hasSchwabSnapshots) return;
+        setBusy("refresh");
+        await oncePerPageOpen(SYNC_STAMP.dividendsLive, async () => {
+          const resp = await fetch("/api/dividends/refresh-live", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ force: false }),
+          });
+          const json = (await resp.json()) as { ok?: boolean; error?: string };
+          if (!json.ok) throw new Error(json.error ?? "Refresh failed");
+        });
+        if (!cancelled) await loadAllRef.current();
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setBusy(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -349,11 +387,15 @@ export function DividendsWorkspace() {
     };
   }, [chartData, showSpy, showQqq]);
 
-  async function onRefreshLive() {
+  async function onRefreshLive(force: boolean) {
     setBusy("refresh");
     setError(null);
     try {
-      const resp = await fetch("/api/dividends/refresh-live", { method: "POST" });
+      const resp = await fetch("/api/dividends/refresh-live", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force }),
+      });
       const json = (await resp.json()) as { ok?: boolean; error?: string };
       if (!json.ok) throw new Error(json.error ?? "Refresh failed");
       await loadAll();
@@ -379,7 +421,7 @@ export function DividendsWorkspace() {
           <button
             type="button"
             disabled={busy === "refresh"}
-            onClick={() => void onRefreshLive()}
+            onClick={() => void onRefreshLive(true)}
             className="h-9 rounded-lg border border-sky-400 bg-sky-50 px-3 text-sm font-semibold text-sky-950 shadow-sm hover:bg-sky-100 disabled:opacity-50 dark:border-sky-600 dark:bg-sky-950/40 dark:text-sky-100 dark:hover:bg-sky-950/60"
           >
             {busy === "refresh" ? "Refreshing…" : "Refresh live data"}

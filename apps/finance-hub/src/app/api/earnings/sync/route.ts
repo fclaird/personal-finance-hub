@@ -1,14 +1,17 @@
 import { NextResponse } from "next/server";
 
+import { getDb } from "@/lib/db";
 import { isFinnhubConfigured } from "@/lib/earnings/finnhub";
 import { deleteDemoEarnings, seedDemoEarnings } from "@/lib/earnings/store";
 import { syncEarningsFromFinnhub } from "@/lib/earnings/syncFinnhub";
+import { earningsFinnhubSyncShouldRun, readEarningsFinnhubSyncedAt, recordEarningsFinnhubSyncedAt } from "@/lib/earnings/syncFreshness";
 
 type Body = {
   demo?: boolean;
   finnhub?: boolean;
   daysAhead?: number;
   symbolUniverseLimit?: number;
+  force?: boolean;
 };
 
 export async function POST(req: Request) {
@@ -22,6 +25,18 @@ export async function POST(req: Request) {
     }
 
     if (body.finnhub !== false && isFinnhubConfigured()) {
+      const db = getDb();
+      const force = body.force === true;
+      if (
+        !earningsFinnhubSyncShouldRun({
+          force,
+          lastSuccessAt: readEarningsFinnhubSyncedAt(db),
+          nowMs: Date.now(),
+        })
+      ) {
+        return NextResponse.json({ ok: true, mode: "finnhub", skipped: true });
+      }
+
       const daysAhead = typeof body.daysAhead === "number" && body.daysAhead > 0 ? Math.min(body.daysAhead, 90) : 28;
       const symbolUniverseLimit =
         typeof body.symbolUniverseLimit === "number" && body.symbolUniverseLimit > 0
@@ -29,7 +44,8 @@ export async function POST(req: Request) {
           : 60;
 
       const result = await syncEarningsFromFinnhub({ daysAhead, symbolUniverseLimit });
-      return NextResponse.json({ ok: true, mode: "finnhub", ...result });
+      recordEarningsFinnhubSyncedAt(db, new Date().toISOString());
+      return NextResponse.json({ ok: true, mode: "finnhub", skipped: false, ...result });
     }
 
     return NextResponse.json(

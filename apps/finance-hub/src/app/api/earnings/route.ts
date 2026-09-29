@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 
+import { getDb } from "@/lib/db";
 import { isFinnhubConfigured } from "@/lib/earnings/finnhub";
 import { listEarningsRanked } from "@/lib/earnings/store";
+import { earningsFinnhubSyncShouldRun, readEarningsFinnhubSyncedAt } from "@/lib/earnings/syncFreshness";
 
 function addDays(iso: string, days: number): string {
   const d = new Date(`${iso}T12:00:00Z`);
@@ -28,11 +30,18 @@ export async function GET(req: Request) {
       };
     });
 
+    const finnhubSyncFresh = !earningsFinnhubSyncShouldRun({
+      force: false,
+      lastSuccessAt: readEarningsFinnhubSyncedAt(getDb()),
+      nowMs: now,
+    });
+
     return NextResponse.json({
       ok: true,
       from,
       to,
       finnhubConfigured: isFinnhubConfigured(),
+      finnhubSyncFresh,
       rows: out,
     });
   } catch (e) {
