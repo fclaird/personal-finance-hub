@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { FlavorId } from "@/lib/flavor";
 
 function envFlavorPassword(flavor: FlavorId): string | null {
-  const key = flavor === "main" ? "FINANCE_HUB_FLAVOR_PASSWORD_MAIN" : "FINANCE_HUB_FLAVOR_PASSWORD_RORIE";
+  const key = `FINANCE_HUB_FLAVOR_PASSWORD_${flavor.toUpperCase()}`;
   const v = process.env[key]?.trim();
   return v || null;
 }

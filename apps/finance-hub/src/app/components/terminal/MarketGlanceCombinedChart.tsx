@@ -10,9 +10,11 @@ import { mergeGlanceSeriesForChart, resolveGlanceChartLines } from "@/lib/termin
 export function MarketGlanceCombinedChart({
   items,
   windowCtx,
+  glanceNow,
 }: {
   items: UsMarketGlanceItem[];
   windowCtx: GlanceTileChartWindowCtx;
+  glanceNow?: Date;
 }) {
   const lines = useMemo(() => resolveGlanceChartLines(items), [items]);
   const chartData = useMemo(() => mergeGlanceSeriesForChart(items, windowCtx), [items, windowCtx]);
@@ -30,6 +32,7 @@ export function MarketGlanceCombinedChart({
         lines={lines}
         windowCtx={windowCtx}
         primaryLineId={primaryLineId}
+        glanceNow={glanceNow}
         height={208}
         className="h-52 w-full min-w-0"
         showLegend

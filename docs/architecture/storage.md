@@ -38,22 +38,23 @@ This document defines where **Personal Finance Hub** code, configuration, and ru
 ~/Projects/SimulatedDividendPortfolio/           # Related repo (standalone)
 ```
 
-## Flavors (main + rorie)
+## Flavors (main + rorie + peyton)
 
 Finance Hub runs as **one app** on one dev server with runtime **flavors** selected on the Connections page (`fh_flavor` cookie):
 
 | Flavor | Scope | Nav |
 |--------|--------|-----|
-| **main** | All synced accounts except `schwab_94558855` (rorie) and posterity | Full sidebar (Terminal, Positions, Strategies, …) |
+| **main** | All synced accounts except `schwab_94558855` (rorie) and `schwab_50138076` (peyton) | Full sidebar (Terminal, Positions, Strategies, Posterity, …) |
 | **rorie** | Only `schwab_94558855` | Reduced Aurora-style sidebar (no Strategies/Earnings/Posterity; Connections in nav) |
+| **peyton** | Only `schwab_50138076` | Same reduced sidebar as rorie |
 
-All Schwab accounts sync into the shared database; flavors filter at read time in analytics, positions, and terminal views. The separate `aurora-personal-finance-hub` repo is **deprecated** — use the rorie flavor instead.
+All Schwab accounts sync into the shared database; flavors filter at read time in analytics, positions, and terminal views. The account map lives in `DEDICATED_FLAVOR_ACCOUNTS` (`apps/finance-hub/src/lib/flavors/registry.ts`). The separate `aurora-personal-finance-hub` repo is **deprecated** — use the rorie flavor instead.
 
 Flavor registry: `apps/finance-hub/src/lib/flavors/registry.ts`
 
 ## Posterity account split
 
-Schwab account **`schwab_50138076`** is isolated on the main flavor's Posterity tab via `src/lib/posterity.ts` (unchanged).
+Schwab account **`schwab_50138076`** is Peyton's flavor account. Main's Posterity tab still lists it via `src/lib/posterity.ts`. That tab is a dedicated exposure view; the Peyton flavor is the full reduced hub for the same account. Portfolio queries for Main still drop the account. The dividend forward chart remains the shared non-posterity book; Peyton's dividend holdings table is scoped to this account.
 
 ## Legacy Aurora repo
 

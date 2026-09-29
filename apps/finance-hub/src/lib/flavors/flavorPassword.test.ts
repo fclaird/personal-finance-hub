@@ -20,9 +20,19 @@ describe("flavorPassword", () => {
 
   it("does not fall back to FINANCE_HUB_PASSPHRASE", () => {
     delete process.env.FINANCE_HUB_FLAVOR_PASSWORD_RORIE;
+    delete process.env.FINANCE_HUB_FLAVOR_PASSWORD_PEYTON;
     process.env.FINANCE_HUB_PASSPHRASE = "shared";
     assert.equal(expectedFlavorPassword("rorie"), null);
     assert.equal(verifyFlavorPassword("rorie", "shared"), true);
+    assert.equal(expectedFlavorPassword("peyton"), null);
+    assert.equal(verifyFlavorPassword("peyton", "shared"), true);
+  });
+
+  it("reads peyton from FINANCE_HUB_FLAVOR_PASSWORD_PEYTON", () => {
+    process.env.FINANCE_HUB_FLAVOR_PASSWORD_PEYTON = "secret-peyton";
+    assert.equal(expectedFlavorPassword("peyton"), "secret-peyton");
+    assert.equal(verifyFlavorPassword("peyton", "secret-peyton"), true);
+    assert.equal(verifyFlavorPassword("peyton", "secret-main"), false);
   });
 
   it("allows any password when none configured", () => {
