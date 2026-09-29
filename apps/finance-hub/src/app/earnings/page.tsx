@@ -32,6 +32,62 @@ type Row = {
 
 const PCT1 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
+type EarningsGetJson = {
+  ok: boolean;
+  rows?: Row[];
+  finnhubConfigured?: boolean;
+  finnhubSyncFresh?: boolean;
+  error?: string;
+};
+
+type FinnhubSyncJson = {
+  ok: boolean;
+  error?: string;
+  skipped?: boolean;
+  eventsUpserted?: number;
+  calendarRows?: number;
+  volumeFetches?: number;
+};
+
+type PageActivity = "boot" | "finnhub" | "other" | "ready";
+
+function earningsRangeQuery(): string {
+  const today = new Date().toISOString().slice(0, 10);
+  const to = new Date(Date.now() + 50 * 86400000).toISOString().slice(0, 10);
+  return `from=${today}&to=${to}`;
+}
+
+async function fetchEarnings(): Promise<EarningsGetJson> {
+  const resp = await fetch(`/api/earnings?${earningsRangeQuery()}`);
+  const json = (await resp.json()) as EarningsGetJson;
+  if (!json.ok) throw new Error(json.error ?? "Failed to load earnings");
+  return json;
+}
+
+async function postFinnhubSync(force: boolean): Promise<FinnhubSyncJson> {
+  const resp = await fetch("/api/earnings/sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ finnhub: true, daysAhead: 28, force }),
+  });
+  return (await resp.json()) as FinnhubSyncJson;
+}
+
+let finnhubAutoSyncFlight: Promise<FinnhubSyncJson> | null = null;
+
+function postFinnhubSyncOnce(): Promise<FinnhubSyncJson> {
+  if (!finnhubAutoSyncFlight) {
+    finnhubAutoSyncFlight = postFinnhubSync(false).finally(() => {
+      finnhubAutoSyncFlight = null;
+    });
+  }
+  return finnhubAutoSyncFlight;
+}
+
+function finnhubSyncSummary(json: FinnhubSyncJson): string {
+  return `Finnhub: ${json.calendarRows ?? 0} calendar row(s), ${json.eventsUpserted ?? 0} event(s), ${json.volumeFetches ?? 0} liquidity fetch(es). IV still needs Schwab (or manual) for full rank.`;
+}
+
 function pct1(x: number | null | undefined): string {
   if (x == null || !Number.isFinite(x)) return "—";
   return `${PCT1.format(x)}%`;
@@ -60,62 +116,73 @@ export default function EarningsPage() {
   const [finnhubConfigured, setFinnhubConfigured] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [activity, setActivity] = useState<PageActivity>("boot");
 
-  const load = useCallback(async () => {
-    setError(null);
-    const today = new Date().toISOString().slice(0, 10);
-    const to = new Date(Date.now() + 50 * 86400000).toISOString().slice(0, 10);
-    const resp = await fetch(`/api/earnings?from=${today}&to=${to}`);
-    const json = (await resp.json()) as { ok: boolean; rows?: Row[]; finnhubConfigured?: boolean; error?: string };
-    if (!json.ok) throw new Error(json.error ?? "Failed to load earnings");
+  const applyEarnings = useCallback((json: EarningsGetJson) => {
     setRows(json.rows ?? []);
     setFinnhubConfigured(!!json.finnhubConfigured);
   }, []);
 
+  const load = useCallback(async () => {
+    setError(null);
+    const json = await fetchEarnings();
+    applyEarnings(json);
+  }, [applyEarnings]);
+
   useEffect(() => {
+    let cancelled = false;
     void (async () => {
       try {
-        await load();
+        const json = await fetchEarnings();
+        if (cancelled) return;
+        applyEarnings(json);
+        if (!json.finnhubConfigured || json.finnhubSyncFresh) {
+          setActivity("ready");
+          return;
+        }
+        setActivity("finnhub");
+        setMsg(null);
+        setError(null);
+        const sync = await postFinnhubSyncOnce();
+        if (cancelled) return;
+        if (!sync.ok) throw new Error(sync.error ?? "Sync failed");
+        if (!sync.skipped) setMsg(finnhubSyncSummary(sync));
+        const again = await fetchEarnings();
+        if (cancelled) return;
+        applyEarnings(again);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setActivity("ready");
       }
     })();
-  }, [load]);
+    return () => {
+      cancelled = true;
+    };
+  }, [applyEarnings]);
 
   const sorted = useMemo(() => [...rows].sort((a, b) => (b.opportunity_score ?? 0) - (a.opportunity_score ?? 0)), [rows]);
 
+  const busy = activity !== "ready";
+
   async function syncFinnhub() {
-    setLoading(true);
+    setActivity("finnhub");
     setMsg(null);
     setError(null);
     try {
-      const resp = await fetch("/api/earnings/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ finnhub: true, daysAhead: 28 }),
-      });
-      const json = (await resp.json()) as {
-        ok: boolean;
-        error?: string;
-        eventsUpserted?: number;
-        calendarRows?: number;
-        volumeFetches?: number;
-      };
+      const json = await postFinnhubSync(true);
       if (!json.ok) throw new Error(json.error ?? "Sync failed");
-      setMsg(
-        `Finnhub: ${json.calendarRows ?? 0} calendar row(s), ${json.eventsUpserted ?? 0} event(s), ${json.volumeFetches ?? 0} liquidity fetch(es). IV still needs Schwab (or manual) for full rank.`,
-      );
+      setMsg(finnhubSyncSummary(json));
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      setActivity("ready");
     }
   }
 
   async function enrichSchwab() {
-    setLoading(true);
+    setActivity("other");
     setMsg(null);
     setError(null);
     try {
@@ -127,7 +194,7 @@ export default function EarningsPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      setActivity("ready");
     }
   }
 
@@ -168,7 +235,7 @@ export default function EarningsPage() {
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
-            disabled={loading}
+            disabled={busy}
             onClick={() => void pullEarningsData()}
             title={
               finnhubConfigured
@@ -181,7 +248,7 @@ export default function EarningsPage() {
           </button>
           <button
             type="button"
-            disabled={loading || !finnhubConfigured}
+            disabled={busy || !finnhubConfigured}
             onClick={() => void syncFinnhub()}
             title={!finnhubConfigured ? "Set FINNHUB_API_KEY in .env.local" : undefined}
             className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
@@ -190,7 +257,7 @@ export default function EarningsPage() {
           </button>
           <button
             type="button"
-            disabled={loading}
+            disabled={busy}
             onClick={() => void enrichSchwab()}
             className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
           >
@@ -198,18 +265,21 @@ export default function EarningsPage() {
           </button>
           <button
             type="button"
-            disabled={loading}
+            disabled={busy}
             onClick={() => void load()}
             className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
           >
             Refresh
           </button>
         </div>
-        {!finnhubConfigured ? (
+        {activity !== "boot" && !finnhubConfigured ? (
           <p className="mt-3 text-xs text-zinc-600 dark:text-zinc-400">
             Add <span className="font-mono">FINNHUB_API_KEY</span> to <span className="font-mono">.env.local</span> for calendar + 20d dollar liquidity. Use{" "}
             <span className="font-mono">EARNINGS_WATCHLIST=SYM1,SYM2</span> when Finnhub needs per-ticker calendar queries.
           </p>
+        ) : null}
+        {activity === "finnhub" ? (
+          <p className="mt-3 text-sm text-zinc-700 dark:text-zinc-300">Syncing Finnhub calendar + liquidity…</p>
         ) : null}
         {msg ? <div className="mt-4 rounded-xl bg-zinc-50 p-3 text-sm text-zinc-800 dark:bg-white/5 dark:text-zinc-200">{msg}</div> : null}
         {error ? (
@@ -274,7 +344,11 @@ export default function EarningsPage() {
               {sorted.length === 0 ? (
                 <tr>
                   <td colSpan={12} className="py-8 text-center text-zinc-600 dark:text-zinc-400">
-                    No earnings rows in range. Sync Finnhub.
+                    {activity === "finnhub"
+                      ? "Syncing Finnhub calendar + liquidity…"
+                      : activity === "boot"
+                        ? "Loading earnings…"
+                        : "No earnings rows in range. Sync Finnhub."}
                   </td>
                 </tr>
               ) : null}
