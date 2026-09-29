@@ -117,14 +117,14 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
     return buildGlanceCardLookup(collectGlanceCards(usMarkets));
   }, [usMarkets]);
 
-  const marketsTileSpecs = useMemo(() => {
+  const marketsGlance = useMemo(() => {
     const now = new Date();
     const portfolio = usMarkets?.items[0];
-    if (!portfolio) return [];
+    if (!portfolio) return { now, specs: [] };
     const slot2Id = resolveMarketsSlotInstrumentId(2, marketsSlots[0], now);
     const slot3Id = resolveMarketsSlotInstrumentId(3, marketsSlots[1], now);
     const slot4Id = resolveMarketsSlotInstrumentId(4, marketsSlots[2], now);
-    return [
+    const specs = [
       { storedId: "portfolio" as const, resolvedId: "portfolio" as const, card: portfolio, adjustable: false },
       {
         storedId: marketsSlots[0],
@@ -148,7 +148,9 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
         slotIndex: 4 as const,
       },
     ];
+    return { now, specs };
   }, [cardLookup, marketsSlots, usMarkets?.items]);
+  const marketsTileSpecs = marketsGlance.specs;
 
   const alternativeTileSpecs = useMemo(
     () =>
@@ -364,6 +366,7 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
                     showingPriorSession={usMarkets.session.showingPriorSession}
                     updatedAt={usMarkets.updatedAt}
                     chartYDomain={isUsEquityGlanceItem(item) ? sharedChartYDomain : undefined}
+                    glanceNow={sourceMode === "markets" ? marketsGlance.now : undefined}
                     alternateTitleSelector={titleSelectorForSpec(spec)}
                   />
                 );
@@ -373,16 +376,17 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
             <MarketGlanceCombinedChart
               items={displayItems}
               windowCtx={tileChartWindowCtx}
+              glanceNow={sourceMode === "markets" ? marketsGlance.now : undefined}
             />
           )}
           <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
             {viewMode === "combined"
               ? sourceMode === "futures"
                 ? "Alternative mode: green = Globex/cash session while that market trades (~23h ES/NQ Sun 6pm–Fri 5pm ET). Gray only for daily 5–6pm ET halt or weekend. Not US stock RTH hours."
-                : "Combined view indexes each line to 100 at prior close so portfolio and index day moves are comparable. Extended pre/after-hours segments are included when available (8pm–4am ET excluded)."
+                : "Combined view indexes each line to 100 at prior close so portfolio and index day moves are comparable. Outside US RTH the portfolio series is hidden. Extended pre/after-hours segments are included when available (8pm–4am ET excluded)."
               : sourceMode === "futures"
                 ? "Each tile title opens a menu. ES/NQ are CME Globex futures; Nikkei 225 is the Tokyo cash index. Amber header = that market is closed."
-                : "Portfolio tile: indexed day % (100 = prior close), not a tradable price — use Index/$ toggle or unlock balance for dollars. Schwab liquidation + external holdings; AV sync every ~3 min in RTH. Outside US RTH, Nasdaq/S&P/Russell switch to NQ/ES/RTY and plot futures ticks since the 16:00 ET cash close (that close stays locked until the next 09:30). ES/NQ day % still uses the Globex settle. Slots 2–4 have title menus."}
+                : "Portfolio tile: indexed day % (100 = prior close), not a tradable price — use Index/$ toggle or unlock balance for dollars. Schwab liquidation + external holdings; AV sync every ~3 min in RTH. Outside US RTH the portfolio tile shows the previous close from the last completed session, with no intraday path. Nasdaq/S&P/Russell switch to NQ/ES/RTY and plot futures ticks since the 16:00 ET cash close (that close stays locked until the next 09:30). ES/NQ day % still uses the Globex settle. Slots 2–4 have title menus."}
           </div>
         </>
       ) : (

@@ -21,6 +21,7 @@ import {
   tileExtendedShadeStartX,
   type UsMarketGlanceItem,
 } from "@/app/components/terminal/MarketGlanceCard";
+import { portfolioGlancePlot } from "@/lib/terminal/portfolioGlanceDisplay";
 import {
   buildTileChartRows,
   indexTileChartRows,
@@ -247,6 +248,7 @@ export type GlanceIntradayOverlayChartProps = {
   lines: GlanceChartLine[];
   windowCtx: GlanceTileChartWindowCtx;
   primaryLineId?: string;
+  glanceNow?: Date;
   chartYDomain?: [number, number];
   height?: number;
   className?: string;
@@ -259,6 +261,7 @@ export function GlanceIntradayOverlayChart({
   lines,
   windowCtx,
   primaryLineId,
+  glanceNow,
   chartYDomain: chartYDomainOverride,
   height = 288,
   className,
@@ -274,6 +277,16 @@ export function GlanceIntradayOverlayChart({
     () => (primaryLineId ? items.find((i) => i.id === primaryLineId) : undefined),
     [items, primaryLineId],
   );
+  const hidePortfolioSeries =
+    primaryLineId === "portfolio" &&
+    primaryItem != null &&
+    glanceNow != null &&
+    portfolioGlancePlot({
+      now: glanceNow,
+      item: primaryItem,
+      displayMode: "indexed",
+      balanceUnlocked: false,
+    }).mode === "session_close";
   const overlayLines = primaryLineId ? lines.filter((line) => line.id !== primaryLineId) : lines;
   const overlayLineIds = overlayLines.map((line) => line.id);
   const usesTilePipeline = primaryLineId != null && primaryItem != null;
@@ -570,7 +583,7 @@ export function GlanceIntradayOverlayChart({
                 wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
               />
             ) : null}
-            {primaryLineId ? (
+            {primaryLineId && !hidePortfolioSeries ? (
               <>
                 <Area
                   type="linear"

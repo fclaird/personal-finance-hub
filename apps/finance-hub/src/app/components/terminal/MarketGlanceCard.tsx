@@ -40,6 +40,10 @@ import type { FuturesGlanceKind } from "@/lib/market/futuresGlanceSession";
 import type { PostCashClosePlot } from "@/lib/market/glanceMiniChartSession";
 import { futuresExtendedPhaseLabel, futuresSegmentLabel } from "@/lib/market/futuresGlanceSession";
 import { PortfolioGlanceValue } from "@/app/components/terminal/PortfolioGlanceValue";
+import {
+  PortfolioSessionCloseHeadline,
+  PortfolioSessionClosePlot,
+} from "@/app/components/terminal/PortfolioSessionClosePlot";
 import { usePortfolioGlanceUnlockedOptional } from "@/app/components/terminal/portfolioGlanceUnlocked";
 import {
   readPortfolioGlanceDisplayMode,
@@ -51,6 +55,7 @@ import {
   indexToPortfolioDollars,
   portfolioDayUsdPnl,
   portfolioGlanceItemForDisplayMode,
+  portfolioGlancePlot,
 } from "@/lib/terminal/portfolioGlanceDisplay";
 const SCHWAB_AV_SYNC_STALE_RTH_MS = 60_000;
 const SCHWAB_AV_SYNC_STALE_CLOSED_MS = 600_000;
@@ -122,6 +127,7 @@ export type MarketGlanceCardProps = {
   /** Shared Y domain across quick-glance tiles (indexed to 100 at prior close). */
   chartYDomain?: [number, number];
   className?: string;
+  glanceNow?: Date;
   /** Swappable alternate tile title menu (Markets tab 4th slot). */
   alternateTitleSelector?: {
     options: ReadonlyArray<{ id: GlanceTileInstrumentId; label: string }>;
@@ -680,6 +686,7 @@ export function MarketGlanceCard({
   showingPriorSession,
   chartYDomain,
   className,
+  glanceNow,
   alternateTitleSelector,
 }: MarketGlanceCardProps) {
   const { unlocked: portfolioUnlocked } = usePortfolioGlanceUnlockedOptional();
@@ -697,6 +704,16 @@ export function MarketGlanceCard({
     [isPortfolio, item, portfolioDisplayMode],
   );
   const portfolioIndexedDisplay = isPortfolio && portfolioDisplayMode === "indexed";
+  const portfolioPlot = useMemo(() => {
+    if (!isPortfolio || !glanceNow) return null;
+    return portfolioGlancePlot({
+      now: glanceNow,
+      item,
+      displayMode: portfolioDisplayMode,
+      balanceUnlocked: portfolioUnlocked,
+    });
+  }, [isPortfolio, glanceNow, item, portfolioDisplayMode, portfolioUnlocked]);
+  const sessionClosePlot = portfolioPlot?.mode === "session_close" ? portfolioPlot : null;
 
   const pct = displayItem.changePct;
   const up = pct == null ? true : pct >= 0;
@@ -888,8 +905,11 @@ export function MarketGlanceCard({
   );
   const extendedPct = item.extendedChangePct ?? indexValueToDayPct(item.extendedLast);
   const indexedFooter = chartUsesIndexedScale;
-  const showExtendedFooterCols =
-    isPortfolio ? (displayItem.extendedSeries?.length ?? 0) >= 2 : showExtendedChart;
+  const showExtendedFooterCols = sessionClosePlot
+    ? false
+    : isPortfolio
+      ? (displayItem.extendedSeries?.length ?? 0) >= 2
+      : showExtendedChart;
 
   const priorReferenceY = referenceBand?.priorReferenceY ?? chartBaseline;
   const sessionCloseReferenceY = referenceBand?.sessionCloseReferenceY ?? null;
@@ -958,13 +978,13 @@ export function MarketGlanceCard({
     <div
       className={
         "relative min-w-0 overflow-hidden rounded-xl border bg-zinc-50 dark:bg-zinc-900/80 " +
-        (marketClosed
+        (marketClosed || sessionClosePlot
           ? "border-amber-300/60 dark:border-amber-500/30"
           : "border-zinc-300 dark:border-white/15") +
         (className ? ` ${className}` : "")
       }
     >
-      {marketClosed ? (
+      {marketClosed || sessionClosePlot ? (
         <div className="flex items-center gap-1.5 border-b border-amber-300/50 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-900 dark:border-amber-500/25 dark:bg-amber-950/40 dark:text-amber-200">
           <span aria-hidden className="text-amber-500">
             ☀
@@ -1058,7 +1078,18 @@ export function MarketGlanceCard({
           </div>
           {isPortfolio ? (
             <div className="shrink-0 self-start text-right">
-              <PortfolioGlanceValue netValue={item.netValue} changePct={item.changePct} />
+              {sessionClosePlot ? (
+                <PortfolioSessionCloseHeadline label={sessionClosePlot.headlineLabel}>
+                  <PortfolioGlanceValue
+                    netValue={sessionClosePlot.headlineKind === "dollars" ? sessionClosePlot.headlineValue : item.netValue}
+                    changePct={sessionClosePlot.changePct}
+                    changeLabel={sessionClosePlot.changeLabel}
+                    indexLevel={sessionClosePlot.headlineKind === "index" ? sessionClosePlot.headlineValue : null}
+                  />
+                </PortfolioSessionCloseHeadline>
+              ) : (
+                <PortfolioGlanceValue netValue={item.netValue} changePct={item.changePct} />
+              )}
             </div>
           ) : showExtendedChart ? (
             <span className="shrink-0 self-start text-[10px] font-medium leading-5 text-zinc-400 dark:text-zinc-500">
@@ -1075,7 +1106,11 @@ export function MarketGlanceCard({
       </div>
 
       <div className={"relative z-0 shrink-0 overflow-hidden px-3 pt-1.5 " + GLANCE_TILE_CHART_HEIGHT_CLASS}>
-        {chartData.length >= 2 ? (
+        {sessionClosePlot ? (
+          <div className="h-full w-full min-w-0 overflow-hidden">
+            <PortfolioSessionClosePlot referencePrice={sessionClosePlot.shownReferencePrice} />
+          </div>
+        ) : chartData.length >= 2 ? (
           <div className="h-full w-full min-w-0 overflow-hidden">
             <ResponsiveContainer width="100%" height="100%" minWidth={64} minHeight={72}>
               <AreaChart data={plotData} margin={CHART_MARGIN}>
@@ -1300,12 +1335,24 @@ export function MarketGlanceCard({
             <>
               <div>
                 <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                  {portfolioIndexedDisplay ? "Index" : "Current"}
+                  {sessionClosePlot
+                    ? sessionClosePlot.headlineLabel
+                    : portfolioIndexedDisplay
+                      ? "Index"
+                      : "Current"}
                 </div>
                 <div className="text-xs font-medium tabular-nums text-zinc-800 dark:text-zinc-100">
-                  {portfolioIndexedDisplay
-                    ? formatGlanceDayPct(indexValueToDayPct(displayItem.last))
-                    : formatGlancePrice(displayItem.last)}
+                  {sessionClosePlot
+                    ? sessionClosePlot.headlineKind === "masked"
+                      ? "—"
+                      : sessionClosePlot.headlineKind === "index"
+                        ? sessionClosePlot.headlineValue == null
+                          ? "—"
+                          : sessionClosePlot.headlineValue.toFixed(2)
+                        : formatGlancePrice(sessionClosePlot.headlineValue)
+                    : portfolioIndexedDisplay
+                      ? formatGlanceDayPct(indexValueToDayPct(displayItem.last))
+                      : formatGlancePrice(displayItem.last)}
                 </div>
               </div>
               {showExtendedFooterCols ? (
@@ -1325,7 +1372,9 @@ export function MarketGlanceCard({
                 </div>
               ) : null}
               <div>
-                <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Day</div>
+                <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                  {sessionClosePlot ? sessionClosePlot.changeLabel : "Day"}
+                </div>
                 <div className={"text-xs font-medium tabular-nums " + posNegClass(pct)}>
                   {formatGlanceDayPct(pct)}
                 </div>
@@ -1359,7 +1408,9 @@ export function MarketGlanceCard({
                 </div>
               </div>
               <div>
-                <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Day %</div>
+                <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                  {sessionClosePlot ? sessionClosePlot.changeLabel : "Day %"}
+                </div>
                 <div className={"text-xs font-medium tabular-nums " + posNegClass(pct)}>
                   {pct == null ? "—" : `${pct >= 0 ? "+" : ""}${PCT2.format(pct)}%`}
                 </div>
