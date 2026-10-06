@@ -1,18 +1,30 @@
-/**
- * True when production (plain HTTP) is already answering on loopback.
- * Dev is HTTPS, so this does not treat `next dev` as a healthy `next start`.
- */
-export async function loopbackHealthOk(port, timeoutMs = 5000) {
-  const url = `http://127.0.0.1:${port}/api/health`;
-  try {
-    const resp = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-    try {
-      await resp.body?.cancel();
-    } catch {
-      /* ignore */
-    }
-    return resp.status === 200;
-  } catch {
-    return false;
-  }
+import http from "node:http";
+import https from "node:https";
+
+export async function loopbackHealthOk(port, timeoutMs = 5000, protocol = "http") {
+  if (protocol === "https") return probe(https, port, timeoutMs, { rejectUnauthorized: false });
+  return probe(http, port, timeoutMs, {});
+}
+
+function probe(mod, port, timeoutMs, extra) {
+  return new Promise((resolve) => {
+    const req = mod.get(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: "/api/health",
+        timeout: timeoutMs,
+        ...extra,
+      },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode === 200);
+      },
+    );
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
 }
