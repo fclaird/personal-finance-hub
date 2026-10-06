@@ -2,10 +2,12 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { bookHoldingsFooter, buildSchwabDividendBook } from "@/lib/dividends/schwabDividendBook";
+import { resolveViewScope } from "@/lib/viewScope";
 
 export async function GET() {
   const db = getDb();
-  const book = await buildSchwabDividendBook(db, { fetchLiveData: false });
+  const { flavor } = await resolveViewScope();
+  const book = await buildSchwabDividendBook(db, { fetchLiveData: false, flavor });
   const rows = book.dividendRows.map((r) => ({
     symbol: r.symbol,
     displayName: r.displayName,

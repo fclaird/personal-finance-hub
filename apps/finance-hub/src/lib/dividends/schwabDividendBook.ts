@@ -10,6 +10,8 @@ import { computeFooterTotals, type EnrichedHoldingRow } from "@/lib/dividends/en
 import { holdingAnnualDivUsd, holdingYieldPct } from "@/lib/dividends/holdingYieldPct";
 import { inferHoldingCategory, isSchwabFundLike } from "@/lib/dividends/holdingCategory";
 import { enrichSymbolHoldings } from "@/lib/dividends/symbolEnrichment";
+import type { FlavorId } from "@/lib/flavor";
+import { accountsInFlavorWhereSql, flavorIncludesPosterityAccount } from "@/lib/flavors/accounts";
 import { notPosterityWhereSql } from "@/lib/posterity";
 
 import { parseSchwabAssetType } from "./schwabPositionMeta";
@@ -31,7 +33,22 @@ export type BuildSchwabDividendBookOptions = {
   forceRefetchFundamentals?: boolean;
   /** When false (default page load), use cached fundamentals and snapshot prices only. */
   fetchLiveData?: boolean;
+  /**
+   * Main and Rorie keep the historical non-posterity Schwab book.
+   * A flavor that owns posterity accounts (Peyton) is scoped to those accounts.
+   */
+  flavor?: FlavorId;
 };
+
+/**
+ * Dividend holdings scope.
+ * Main and Rorie stay on the historical book (every Schwab account except posterity)
+ * so those totals do not move. Peyton cannot use that book — it would hide its only account.
+ */
+export function dividendAccountWhereSql(flavor?: FlavorId): string {
+  if (flavor && flavorIncludesPosterityAccount(flavor)) return accountsInFlavorWhereSql(flavor, "a");
+  return `a.id LIKE 'schwab_%' AND ${notPosterityWhereSql("a")}`;
+}
 
 export type SchwabDividendBookRow = EnrichedHoldingRow & {
   accountsLabel: string;
@@ -60,7 +77,7 @@ function accountDisplayLabel(nickname: string | null, name: string): string {
   return n && n.length > 0 ? n : name;
 }
 
-export function loadLatestSchwabPositionRows(db: Database.Database): RawSchwabPositionRow[] {
+export function loadLatestSchwabPositionRows(db: Database.Database, flavor?: FlavorId): RawSchwabPositionRow[] {
   const rows = db
     .prepare(
       `
@@ -80,8 +97,7 @@ export function loadLatestSchwabPositionRows(db: Database.Database): RawSchwabPo
       JOIN holding_snapshots hs ON hs.id = p.snapshot_id
       JOIN accounts a ON a.id = hs.account_id
       JOIN securities s ON s.id = p.security_id
-      WHERE a.id LIKE 'schwab_%'
-        AND ${notPosterityWhereSql("a")}
+      WHERE ${dividendAccountWhereSql(flavor)}
         AND s.security_type NOT IN ('cash', 'option')
         AND p.quantity > 0
         AND s.symbol IS NOT NULL
@@ -257,7 +273,7 @@ export async function buildSchwabDividendBook(
   db: Database.Database,
   opts?: BuildSchwabDividendBookOptions,
 ): Promise<SchwabDividendBook> {
-  const raw = loadLatestSchwabPositionRows(db);
+  const raw = loadLatestSchwabPositionRows(db, opts?.flavor);
   const snapshotAsOf =
     raw.length > 0
       ? raw.reduce((max, r) => (r.snapshotAsOf > max ? r.snapshotAsOf : max), raw[0]!.snapshotAsOf)

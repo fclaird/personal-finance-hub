@@ -7,38 +7,28 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import {
+  MonthlyRealizedTradesSection,
+  WeeklyRealizedTradesSection,
+  YtdRealizedTradesSection,
+  type ReportTrade,
+} from "@/app/reports/realizedSections";
+import { tradeCountLabel, winLossLabel } from "@/lib/analytics/reportActivityRows";
+import {
   PERIOD_KINDS,
-  mondayWeekStartYmd,
   type PeriodKind,
 } from "@/lib/analytics/periodWindows";
 import { formatUsd2 } from "@/lib/format";
-import { formatDisplayDate, formatDisplayDateRange } from "@/lib/formatDate";
+import { formatDisplayDate } from "@/lib/formatDate";
 import { posNegClass } from "@/lib/terminal/colors";
-
-type RealizedGainsByScope = {
-  jointBrokerage: number | null;
-  retirement: number | null;
-  total: number | null;
-};
 
 type ReportMetrics = {
   netBalance: number | null;
   plDollars: number | null;
   plPct: number | null;
-  realizedGains: RealizedGainsByScope;
+  plTitle?: string;
+  realizedDollars: number | null;
   vsSpy: number | null;
   vsQqq: number | null;
-};
-
-type ReportTrade = {
-  id: string;
-  tradeDate: string;
-  accountId: string;
-  accountLabel: string;
-  scope: "joint_brokerage" | "retirement";
-  symbol: string | null;
-  description: string | null;
-  realizedDollars: number | null;
 };
 
 type ReportPayload = {
@@ -53,7 +43,7 @@ type ReportPayload = {
 const PERIOD_LABELS: Record<PeriodKind, string> = {
   daily: "Daily",
   weekly: "Weekly",
-  monthly: "Monthly",
+  monthly: "Monthly (last 5 weeks)",
   ytd: "YTD",
 };
 
@@ -65,70 +55,6 @@ function formatPct(v: number | null | undefined): string {
 
 function usd2Masked(v: number | null | undefined, masked: boolean): string {
   return formatUsd2(v, { mask: masked });
-}
-
-function sumScope(trades: ReportTrade[], scope: ReportTrade["scope"]): number | null {
-  let sum = 0;
-  let saw = false;
-  for (const t of trades) {
-    if (t.scope !== scope || t.realizedDollars == null || !Number.isFinite(t.realizedDollars)) continue;
-    sum += t.realizedDollars;
-    saw = true;
-  }
-  return saw ? Math.round(sum * 100) / 100 : null;
-}
-
-function sumAllRealized(trades: ReportTrade[]): number | null {
-  let sum = 0;
-  let saw = false;
-  for (const t of trades) {
-    if (t.realizedDollars == null || !Number.isFinite(t.realizedDollars)) continue;
-    sum += t.realizedDollars;
-    saw = true;
-  }
-  return saw ? Math.round(sum * 100) / 100 : null;
-}
-
-function groupTradesByDay(trades: ReportTrade[]): Array<{ ymd: string; trades: ReportTrade[] }> {
-  const byDay = new Map<string, ReportTrade[]>();
-  for (const t of trades) {
-    const bucket = byDay.get(t.tradeDate) ?? [];
-    bucket.push(t);
-    byDay.set(t.tradeDate, bucket);
-  }
-  return [...byDay.entries()]
-    .sort(([a], [b]) => b.localeCompare(a))
-    .map(([ymd, dayTrades]) => ({
-      ymd,
-      trades: dayTrades.sort((a, b) => b.id.localeCompare(a.id)),
-    }));
-}
-
-function groupTradesByWeek(
-  trades: ReportTrade[],
-): Array<{
-  weekStartYmd: string;
-  weekEndYmd: string;
-  weekLabelStartYmd: string;
-  trades: ReportTrade[];
-}> {
-  const byWeek = new Map<string, ReportTrade[]>();
-  for (const t of trades) {
-    const weekStart = mondayWeekStartYmd(t.tradeDate);
-    const bucket = byWeek.get(weekStart) ?? [];
-    bucket.push(t);
-    byWeek.set(weekStart, bucket);
-  }
-  return [...byWeek.entries()]
-    .sort(([a], [b]) => b.localeCompare(a))
-    .map(([weekStartYmd, weekTrades]) => {
-      const sorted = weekTrades.sort(
-        (a, b) => b.tradeDate.localeCompare(a.tradeDate) || b.id.localeCompare(a.id),
-      );
-      const latestYmd = sorted[0]?.tradeDate ?? weekStartYmd;
-      const earliestYmd = sorted[sorted.length - 1]?.tradeDate ?? weekStartYmd;
-      return { weekStartYmd, weekEndYmd: latestYmd, weekLabelStartYmd: earliestYmd, trades: sorted };
-    });
 }
 
 function MetricCard({
@@ -143,7 +69,7 @@ function MetricCard({
   className?: string;
 }) {
   return (
-    <div className="rounded-xl border border-zinc-200/80 bg-white p-4 shadow-sm dark:border-zinc-700/80 dark:bg-zinc-900/60">
+    <div className="rounded-xl border border-zinc-300 bg-white p-4 shadow-sm dark:border-white/25 dark:bg-zinc-900/60">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
         {title}
       </div>
@@ -151,105 +77,6 @@ function MetricCard({
         {value}
       </div>
       {sub ? <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{sub}</div> : null}
-    </div>
-  );
-}
-
-function ScopeTotalsRow({
-  label,
-  joint,
-  retirement,
-  total,
-  masked,
-  className,
-  compact = false,
-}: {
-  label: string;
-  joint: number | null;
-  retirement: number | null;
-  total: number | null;
-  masked: boolean;
-  className?: string;
-  compact?: boolean;
-}) {
-  return (
-    <div
-      className={`grid gap-2 text-sm ${
-        compact
-          ? "grid-cols-3 sm:grid-cols-3"
-          : "sm:grid-cols-[minmax(0,1fr)_repeat(3,minmax(5rem,auto))] sm:items-center"
-      } ${className ?? ""}`}
-    >
-      {!compact ? (
-        <div className="font-medium text-zinc-700 dark:text-zinc-200">{label}</div>
-      ) : null}
-      <div className="flex flex-col sm:items-end">
-        <span className="text-[10px] uppercase tracking-wide text-zinc-500">Joint</span>
-        <span className={`tabular-nums ${posNegClass(joint ?? 0)}`}>{usd2Masked(joint, masked)}</span>
-      </div>
-      <div className="flex flex-col sm:items-end">
-        <span className="text-[10px] uppercase tracking-wide text-zinc-500">Retirement</span>
-        <span className={`tabular-nums ${posNegClass(retirement ?? 0)}`}>
-          {usd2Masked(retirement, masked)}
-        </span>
-      </div>
-      <div className="flex flex-col sm:items-end">
-        <span className="text-[10px] uppercase tracking-wide text-zinc-500">Total</span>
-        <span className={`font-semibold tabular-nums ${posNegClass(total ?? 0)}`}>
-          {usd2Masked(total, masked)}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function RealizedTradeTable({
-  trades,
-  masked,
-  showDate = false,
-}: {
-  trades: ReportTrade[];
-  masked: boolean;
-  showDate?: boolean;
-}) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full text-left text-sm">
-        <thead className="bg-zinc-50 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:bg-zinc-900/80 dark:text-zinc-400">
-          <tr>
-            {showDate ? <th className="px-3 py-2">Date</th> : null}
-            <th className="px-3 py-2">Account</th>
-            <th className="px-3 py-2">Symbol</th>
-            <th className="px-3 py-2">Description</th>
-            <th className="px-3 py-2 text-right">Realized</th>
-          </tr>
-        </thead>
-        <tbody>
-          {trades.map((t) => (
-            <tr key={t.id} className="border-t border-zinc-100 dark:border-zinc-800/80">
-              {showDate ? (
-                <td className="whitespace-nowrap px-3 py-2 tabular-nums">
-                  {formatDisplayDate(t.tradeDate, { fallback: t.tradeDate })}
-                </td>
-              ) : null}
-              <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-300">
-                {t.accountLabel}
-              </td>
-              <td className="px-3 py-2 font-medium">{t.symbol ?? "—"}</td>
-              <td className="max-w-md truncate px-3 py-2 text-zinc-600 dark:text-zinc-300">
-                {t.description ?? "—"}
-              </td>
-              <td
-                className={`whitespace-nowrap px-3 py-2 text-right tabular-nums ${
-                  t.realizedDollars != null ? posNegClass(t.realizedDollars) : ""
-                }`}
-              >
-                {t.realizedDollars != null ? usd2Masked(t.realizedDollars, masked) : "—"}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 }
@@ -283,9 +110,9 @@ function RealizedTradesSection({
           on Connections if you expect activity.
         </p>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-zinc-200/80 dark:border-zinc-700/80">
-          <table className="min-w-full text-left text-sm">
-            <thead className="bg-zinc-50 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:bg-zinc-900/80 dark:text-zinc-400">
+        <div className="overflow-x-auto rounded-xl border border-zinc-300 dark:border-white/25">
+          <table className="min-w-full border-collapse text-left text-sm">
+            <thead className="border-b border-zinc-400 bg-zinc-50 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:border-white/40 dark:bg-zinc-900/80 dark:text-zinc-400">
               <tr>
                 <th className="px-3 py-2">Date</th>
                 <th className="px-3 py-2">Account</th>
@@ -296,7 +123,7 @@ function RealizedTradesSection({
             </thead>
             <tbody>
               {trades.map((t) => (
-                <tr key={t.id} className="border-t border-zinc-100 dark:border-zinc-800/80">
+                <tr key={t.id} className="border-t border-zinc-200 dark:border-white/20">
                   <td className="whitespace-nowrap px-3 py-2 tabular-nums">
                     {formatDisplayDate(t.tradeDate, { fallback: t.tradeDate })}
                   </td>
@@ -324,227 +151,6 @@ function RealizedTradesSection({
   );
 }
 
-function WeeklyRealizedTradesSection({ trades, masked }: { trades: ReportTrade[]; masked: boolean }) {
-  const dayGroups = useMemo(() => groupTradesByDay(trades), [trades]);
-  const [expandedDays, setExpandedDays] = useState<Set<string>>(() => new Set());
-
-  useEffect(() => {
-    if (dayGroups.length === 0) {
-      setExpandedDays(new Set());
-      return;
-    }
-    setExpandedDays(new Set([dayGroups[0]!.ymd]));
-  }, [dayGroups]);
-
-  const weekJoint = sumScope(trades, "joint_brokerage");
-  const weekRetirement = sumScope(trades, "retirement");
-  const weekTotal = sumAllRealized(trades);
-
-  function toggleDay(ymd: string) {
-    setExpandedDays((prev) => {
-      const next = new Set(prev);
-      if (next.has(ymd)) next.delete(ymd);
-      else next.add(ymd);
-      return next;
-    });
-  }
-
-  if (trades.length === 0) {
-    return (
-      <section>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">
-          Weekly realized trades
-        </h2>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          No closing trades with realized P&amp;L this week.{" "}
-          <Link href="/connections" className="text-teal-700 underline dark:text-teal-300">
-            Sync TRADE history
-          </Link>{" "}
-          on Connections if you expect activity.
-        </p>
-      </section>
-    );
-  }
-
-  return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">
-        Weekly realized trades
-      </h2>
-
-      <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/80 p-4 dark:border-zinc-700/80 dark:bg-zinc-900/40">
-        <ScopeTotalsRow
-          label="Week total"
-          joint={weekJoint}
-          retirement={weekRetirement}
-          total={weekTotal}
-          masked={masked}
-        />
-      </div>
-
-      <div className="space-y-2">
-        {dayGroups.map(({ ymd, trades: dayTrades }) => {
-          const expanded = expandedDays.has(ymd);
-          const dayJoint = sumScope(dayTrades, "joint_brokerage");
-          const dayRetirement = sumScope(dayTrades, "retirement");
-          const dayTotal = sumAllRealized(dayTrades);
-          const dayLabel = formatDisplayDate(ymd, { fallback: ymd });
-
-          return (
-            <div
-              key={ymd}
-              className="overflow-hidden rounded-xl border border-zinc-200/80 dark:border-zinc-700/80"
-            >
-              <button
-                type="button"
-                onClick={() => toggleDay(ymd)}
-                className="flex w-full flex-col gap-3 bg-white px-4 py-3 text-left transition-colors hover:bg-zinc-50 dark:bg-zinc-900/60 dark:hover:bg-zinc-900/80 sm:gap-2"
-                aria-expanded={expanded}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-zinc-400" aria-hidden>
-                    {expanded ? "▾" : "▸"}
-                  </span>
-                  <span className="font-medium text-zinc-800 dark:text-zinc-100">{dayLabel}</span>
-                  <span className="text-xs text-zinc-500">
-                    {dayTrades.length} trade{dayTrades.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-                <ScopeTotalsRow
-                  label=""
-                  joint={dayJoint}
-                  retirement={dayRetirement}
-                  total={dayTotal}
-                  masked={masked}
-                  compact
-                  className="pl-6 sm:pl-7"
-                />
-              </button>
-              {expanded ? (
-                <div className="border-t border-zinc-100 bg-white dark:border-zinc-800/80 dark:bg-zinc-950/40">
-                  <RealizedTradeTable trades={dayTrades} masked={masked} />
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-
-function MonthlyRealizedTradesSection({ trades, masked }: { trades: ReportTrade[]; masked: boolean }) {
-  const weekGroups = useMemo(() => groupTradesByWeek(trades), [trades]);
-  const [expandedWeeks, setExpandedWeeks] = useState<Set<string>>(() => new Set());
-
-  useEffect(() => {
-    if (weekGroups.length === 0) {
-      setExpandedWeeks(new Set());
-      return;
-    }
-    setExpandedWeeks(new Set([weekGroups[0]!.weekStartYmd]));
-  }, [weekGroups]);
-
-  const monthJoint = sumScope(trades, "joint_brokerage");
-  const monthRetirement = sumScope(trades, "retirement");
-  const monthTotal = sumAllRealized(trades);
-
-  function toggleWeek(weekStartYmd: string) {
-    setExpandedWeeks((prev) => {
-      const next = new Set(prev);
-      if (next.has(weekStartYmd)) next.delete(weekStartYmd);
-      else next.add(weekStartYmd);
-      return next;
-    });
-  }
-
-  if (trades.length === 0) {
-    return (
-      <section>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">
-          Monthly realized trades
-        </h2>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          No closing trades with realized P&amp;L this month.{" "}
-          <Link href="/connections" className="text-teal-700 underline dark:text-teal-300">
-            Sync TRADE history
-          </Link>{" "}
-          on Connections if you expect activity.
-        </p>
-      </section>
-    );
-  }
-
-  return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">
-        Monthly realized trades
-      </h2>
-
-      <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/80 p-4 dark:border-zinc-700/80 dark:bg-zinc-900/40">
-        <ScopeTotalsRow
-          label="Month total"
-          joint={monthJoint}
-          retirement={monthRetirement}
-          total={monthTotal}
-          masked={masked}
-        />
-      </div>
-
-      <div className="space-y-2">
-        {weekGroups.map(({ weekStartYmd, weekEndYmd, weekLabelStartYmd, trades: weekTrades }) => {
-          const expanded = expandedWeeks.has(weekStartYmd);
-          const weekJoint = sumScope(weekTrades, "joint_brokerage");
-          const weekRetirement = sumScope(weekTrades, "retirement");
-          const weekTotal = sumAllRealized(weekTrades);
-          const weekLabel =
-            weekLabelStartYmd === weekEndYmd
-              ? formatDisplayDate(weekLabelStartYmd, { fallback: weekLabelStartYmd })
-              : formatDisplayDateRange(weekLabelStartYmd, weekEndYmd);
-
-          return (
-            <div
-              key={weekStartYmd}
-              className="overflow-hidden rounded-xl border border-zinc-200/80 dark:border-zinc-700/80"
-            >
-              <button
-                type="button"
-                onClick={() => toggleWeek(weekStartYmd)}
-                className="flex w-full flex-col gap-3 bg-white px-4 py-3 text-left transition-colors hover:bg-zinc-50 dark:bg-zinc-900/60 dark:hover:bg-zinc-900/80 sm:gap-2"
-                aria-expanded={expanded}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-zinc-400" aria-hidden>
-                    {expanded ? "▾" : "▸"}
-                  </span>
-                  <span className="font-medium text-zinc-800 dark:text-zinc-100">{weekLabel}</span>
-                  <span className="text-xs text-zinc-500">
-                    {weekTrades.length} trade{weekTrades.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-                <ScopeTotalsRow
-                  label=""
-                  joint={weekJoint}
-                  retirement={weekRetirement}
-                  total={weekTotal}
-                  masked={masked}
-                  compact
-                  className="pl-6 sm:pl-7"
-                />
-              </button>
-              {expanded ? (
-                <div className="border-t border-zinc-100 bg-white dark:border-zinc-800/80 dark:bg-zinc-950/40">
-                  <RealizedTradeTable trades={weekTrades} masked={masked} showDate />
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
 
 function ReportsPageInner() {
   const privacy = usePrivacy();
@@ -585,7 +191,6 @@ function ReportsPageInner() {
   const metrics = data?.metrics;
   const trades = data?.trades ?? [];
   const footnotes = data?.footnotes ?? [];
-  const realized = metrics?.realizedGains;
 
   const plPct = metrics?.plPct;
   const plSub = useMemo(() => {
@@ -597,12 +202,9 @@ function ReportsPageInner() {
     router.replace(`/reports?period=${next}`);
   }
 
-  const jointTrades = trades.filter((t) => t.scope === "joint_brokerage");
-  const retirementTrades = trades.filter((t) => t.scope === "retirement");
-
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6">
-      <EditablePageHeading pageId="reports" defaultTitle="Reports" />
+      <EditablePageHeading pageId="reports" defaultTitle="Realized gain/loss" />
 
       <div className="flex flex-wrap gap-2">
         {PERIOD_KINDS.map((p) => (
@@ -631,29 +233,23 @@ function ReportsPageInner() {
         <div className="text-sm text-zinc-500 dark:text-zinc-400">Loading report…</div>
       ) : null}
 
-      {metrics && realized ? (
+      {metrics ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <MetricCard
               title="Net portfolio balance"
               value={usd2Masked(metrics.netBalance, privacy.masked)}
             />
             <MetricCard
-              title="Period P&L"
+              title={metrics.plTitle ?? "Period P&L"}
               value={usd2Masked(metrics.plDollars, privacy.masked)}
               sub={plSub}
               className={posNegClass(metrics.plDollars ?? 0)}
             />
             <MetricCard
-              title="Joint brokerage realized"
-              value={usd2Masked(realized.jointBrokerage, privacy.masked)}
-              className={posNegClass(realized.jointBrokerage ?? 0)}
-            />
-            <MetricCard
-              title="Retirement realized"
-              value={usd2Masked(realized.retirement, privacy.masked)}
-              sub="Secondary"
-              className={posNegClass(realized.retirement ?? 0)}
+              title="Realized"
+              value={usd2Masked(metrics.realizedDollars, privacy.masked)}
+              className={posNegClass(metrics.realizedDollars ?? 0)}
             />
             <MetricCard
               title="vs SPY"
@@ -667,14 +263,18 @@ function ReportsPageInner() {
             />
           </div>
 
-          {period === "ytd" && realized.total != null ? (
+          {period === "ytd" && metrics.realizedDollars != null ? (
             <p className="text-sm text-zinc-600 dark:text-zinc-300">
               Realized gains total:{" "}
-              <span className={`font-medium tabular-nums ${posNegClass(realized.total)}`}>
-                {usd2Masked(realized.total, privacy.masked)}
+              <span className={`font-medium tabular-nums ${posNegClass(metrics.realizedDollars)}`}>
+                {usd2Masked(metrics.realizedDollars, privacy.masked)}
               </span>
-              {" · "}
-              Switch to Daily, Weekly, or Monthly for the trade list.
+              {trades.length > 0 ? (
+                <span className="text-zinc-500 dark:text-zinc-300">
+                  {" "}
+                  · {tradeCountLabel(trades.length)} · {winLossLabel(trades)}
+                </span>
+              ) : null}
             </p>
           ) : null}
 
@@ -687,19 +287,7 @@ function ReportsPageInner() {
           ) : null}
 
           {period === "daily" ? (
-            <>
-              <RealizedTradesSection
-                title="Joint brokerage — realized trades"
-                trades={jointTrades}
-                masked={privacy.masked}
-              />
-              <RealizedTradesSection
-                title="Retirement — realized trades"
-                trades={retirementTrades}
-                masked={privacy.masked}
-                secondary
-              />
-            </>
+            <RealizedTradesSection title="Realized trades" trades={trades} masked={privacy.masked} />
           ) : null}
 
           {period === "weekly" ? (
@@ -708,6 +296,10 @@ function ReportsPageInner() {
 
           {period === "monthly" ? (
             <MonthlyRealizedTradesSection trades={trades} masked={privacy.masked} />
+          ) : null}
+
+          {period === "ytd" ? (
+            <YtdRealizedTradesSection trades={trades} masked={privacy.masked} />
           ) : null}
         </>
       ) : null}

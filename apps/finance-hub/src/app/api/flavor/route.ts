@@ -11,12 +11,17 @@ export async function GET() {
   return NextResponse.json({
     ok: true,
     flavor,
-    flavors: FLAVOR_IDS.map((id) => ({
-      id,
-      label: getFlavorConfig(id).label,
-      features: getFlavorConfig(id).features,
-      passwordRequired: expectedFlavorPassword(id) != null,
-    })),
+    flavors: FLAVOR_IDS.map((id) => {
+      const config = getFlavorConfig(id);
+      return {
+        id,
+        label: config.label,
+        features: config.features,
+        passwordRequired: expectedFlavorPassword(id) != null,
+        badgeClass: config.accent.badgeClass,
+        pillActiveClass: config.accent.pillActiveClass,
+      };
+    }),
   });
 }
 

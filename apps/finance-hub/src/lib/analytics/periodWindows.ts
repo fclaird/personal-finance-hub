@@ -1,3 +1,4 @@
+import { futuresWeekContaining, rollingFuturesWeeks } from "@/lib/analytics/futuresWeek";
 import { glanceSessionYmd, subtractNyCalendarDays } from "@/lib/market/glanceSession";
 import { isNyseHolidayYmd, nyWeekdayIso, nyYmd } from "@/lib/market/usEquitySession";
 
@@ -37,10 +38,15 @@ export function priorTradingDayYmd(fromYmd: string): string {
   return fromYmd;
 }
 
+/** Sunday that opens the current futures week, so Sunday-evening trades are loaded. */
 function nyWeekStartYmd(now: Date): string {
-  const wd = nyWeekdayIso(now);
-  const daysFromMonday = wd - 1;
-  return nyYmd(subtractNyCalendarDays(now, daysFromMonday));
+  return futuresWeekContaining(now).openSundayYmd;
+}
+
+/** Sunday that opens the oldest of the five rolling futures weeks. */
+function nyRollingFiveWeekStartYmd(now: Date): string {
+  const weeks = rollingFuturesWeeks(now, 5);
+  return weeks[weeks.length - 1]!.openSundayYmd;
 }
 
 /** Monday (NY week start) that contains the calendar day `ymd` (YYYY-MM-DD). */
@@ -59,11 +65,6 @@ export function sundayOfWeekYmd(mondayYmd: string): string {
   const [y, m, d] = mondayYmd.split("-").map(Number);
   const asDate = new Date(Date.UTC(y!, m! - 1, d!, 17, 0, 0));
   return nyYmd(subtractNyCalendarDays(asDate, -6));
-}
-
-function nyMonthStartYmd(now: Date): string {
-  const ymd = nyYmd(now);
-  return `${ymd.slice(0, 7)}-01`;
 }
 
 function nyYearStartYmd(now: Date): string {
@@ -88,7 +89,7 @@ export function resolvePeriodWindow(period: PeriodKind, now: Date = new Date()):
     period === "weekly"
       ? nyWeekStartYmd(now)
       : period === "monthly"
-        ? nyMonthStartYmd(now)
+        ? nyRollingFiveWeekStartYmd(now)
         : nyYearStartYmd(now);
 
   return {

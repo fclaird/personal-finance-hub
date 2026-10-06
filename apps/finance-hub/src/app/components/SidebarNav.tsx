@@ -13,6 +13,7 @@ import {
 } from "@/app/lib/sidebarNav";
 import type { FlavorId } from "@/lib/flavor";
 import { readFlavorCookieClient } from "@/lib/flavorClient";
+import { getFlavorConfig } from "@/lib/flavors/registry";
 import { usePersistedOrder } from "@/lib/usePersistedOrder";
 
 type DataMode = "auto" | "schwab";
@@ -32,7 +33,10 @@ export function SidebarNav({
   const [mode, setMode] = useState<DataMode>("auto");
   const [avail, setAvail] = useState<{ hasSchwab: boolean }>({ hasSchwab: false });
   const [flavor, setFlavor] = useState<FlavorId>(() => readFlavorCookieClient() ?? "main");
-  const [flavorLabel, setFlavorLabel] = useState("Main");
+  const [flavorLabel, setFlavorLabel] = useState(() => getFlavorConfig(readFlavorCookieClient() ?? "main").label);
+  const [flavorBadgeClass, setFlavorBadgeClass] = useState(
+    () => getFlavorConfig(readFlavorCookieClient() ?? "main").accent.badgeClass,
+  );
   const [schwabLive, setSchwabLive] = useState<boolean | null>(null);
   const privacy = usePrivacy();
   const defaultOrder = useMemo(() => defaultSidebarNavOrder(flavor), [flavor]);
@@ -86,12 +90,14 @@ export function SidebarNav({
         const flavorJson = (await flavorResp.json()) as {
           ok: boolean;
           flavor?: FlavorId | null;
-          flavors?: Array<{ id: FlavorId; label: string }>;
+          flavors?: Array<{ id: FlavorId; label: string; badgeClass?: string }>;
         };
         if (flavorJson.ok && flavorJson.flavor) {
           setFlavor(flavorJson.flavor);
           const match = flavorJson.flavors?.find((f) => f.id === flavorJson.flavor);
-          if (match) setFlavorLabel(match.label);
+          const config = getFlavorConfig(flavorJson.flavor);
+          setFlavorLabel(match?.label ?? config.label);
+          setFlavorBadgeClass(match?.badgeClass ?? config.accent.badgeClass);
         }
         const schwabJson = (await schwabResp.json()) as { ok?: boolean; connected?: boolean };
         setSchwabLive(schwabJson.ok === true && schwabJson.connected === true);
@@ -133,7 +139,7 @@ export function SidebarNav({
               />
             ) : null}
             <div
-              className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-bold tracking-wide text-zinc-700 dark:bg-white/10 dark:text-zinc-300"
+              className={"rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide " + flavorBadgeClass}
               title="Active flavor"
             >
               {flavorLabel}
@@ -219,8 +225,9 @@ export function SidebarNav({
               </div>
               <Link
                 href={item.href}
+                title={item.label}
                 className={
-                  "min-w-0 flex-1 rounded-lg px-2 py-2.5 text-[15px] font-medium transition-colors " +
+                  "min-w-0 flex-1 truncate whitespace-nowrap rounded-lg px-2 py-2.5 text-[15px] font-medium transition-colors " +
                   (active
                     ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
                     : "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-white/10")
