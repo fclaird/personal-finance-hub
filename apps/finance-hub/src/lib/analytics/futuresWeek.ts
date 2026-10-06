@@ -9,8 +9,8 @@ import { nyMinutesSinceMidnight, nyWeekdayIso, nyYmd } from "@/lib/market/usEqui
  * clock is noon that calendar day, so a bare Sunday stays on the Sunday row.
  *
  * Totals for a week, the last five weeks, and a month always include Saturday and
- * Sunday-before-18:00 trades. The Show weekend control hides those rows and does not
- * change the total. Callers say so when the hidden rows have trades.
+ * Sunday-before-18:00 trades. On the weekly tab, Show weekend hides Saturday and
+ * Sunday rows and does not change the week total.
  */
 
 export const FUTURES_OPEN_MINUTES = 18 * 60;

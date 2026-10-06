@@ -5,7 +5,6 @@ import { useMemo, useState, useSyncExternalStore } from "react";
 
 import {
   ROLLING_WEEK_LABELS,
-  clippedMonthWeeks,
   daySlotsForDisplay,
   formatMonthDayRange,
   formatWeekdayDateLabel,
@@ -13,12 +12,12 @@ import {
   monthKeyForTrade,
   rollingFuturesWeeks,
   sessionYmdForTrade,
-  spillSessionYmds,
   tradeFallsInWeeks,
   weekendSessionTrades,
   ytdMonthsThrough,
   type FuturesDaySlot,
 } from "@/lib/analytics/futuresWeek";
+import { mostRecentActiveKey } from "@/lib/analytics/reportActivityRows";
 import { formatUsd2 } from "@/lib/format";
 import { nyYmd } from "@/lib/market/usEquitySession";
 import { posNegClass } from "@/lib/terminal/colors";
@@ -77,11 +76,6 @@ function sortTrades(trades: ReportTrade[]): ReportTrade[] {
     const bt = b.tradedAt ?? b.tradeDate;
     return bt.localeCompare(at) || b.id.localeCompare(a.id);
   });
-}
-
-function tradesOnDays(trades: ReportTrade[], days: readonly FuturesDaySlot[]): ReportTrade[] {
-  const ymds = new Set(days.map((day) => day.ymd));
-  return trades.filter((trade) => ymds.has(sessionYmdForTrade(trade)));
 }
 
 function readShowWeekend(): boolean {
@@ -153,9 +147,6 @@ function ScopeTotalsRow({
 }
 
 function RealizedTradeTable({ trades, masked }: { trades: ReportTrade[]; masked: boolean }) {
-  if (trades.length === 0) {
-    return <p className="px-4 py-3 text-sm text-zinc-500 dark:text-zinc-400">No realized trades.</p>;
-  }
   const rows = sortTrades(trades);
   return (
     <div className="overflow-x-auto">
@@ -228,6 +219,50 @@ function EmptyLedgerHint() {
   );
 }
 
+function QuietRow({ label, aside }: { label: string; aside?: string }) {
+  return (
+    <div className="flex items-center gap-2 rounded-xl border border-zinc-200/80 bg-white px-4 py-2 dark:border-zinc-700/80 dark:bg-zinc-900/60">
+      <span className="font-medium text-zinc-800 dark:text-zinc-100">{label}</span>
+      {aside ? <span className="text-sm text-zinc-500">{aside}</span> : null}
+      <span className="ml-auto shrink-0 text-sm text-zinc-500">No trades</span>
+    </div>
+  );
+}
+
+function SummaryCard({
+  label,
+  aside,
+  trades,
+  masked,
+}: {
+  label: string;
+  aside?: string;
+  trades: ReportTrade[];
+  masked: boolean;
+}) {
+  if (trades.length === 0) return <QuietRow label={label} aside={aside} />;
+  const totals = scopeTotals(trades);
+  return (
+    <div className="flex w-full flex-col gap-3 rounded-xl border border-zinc-200/80 bg-white px-4 py-3 dark:border-zinc-700/80 dark:bg-zinc-900/60 sm:gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium text-zinc-800 dark:text-zinc-100">{label}</span>
+        {aside ? <span className="text-sm text-zinc-500">{aside}</span> : null}
+        <span className="text-xs text-zinc-500">
+          {trades.length} trade{trades.length === 1 ? "" : "s"}
+        </span>
+      </div>
+      <ScopeTotalsRow
+        label=""
+        joint={totals.joint}
+        retirement={totals.retirement}
+        total={totals.total}
+        masked={masked}
+        compact
+      />
+    </div>
+  );
+}
+
 function DayCard({
   ymd,
   trades,
@@ -241,6 +276,7 @@ function DayCard({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  if (trades.length === 0) return <QuietRow label={formatWeekdayDateLabel(ymd)} />;
   const totals = scopeTotals(trades);
   return (
     <div className="overflow-hidden rounded-xl border border-zinc-200/80 dark:border-zinc-700/80">
@@ -318,9 +354,15 @@ function DayList({
   );
 }
 
-function defaultOpenYmd(days: readonly FuturesDaySlot[], todayYmd: string): string | null {
-  const onOrBefore = [...days].reverse().find((day) => day.ymd <= todayYmd);
-  return (onOrBefore ?? days[0])?.ymd ?? null;
+function activeDayKey(days: readonly FuturesDaySlot[], trades: readonly ReportTrade[], showWeekend: boolean): string | null {
+  return mostRecentActiveKey(
+    days
+      .filter((day) => showWeekend || !day.weekend)
+      .map((day) => ({
+        key: day.ymd,
+        tradeCount: trades.filter((trade) => sessionYmdForTrade(trade) === day.ymd).length,
+      })),
+  );
 }
 
 function SectionHeading({ title, showWeekend, onToggleWeekend }: { title: string; showWeekend: boolean; onToggleWeekend: (next: boolean) => void }) {
@@ -334,14 +376,13 @@ function SectionHeading({ title, showWeekend, onToggleWeekend }: { title: string
 
 export function WeeklyRealizedTradesSection({ trades, masked }: { trades: ReportTrade[]; masked: boolean }) {
   const [showWeekend, setShowWeekend] = useShowWeekend();
-  const todayYmd = nyYmd(new Date());
   const week = useMemo(() => futuresWeekContaining(new Date()), []);
   const weekTrades = useMemo(() => trades.filter((trade) => tradeFallsInWeeks(trade, [week])), [trades, week]);
   const visibleDays = useMemo(() => daySlotsForDisplay(week.days, showWeekend), [week, showWeekend]);
   const hiddenWeekend = showWeekend ? [] : weekendSessionTrades(weekTrades, week.days);
   const totals = scopeTotals(weekTrades);
   const [expandedDays, setExpandedDays] = useState<Set<string>>(() => {
-    const open = defaultOpenYmd(week.days.filter((day) => !day.weekend), todayYmd);
+    const open = activeDayKey(week.days, weekTrades, showWeekend);
     return new Set(open ? [open] : []);
   });
 
@@ -379,127 +420,18 @@ export function WeeklyRealizedTradesSection({ trades, masked }: { trades: Report
   );
 }
 
-function WeekBlock({
-  title,
-  rangeLabel,
-  days,
-  trades,
-  masked,
-  showWeekend,
-  expanded,
-  onToggle,
-  todayYmd,
-}: {
-  title: string;
-  rangeLabel: string;
-  days: readonly FuturesDaySlot[];
-  trades: ReportTrade[];
-  masked: boolean;
-  showWeekend: boolean;
-  expanded: boolean;
-  onToggle: () => void;
-  todayYmd: string;
-}) {
-  const visibleDays = daySlotsForDisplay(days, showWeekend);
-  const hiddenWeekend = showWeekend ? [] : weekendSessionTrades(trades, days);
-  const totals = scopeTotals(trades);
-  const [expandedDays, setExpandedDays] = useState<Set<string>>(() => {
-    const open = defaultOpenYmd(
-      days.filter((day) => !day.weekend),
-      todayYmd,
-    );
-    return new Set(open ? [open] : []);
-  });
-
-  function toggleDay(ymd: string) {
-    setExpandedDays((prev) => {
-      const next = new Set(prev);
-      if (next.has(ymd)) next.delete(ymd);
-      else next.add(ymd);
-      return next;
-    });
-  }
-
-  return (
-    <div className="overflow-hidden rounded-xl border border-zinc-200/80 dark:border-zinc-700/80">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full flex-col gap-3 bg-white px-4 py-3 text-left transition-colors hover:bg-zinc-50 dark:bg-zinc-900/60 dark:hover:bg-zinc-900/80 sm:gap-2"
-        aria-expanded={expanded}
-      >
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-zinc-400" aria-hidden>
-            {expanded ? "▾" : "▸"}
-          </span>
-          <span className="font-medium text-zinc-800 dark:text-zinc-100">{title}</span>
-          <span className="text-sm text-zinc-500">{rangeLabel}</span>
-          <span className="text-xs text-zinc-500">
-            {trades.length} trade{trades.length === 1 ? "" : "s"}
-          </span>
-        </div>
-        <ScopeTotalsRow
-          label=""
-          joint={totals.joint}
-          retirement={totals.retirement}
-          total={totals.total}
-          masked={masked}
-          compact
-          className="pl-6 sm:pl-7"
-        />
-      </button>
-      {expanded ? (
-        <div className="space-y-2 border-t border-zinc-100 bg-zinc-50/50 p-3 dark:border-zinc-800/80 dark:bg-zinc-950/40">
-          {hiddenWeekend.length > 0 ? (
-            <p className="px-1 text-xs text-zinc-500 dark:text-zinc-400">
-              Weekend rows are hidden. {usd2Masked(sumAllRealized(hiddenWeekend) ?? 0, masked)} from{" "}
-              {hiddenWeekend.length} weekend {hiddenWeekend.length === 1 ? "trade" : "trades"} stays in this total.
-            </p>
-          ) : null}
-          {visibleDays.length === 0 ? (
-            <p className="px-1 text-sm text-zinc-500">No weekday rows in this block.</p>
-          ) : (
-            <DayList
-              days={visibleDays}
-              trades={trades}
-              masked={masked}
-              expandedDays={expandedDays}
-              onToggleDay={toggleDay}
-            />
-          )}
-        </div>
-      ) : null}
-    </div>
-  );
+function SectionTitle({ title }: { title: string }) {
+  return <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">{title}</h2>;
 }
 
 export function MonthlyRealizedTradesSection({ trades, masked }: { trades: ReportTrade[]; masked: boolean }) {
-  const [showWeekend, setShowWeekend] = useShowWeekend();
-  const todayYmd = nyYmd(new Date());
   const weeks = useMemo(() => rollingFuturesWeeks(new Date(), 5), []);
   const scoped = useMemo(() => trades.filter((trade) => tradeFallsInWeeks(trade, weeks)), [trades, weeks]);
   const totals = scopeTotals(scoped);
-  const hiddenWeekend = showWeekend
-    ? []
-    : weeks.flatMap((week) => weekendSessionTrades(scoped.filter((trade) => tradeFallsInWeeks(trade, [week])), week.days));
-  const [expandedWeeks, setExpandedWeeks] = useState<Set<string>>(() => new Set(weeks[0] ? [weeks[0].mondayYmd] : []));
-
-  function toggleWeek(mondayYmd: string) {
-    setExpandedWeeks((prev) => {
-      const next = new Set(prev);
-      if (next.has(mondayYmd)) next.delete(mondayYmd);
-      else next.add(mondayYmd);
-      return next;
-    });
-  }
 
   return (
     <section className="space-y-4">
-      <SectionHeading
-        title="Monthly realized trades (last 5 weeks)"
-        showWeekend={showWeekend}
-        onToggleWeekend={setShowWeekend}
-      />
+      <SectionTitle title="Monthly realized trades (last 5 weeks)" />
       {scoped.length === 0 ? <EmptyLedgerHint /> : null}
       <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/80 p-4 dark:border-zinc-700/80 dark:bg-zinc-900/40">
         <ScopeTotalsRow
@@ -509,23 +441,17 @@ export function MonthlyRealizedTradesSection({ trades, masked }: { trades: Repor
           total={totals.total}
           masked={masked}
         />
-        <HiddenWeekendNote trades={hiddenWeekend} masked={masked} />
       </div>
       <div className="space-y-2">
         {weeks.map((week, index) => {
           const weekTrades = scoped.filter((trade) => tradeFallsInWeeks(trade, [week]));
           return (
-            <WeekBlock
+            <SummaryCard
               key={week.mondayYmd}
-              title={ROLLING_WEEK_LABELS[index] ?? `Week ${index + 1}`}
-              rangeLabel={formatMonthDayRange(week.mondayYmd, week.closeSundayYmd)}
-              days={week.days}
+              label={ROLLING_WEEK_LABELS[index] ?? `Week ${index + 1}`}
+              aside={formatMonthDayRange(week.mondayYmd, week.closeSundayYmd)}
               trades={weekTrades}
               masked={masked}
-              showWeekend={showWeekend}
-              expanded={expandedWeeks.has(week.mondayYmd)}
-              onToggle={() => toggleWeek(week.mondayYmd)}
-              todayYmd={todayYmd}
             />
           );
         })}
@@ -539,167 +465,22 @@ function monthTrades(trades: ReportTrade[], monthKey: string, throughYmd: string
 }
 
 export function YtdRealizedTradesSection({ trades, masked }: { trades: ReportTrade[]; masked: boolean }) {
-  const [showWeekend, setShowWeekend] = useShowWeekend();
   const todayYmd = nyYmd(new Date());
   const months = useMemo(() => ytdMonthsThrough(new Date()), []);
-  const spillYmds = useMemo(() => spillSessionYmds(trades, todayYmd), [trades, todayYmd]);
-  const currentKey = months[months.length - 1]?.key ?? "";
-  const [expandedMonths, setExpandedMonths] = useState<Set<string>>(() => new Set(currentKey ? [currentKey] : []));
-
-  function toggleMonth(key: string) {
-    setExpandedMonths((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }
 
   return (
     <section className="space-y-4">
-      <SectionHeading title="Realized by month" showWeekend={showWeekend} onToggleWeekend={setShowWeekend} />
+      <SectionTitle title="Realized by month" />
       <div className="space-y-2">
-        {months.map((month) => {
-          const rows = monthTrades(trades, month.key, todayYmd);
-          const totals = scopeTotals(rows);
-          const expanded = expandedMonths.has(month.key);
-          const weeks = clippedMonthWeeks(month.year, month.month);
-          const spillDays: FuturesDaySlot[] =
-            month.key === currentKey
-              ? spillYmds.map((ymd) => ({
-                  ymd,
-                  weekday: "Monday",
-                  weekend: false,
-                }))
-              : [];
-          return (
-            <MonthBlock
-              key={month.key}
-              label={month.label}
-              totals={totals}
-              masked={masked}
-              expanded={expanded}
-              onToggle={() => toggleMonth(month.key)}
-              weeks={weeks}
-              trades={rows}
-              spillDays={spillDays}
-              showWeekend={showWeekend}
-              todayYmd={todayYmd}
-            />
-          );
-        })}
+        {months.map((month) => (
+          <SummaryCard
+            key={month.key}
+            label={month.label}
+            trades={monthTrades(trades, month.key, todayYmd)}
+            masked={masked}
+          />
+        ))}
       </div>
     </section>
-  );
-}
-
-function MonthBlock({
-  label,
-  totals,
-  masked,
-  expanded,
-  onToggle,
-  weeks,
-  trades,
-  spillDays,
-  showWeekend,
-  todayYmd,
-}: {
-  label: string;
-  totals: { joint: number; retirement: number; total: number };
-  masked: boolean;
-  expanded: boolean;
-  onToggle: () => void;
-  weeks: ReturnType<typeof clippedMonthWeeks>;
-  trades: ReportTrade[];
-  spillDays: FuturesDaySlot[];
-  showWeekend: boolean;
-  todayYmd: string;
-}) {
-  const [expandedWeeks, setExpandedWeeks] = useState<Set<string>>(() => {
-    const current = weeks.find((week) => week.clippedDays.some((day) => day.ymd === todayYmd));
-    const open = current?.week.mondayYmd ?? weeks[weeks.length - 1]?.week.mondayYmd;
-    return new Set(open ? [open] : []);
-  });
-  const [expandedSpill, setExpandedSpill] = useState<Set<string>>(() => new Set());
-
-  function toggleWeek(mondayYmd: string) {
-    setExpandedWeeks((prev) => {
-      const next = new Set(prev);
-      if (next.has(mondayYmd)) next.delete(mondayYmd);
-      else next.add(mondayYmd);
-      return next;
-    });
-  }
-
-  return (
-    <div className="overflow-hidden rounded-xl border border-zinc-200/80 dark:border-zinc-700/80">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full flex-col gap-3 bg-white px-4 py-3 text-left transition-colors hover:bg-zinc-50 dark:bg-zinc-900/60 dark:hover:bg-zinc-900/80 sm:gap-2"
-        aria-expanded={expanded}
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-400" aria-hidden>
-            {expanded ? "▾" : "▸"}
-          </span>
-          <span className="font-medium text-zinc-800 dark:text-zinc-100">{label}</span>
-          <span className="text-xs text-zinc-500">
-            {trades.length} trade{trades.length === 1 ? "" : "s"}
-          </span>
-        </div>
-        <ScopeTotalsRow
-          label=""
-          joint={totals.joint}
-          retirement={totals.retirement}
-          total={totals.total}
-          masked={masked}
-          compact
-          className="pl-6 sm:pl-7"
-        />
-      </button>
-      {expanded ? (
-        <div className="space-y-2 border-t border-zinc-100 bg-zinc-50/50 p-3 dark:border-zinc-800/80 dark:bg-zinc-950/40">
-          {weeks.map((week) => {
-            const weekTrades = tradesOnDays(trades, week.clippedDays);
-            return (
-              <WeekBlock
-                key={week.week.mondayYmd}
-                title={`Week ${week.weekNumber}`}
-                rangeLabel={formatMonthDayRange(week.clippedStartYmd, week.clippedEndYmd)}
-                days={week.clippedDays}
-                trades={weekTrades}
-                masked={masked}
-                showWeekend={showWeekend}
-                expanded={expandedWeeks.has(week.week.mondayYmd)}
-                onToggle={() => toggleWeek(week.week.mondayYmd)}
-                todayYmd={todayYmd}
-              />
-            );
-          })}
-          {spillDays.map((day) => {
-            const dayTrades = trades.filter((trade) => sessionYmdForTrade(trade) === day.ymd);
-            return (
-              <DayCard
-                key={day.ymd}
-                ymd={day.ymd}
-                trades={dayTrades}
-                masked={masked}
-                expanded={expandedSpill.has(day.ymd)}
-                onToggle={() =>
-                  setExpandedSpill((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(day.ymd)) next.delete(day.ymd);
-                    else next.add(day.ymd);
-                    return next;
-                  })
-                }
-              />
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
   );
 }
