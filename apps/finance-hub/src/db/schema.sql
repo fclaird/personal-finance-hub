@@ -592,3 +592,99 @@ CREATE TABLE IF NOT EXISTS option_flow_daily (
 );
 
 CREATE INDEX IF NOT EXISTS idx_option_flow_daily_symbol_date ON option_flow_daily(symbol, session_date DESC);
+
+-- Owned homes (Main flavor). These totals stay off the terminal day-return series.
+CREATE TABLE IF NOT EXISTS real_estate_properties (
+  id TEXT PRIMARY KEY,
+  flavor TEXT NOT NULL DEFAULT 'main',
+  label TEXT NOT NULL,
+  street TEXT NOT NULL,
+  city TEXT NOT NULL,
+  state TEXT NOT NULL,
+  postal_code TEXT,
+  mailing_street TEXT,
+  owner_name TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  estimate_caveat TEXT,
+  hpi_place_id TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS real_estate_parcels (
+  id TEXT PRIMARY KEY,
+  property_id TEXT NOT NULL REFERENCES real_estate_properties(id) ON DELETE CASCADE,
+  apn TEXT NOT NULL,
+  county TEXT NOT NULL,
+  state TEXT NOT NULL,
+  role TEXT NOT NULL,
+  street TEXT,
+  UNIQUE(property_id, apn)
+);
+
+CREATE TABLE IF NOT EXISTS real_estate_valuations (
+  id TEXT PRIMARY KEY,
+  property_id TEXT NOT NULL REFERENCES real_estate_properties(id) ON DELETE CASCADE,
+  as_of TEXT NOT NULL,
+  value_usd REAL NOT NULL,
+  low_usd REAL,
+  high_usd REAL,
+  source TEXT NOT NULL,
+  source_detail TEXT NOT NULL DEFAULT '',
+  source_url TEXT,
+  is_anchor INTEGER NOT NULL DEFAULT 0,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(property_id, as_of, source, source_detail)
+);
+
+CREATE INDEX IF NOT EXISTS idx_real_estate_valuations_property ON real_estate_valuations(property_id, as_of);
+
+CREATE TABLE IF NOT EXISTS real_estate_value_points (
+  property_id TEXT NOT NULL REFERENCES real_estate_properties(id) ON DELETE CASCADE,
+  month TEXT NOT NULL,
+  value_usd REAL NOT NULL,
+  low_usd REAL,
+  high_usd REAL,
+  method TEXT NOT NULL,
+  anchor_valuation_id TEXT,
+  hpi_series TEXT,
+  hpi_base REAL,
+  hpi_month REAL,
+  source_as_of TEXT NOT NULL,
+  computed_at TEXT NOT NULL,
+  PRIMARY KEY (property_id, month)
+);
+
+CREATE TABLE IF NOT EXISTS real_estate_loans (
+  id TEXT PRIMARY KEY,
+  property_id TEXT NOT NULL UNIQUE REFERENCES real_estate_properties(id) ON DELETE CASCADE,
+  lender TEXT,
+  original_principal REAL,
+  interest_rate REAL,
+  term_months INTEGER,
+  start_date TEXT,
+  monthly_payment REAL,
+  details_complete INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS real_estate_loan_balances (
+  id TEXT PRIMARY KEY,
+  loan_id TEXT NOT NULL REFERENCES real_estate_loans(id) ON DELETE CASCADE,
+  as_of TEXT NOT NULL,
+  balance_usd REAL NOT NULL,
+  source TEXT NOT NULL,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(loan_id, as_of, source)
+);
+
+CREATE TABLE IF NOT EXISTS hpi_observations (
+  series_id TEXT NOT NULL,
+  period TEXT NOT NULL,
+  index_value REAL NOT NULL,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (series_id, period)
+);

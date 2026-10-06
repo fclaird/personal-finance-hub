@@ -22,6 +22,7 @@ Base: `https://127.0.0.1:3000` (or Electron `3049`). When `FINANCE_HUB_API_KEY` 
 | `/api/performance` | Performance |
 | `/api/accounts` | Accounts |
 | `/api/health` | Liveness |
+| `/api/real-estate` | Owned-property values, loan, equity, and the Main-flavor net-worth strip |
 
 Other `GET /api/*` pages (terminal, dividends, earnings, taxonomy, …) are also read-only.
 
@@ -38,6 +39,51 @@ These change **local** data or pull **reads** from Schwab. They do **not** place
 | `PATCH /api/option-situations/:id` | Confirm or reject a link |
 | `POST /api/alerts/run` | Evaluate rules → local events |
 | `POST /api/alerts/rules` | Enable/disable local rules |
+| `POST /api/real-estate/valuations` | Save one reading, or a month of readings for both properties |
+| `POST /api/real-estate/loans` | Save Crownsville loan terms (local only; incomplete loans are not amortized) |
+| `POST /api/real-estate/loan-balances` | Save a mortgage statement balance |
+| `POST /api/real-estate/refresh` | Download the FHFA house-price index and rebuild official values |
+
+`POST /api/real-estate/valuations` accepts one reading or a batch. Auth matches other hub routes: open on localhost, or `Authorization: Bearer <FINANCE_HUB_API_KEY>` / `x-finance-hub-key` when that key is set. No flavor cookie is required (the route defaults to Main). A `fh_flavor` cookie of `rorie` or `peyton` returns 404. These POSTs are local SQLite writes. They are not on the read-only MCP allowlist.
+
+```json
+{
+  "readings": [
+    {
+      "propertyId": "re_cortland",
+      "asOf": "2026-10-06",
+      "valueUsd": 250000,
+      "lowUsd": 240000,
+      "highUsd": 265000,
+      "source": "manual_avm",
+      "sourceDetail": "zillow",
+      "sourceUrl": "https://www.zillow.com/homedetails/..."
+    },
+    {
+      "propertyId": "re_cortland",
+      "asOf": "2026-10-06",
+      "valueUsd": 255000,
+      "source": "manual_avm",
+      "sourceDetail": "redfin",
+      "sourceUrl": "https://www.redfin.com/..."
+    },
+    {
+      "propertyId": "re_crownsville",
+      "asOf": "2026-10-06",
+      "valueUsd": 900000,
+      "source": "manual_avm",
+      "sourceDetail": "realtor",
+      "sourceUrl": "https://www.realtor.com/..."
+    }
+  ]
+}
+```
+
+`source` is `manual_avm`, `appraisal`, `assessor`, or `purchase`. A public estimate needs `sourceDetail` (`zillow`, `redfin`, `realtor`, or another named source). `lowUsd` and `highUsd` are optional. The same property, date, source, and source detail updates the existing row. `purchase` and `assessor` are reference points and do not set the official value. An appraisal does, once it is newer than the latest month that has two different estimate sources. County figures stay reference-only.
+
+Official value for a month is the median of the distinct estimate sources in that month (the average when there are two). Months with fewer than two sources step from the last official value by the FHFA all-transactions index for Youngstown–Warren (place `49660`) or Baltimore–Columbia–Towson (place `12580`). Cortland is 3131 McCleary Jacoby Rd plus the side lot at 3210; 3141 is only the mailing address.
+
+`POST /api/real-estate/loans` body: `{ "propertyId": "re_crownsville", "interestRate": 6.5, "startDate": "2024-06-21", "monthlyPayment": 4200 }`. Rate may be a decimal (`0.065`) or a percent (`6.5`). Amortization starts only when rate, start date, and a payment (or principal and term) are all present.
 
 ## Auth / OAuth (browser only)
 

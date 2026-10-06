@@ -2,6 +2,8 @@ import fs from "node:fs";
 
 import Database from "better-sqlite3";
 
+import { seedRealEstate } from "@/lib/realEstate/seed";
+
 import { ensureDirSync } from "@/lib/fs";
 import { getAppDataDir, getDbPath } from "@/lib/paths";
 
@@ -202,5 +204,6 @@ function migrate(db: Database.Database) {
   if (!exists) {
     db.prepare("INSERT INTO schema_migrations (name) VALUES (?)").run(name);
   }
+  seedRealEstate(db);
 }
 
