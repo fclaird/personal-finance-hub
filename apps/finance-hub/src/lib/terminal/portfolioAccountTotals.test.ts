@@ -318,3 +318,72 @@ test("sumExternalPositionsWithNav marks 529 plan funds to public NAV", () => {
   );
   assert.equal(mv, 200000 * (nav / 250));
 });
+
+test("priorNySessionYmd skips a NYSE holiday back to the last open session", () => {
+  assert.equal(priorNySessionYmd("2026-05-26"), "2026-05-22");
+});
+
+test("a multi-day account-value gap is not the prior session close", () => {
+  const db = createTestDb();
+  db.prepare(
+    `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('c1', 'schwab', 'S', 'active')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO accounts (id, connection_id, name, account_bucket, type) VALUES ('schwab_a', 'c1', 'Taxable', 'brokerage', 'brokerage')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO account_value_points (account_id, as_of, equity_value, cash_value, source) VALUES ('schwab_a', '2026-09-30T16:56:00.000Z', 4770000, 0, 'schwab_balances')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO account_value_points (account_id, as_of, equity_value, cash_value, prior_equity_value, source) VALUES ('schwab_a', '2026-10-06T13:21:00.000Z', 5340000, 0, NULL, 'schwab_balances')`,
+  ).run();
+
+  const { prior } = schwabPriorLiquidationFromDb(db, "2026-10-05");
+  assert.equal(prior, 0, "Sep 30 print is not the Oct 5 close");
+});
+
+test("prior-session liquidation keeps that session when an older print exists", () => {
+  const db = createTestDb();
+  db.prepare(
+    `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('c1', 'schwab', 'S', 'active')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO accounts (id, connection_id, name, account_bucket, type) VALUES ('schwab_a', 'c1', 'Taxable', 'brokerage', 'brokerage')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO account_value_points (account_id, as_of, equity_value, cash_value, source) VALUES ('schwab_a', '2026-09-30T16:56:00.000Z', 4770000, 0, 'schwab_balances')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO account_value_points (account_id, as_of, equity_value, cash_value, source) VALUES ('schwab_a', '2026-10-05T20:00:00.000Z', 5160000, 0, 'schwab_balances')`,
+  ).run();
+
+  const { prior } = schwabPriorLiquidationFromDb(db, "2026-10-05");
+  assert.equal(prior, 5160000);
+});
+
+test("external prior does not treat a pre-session snapshot as yesterday", () => {
+  const db = createTestDb();
+  db.prepare(
+    `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('conn_manual', 'manual', 'Manual', 'active')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO accounts (id, connection_id, name, account_bucket, type) VALUES ('manual_529', 'conn_manual', '529', '529', 'manual')`,
+  ).run();
+  db.prepare(`INSERT INTO securities (id, symbol, name, security_type) VALUES ('sec_529', '529FUND', '529 Fund', 'fund')`).run();
+  db.prepare(
+    `INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('snapOld', 'manual_529', '2026-09-30T16:00:00.000Z')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('snapToday', 'manual_529', '2026-10-06T13:21:00.000Z')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('pOld', 'snapOld', 'sec_529', 1, 250000, 250000)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO positions (id, snapshot_id, security_id, quantity, price, market_value) VALUES ('pToday', 'snapToday', 'sec_529', 1, 325920, 325920)`,
+  ).run();
+
+  const { current, prior } = externalMarketValueFromDb(db, "2026-10-05");
+  assert.equal(current, 325920);
+  assert.equal(prior, 325920, "Sep 30 statement is not the Oct 5 close");
+});
