@@ -61,9 +61,6 @@ export function devNextArgs({ protocol, bindHost, port }) {
   return args;
 }
 
-/**
- * @param {{ redirectUri?: string, port: number, bindHost: string, mode: "start" | "dev", certsPresent: boolean }} input
- */
 export function resolveListen({ redirectUri, port, bindHost, mode, certsPresent: hasCerts }) {
   const command = mode === "dev" ? "npm run dev" : "npm start";
   const raw = typeof redirectUri === "string" ? redirectUri.trim() : "";

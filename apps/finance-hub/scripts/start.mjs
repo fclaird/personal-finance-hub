@@ -1,12 +1,4 @@
 #!/usr/bin/env node
-/**
- * Production listen helper. Binds 127.0.0.1 unless FINANCE_HUB_BIND_HOST is set.
- * Public protocol follows SCHWAB_REDIRECT_URI. https uses the mkcert files
- * `npm run dev` writes at certificates/localhost.pem. An http redirect stays plain HTTP.
- * If that origin's /api/health is already 200, exit without a second process.
- * VPN/LAN: FINANCE_HUB_BIND_HOST=0.0.0.0 (or a Tailscale IP) plus FINANCE_HUB_API_KEY.
- * Leave FINANCE_HUB_ALLOW_BROKER_ORDERS unset.
- */
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -35,6 +27,16 @@ function closeServer(server) {
   });
 }
 
+async function listenPlainHttpForInProcessFetch(onRequest) {
+  const server = await listenLoopbackHttp({ port: 0, onRequest });
+  const addr = server.address();
+  const port = typeof addr === "object" && addr ? addr.port : 0;
+  if (!process.env.INTERNAL_APP_BASE_URL?.trim()) {
+    process.env.INTERNAL_APP_BASE_URL = `http://127.0.0.1:${port}`;
+  }
+  return server;
+}
+
 async function bootProductionHttps({ bindHost, port, keyPath, certPath }) {
   if (!process.env.NODE_ENV) process.env.NODE_ENV = "production";
   process.env.NEXT_RUNTIME = "nodejs";
@@ -42,22 +44,13 @@ async function bootProductionHttps({ bindHost, port, keyPath, certPath }) {
 
   let handler = null;
   const waiting = [];
-  const internal = await listenLoopbackHttp({
-    port: 0,
-    onRequest(req, res) {
-      if (!handler) {
-        waiting.push({ req, res });
-        return;
-      }
-      return handler(req, res);
-    },
+  const internal = await listenPlainHttpForInProcessFetch((req, res) => {
+    if (!handler) {
+      waiting.push({ req, res });
+      return;
+    }
+    return handler(req, res);
   });
-  const internalAddr = internal.address();
-  const internalPort = typeof internalAddr === "object" && internalAddr ? internalAddr.port : 0;
-  // In-process jobs call loopback HTTP. Node does not trust the mkcert CA, and the public port is TLS.
-  if (!process.env.INTERNAL_APP_BASE_URL?.trim()) {
-    process.env.INTERNAL_APP_BASE_URL = `http://127.0.0.1:${internalPort}`;
-  }
 
   let app;
   try {

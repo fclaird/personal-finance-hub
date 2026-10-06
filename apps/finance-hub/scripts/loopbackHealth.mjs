@@ -1,9 +1,6 @@
 import http from "node:http";
 import https from "node:https";
 
-/**
- * True when /api/health on loopback returns 200 for the protocol this process would serve.
- */
 export async function loopbackHealthOk(port, timeoutMs = 5000, protocol = "http") {
   if (protocol === "https") return probe(https, port, timeoutMs, { rejectUnauthorized: false });
   return probe(http, port, timeoutMs, {});
