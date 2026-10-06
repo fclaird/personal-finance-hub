@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadEnvLocal } from "./loadEnvLocal.mjs";
+import { devNextArgs, resolveListen } from "./schwabListen.mjs";
 
 const root = path.join(fileURLToPath(new URL(".", import.meta.url)), "..");
 loadEnvLocal(root);
@@ -97,14 +98,14 @@ function clearStaleDevArtifacts() {
   fs.rmSync(lockPath, { force: true });
 }
 
-function ensureSingleDevServer(bindHost) {
+function ensureSingleDevServer(protocol, bindHost) {
   const restart = process.env.FINANCE_HUB_DEV_RESTART === "1";
   const lock = readDevLock();
   const listeners = financeHubListenerPids();
   const lockPidAlive = lock?.pid ? pidAlive(lock.pid) : false;
 
   if (lockPidAlive && !restart) {
-    const url = `https://${bindHost}:${lock.port ?? DEV_PORT}`;
+    const url = `${protocol}://${bindHost}:${lock.port ?? DEV_PORT}`;
     console.log(`\nFinance Hub dev server is already running at ${url} (PID ${lock.pid}).`);
     console.log(`Open that URL in your browser. To restart: FINANCE_HUB_DEV_RESTART=1 npm run dev\n`);
     process.exit(0);
@@ -154,17 +155,21 @@ if (!loopback && !process.env.FINANCE_HUB_API_KEY?.trim()) {
   process.exit(1);
 }
 
-ensureSingleDevServer(bindHost);
-
-const nextArgs = [
-  "node_modules/next/dist/bin/next",
-  "dev",
-  "--experimental-https",
-  "--hostname",
+const plan = resolveListen({
+  redirectUri: process.env.SCHWAB_REDIRECT_URI,
+  port: DEV_PORT,
   bindHost,
-  "--port",
-  String(DEV_PORT),
-];
+  mode: "dev",
+  certsPresent: true,
+});
+if (!plan.ok) {
+  console.error(plan.message);
+  process.exit(1);
+}
+
+ensureSingleDevServer(plan.protocol, bindHost);
+
+const nextArgs = devNextArgs({ protocol: plan.protocol, bindHost, port: DEV_PORT });
 const child = spawn(nodeBin, nextArgs, { cwd: root, stdio: "inherit", env: process.env });
 child.on("exit", (code, signal) => {
   if (signal) process.kill(process.pid, signal);
