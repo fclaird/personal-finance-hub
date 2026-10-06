@@ -6,7 +6,7 @@ import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { FlavorPasswordDialog } from "@/app/components/FlavorPasswordDialog";
 import type { FlavorId } from "@/lib/flavor";
-import { defaultNavHref, getFlavorConfig } from "@/lib/flavors/registry";
+import { getFlavorConfig } from "@/lib/flavors/registry";
 import { formatDisplayDateTime } from "@/lib/formatDate";
 import { fetchSyncFresh, oncePerPageOpen } from "@/lib/pageOpenSync";
 import { MAX_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
@@ -64,11 +64,20 @@ function flavorPillClass(active: boolean, activeClass: string) {
   );
 }
 
-export default function ConnectionsPage({ listenWarning }: { listenWarning: string | null }) {
+export default function ConnectionsPage({
+  listenWarning,
+  initialPendingFlavor,
+  initialUnlockError,
+}: {
+  listenWarning: string | null;
+  initialPendingFlavor: FlavorId | null;
+  initialUnlockError: string | null;
+}) {
   const [flavor, setFlavor] = useState<FlavorId | null>(null);
   const [flavorOptions, setFlavorOptions] = useState<FlavorOption[]>([]);
-  const [pendingFlavor, setPendingFlavor] = useState<FlavorId | null>(null);
-  const [passwordOpen, setPasswordOpen] = useState(false);
+  const [pendingFlavor, setPendingFlavor] = useState<FlavorId | null>(initialPendingFlavor);
+  const [passwordOpen, setPasswordOpen] = useState(initialPendingFlavor != null);
+  const [unlockError, setUnlockError] = useState<string | null>(initialUnlockError);
   const [syncing, setSyncing] = useState(false);
   const [syncingTx, setSyncingTx] = useState(false);
   const [result, setResult] = useState<SyncResult | null>(null);
@@ -126,26 +135,30 @@ export default function ConnectionsPage({ listenWarning }: { listenWarning: stri
 
   function beginFlavorUnlock(next: FlavorId) {
     setPendingFlavor(next);
+    setUnlockError(null);
     setPasswordOpen(true);
   }
 
   function closePasswordDialog() {
     setPasswordOpen(false);
     setPendingFlavor(null);
-  }
-
-  function onFlavorUnlocked(unlocked: FlavorId) {
-    setFlavor(unlocked);
-    setPasswordOpen(false);
-    setPendingFlavor(null);
-    // The client router keeps the middleware redirect from before this cookie existed.
-    window.location.assign(defaultNavHref(unlocked));
+    setUnlockError(null);
   }
 
   const pendingFlavorLabel =
     pendingFlavor != null ? (flavorOptions.find((f) => f.id === pendingFlavor)?.label ?? pendingFlavor) : "";
   const pendingPasswordRequired =
     pendingFlavor != null ? flavorOptions.find((f) => f.id === pendingFlavor)?.passwordRequired : undefined;
+
+  useEffect(() => {
+    if (!initialUnlockError) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("flavorUnlock") !== "invalid") return;
+    params.delete("flavorUnlock");
+    params.delete("flavor");
+    const next = params.toString();
+    window.history.replaceState(null, "", next ? `/connections?${next}` : "/connections");
+  }, [initialUnlockError]);
 
   useEffect(() => {
     let cancelled = false;
@@ -235,8 +248,8 @@ export default function ConnectionsPage({ listenWarning }: { listenWarning: stri
         label={pendingFlavorLabel}
         passwordRequired={pendingPasswordRequired}
         open={passwordOpen}
+        initialError={unlockError}
         onClose={closePasswordDialog}
-        onSuccess={onFlavorUnlocked}
       />
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">

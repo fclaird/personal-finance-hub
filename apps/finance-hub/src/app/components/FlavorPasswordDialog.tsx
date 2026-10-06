@@ -12,51 +12,27 @@ export function FlavorPasswordDialog({
   label,
   passwordRequired,
   open,
+  initialError,
   onClose,
-  onSuccess,
 }: {
   flavor: FlavorId | null;
   label: string;
   passwordRequired?: boolean;
   open: boolean;
+  initialError?: string | null;
   onClose: () => void;
-  onSuccess: (flavor: FlavorId) => void;
 }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (open) {
       setPassword("");
-      setError(null);
+      setError(initialError ?? null);
     }
-  }, [open, flavor]);
+  }, [open, flavor, initialError]);
 
   if (!open || !flavor) return null;
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
-    setError(null);
-    try {
-      const resp = await fetch("/api/flavor", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ flavor, password }),
-      });
-      const json = (await resp.json()) as { ok: boolean; flavor?: FlavorId; error?: string };
-      if (json.ok && json.flavor) {
-        onSuccess(json.flavor);
-        return;
-      }
-      setError(json.error ?? "Incorrect password");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not verify password");
-    } finally {
-      setSubmitting(false);
-    }
-  }
 
   return (
     <div
@@ -66,7 +42,8 @@ export function FlavorPasswordDialog({
       aria-labelledby="flavor-password-title"
     >
       <form
-        onSubmit={(e) => void submit(e)}
+        method="POST"
+        action="/api/flavor"
         className="w-full max-w-sm rounded-xl border border-zinc-300 bg-white p-5 shadow-xl dark:border-white/20 dark:bg-zinc-950"
       >
         <h2 id="flavor-password-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
@@ -81,16 +58,17 @@ export function FlavorPasswordDialog({
             </span>
           ) : null}
         </p>
+        <input type="hidden" name="flavor" value={flavor} />
         <label className="mt-4 block space-y-1 text-sm">
           <span className="font-medium text-zinc-800 dark:text-zinc-200">Password</span>
           <input
             type="password"
+            name="password"
             autoFocus
             autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className={inputClass}
-            disabled={submitting}
           />
         </label>
         {error ? (
@@ -102,17 +80,15 @@ export function FlavorPasswordDialog({
           <button
             type="button"
             onClick={onClose}
-            disabled={submitting}
-            className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 disabled:opacity-50 dark:border-white/20 dark:text-zinc-100 dark:hover:bg-white/5"
+            className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 dark:border-white/20 dark:text-zinc-100 dark:hover:bg-white/5"
           >
             Cancel
           </button>
           <button
             type="submit"
-            disabled={submitting}
-            className="rounded-full bg-zinc-950 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
+            className="rounded-full bg-zinc-950 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
           >
-            {submitting ? "Verifying…" : "Continue"}
+            Continue
           </button>
         </div>
       </form>
