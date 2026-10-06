@@ -204,7 +204,7 @@ function ReportsPageInner() {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6">
-      <EditablePageHeading pageId="reports" defaultTitle="Reports (realized gain/loss)" />
+      <EditablePageHeading pageId="reports" defaultTitle="Realized gain/loss" />
 
       <div className="flex flex-wrap gap-2">
         {PERIOD_KINDS.map((p) => (

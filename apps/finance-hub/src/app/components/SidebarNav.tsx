@@ -225,8 +225,9 @@ export function SidebarNav({
               </div>
               <Link
                 href={item.href}
+                title={item.label}
                 className={
-                  "min-w-0 flex-1 rounded-lg px-2 py-2.5 text-[15px] font-medium transition-colors " +
+                  "min-w-0 flex-1 truncate whitespace-nowrap rounded-lg px-2 py-2.5 text-[15px] font-medium transition-colors " +
                   (active
                     ? "bg-zinc-950 text-white dark:bg-white dark:text-black"
                     : "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-white/10")

@@ -64,10 +64,11 @@ describe("nav and route guards", () => {
     ]);
   });
 
-  it("names Reports for realized gain and loss in every flavor", () => {
+  it("names realized gain and loss in every flavor and keeps the reports route", () => {
     for (const id of ["main", "rorie", "peyton"] as const) {
       const item = navForFlavor(id).find((entry) => entry.href === "/reports");
-      assert.equal(item?.label, "Reports (realized gain/loss)");
+      assert.equal(item?.href, "/reports");
+      assert.equal(item?.label, "Realized gain/loss");
     }
   });
 
