@@ -2,6 +2,10 @@ import type Database from "better-sqlite3";
 
 export const CORTLAND_ID = "re_cortland";
 export const CROWNSVILLE_ID = "re_crownsville";
+export const CORTLAND_OWNER = "Christopher R. and Brittany L. Laird";
+
+/** Replaced on startup only when this exact seeded value is still stored. */
+const CORTLAND_OWNER_PREVIOUS = "Icarus Kaizen Strategies Limited";
 
 export const CORTLAND_CAVEAT =
   "Public estimates exclude the recent addition until this property is appraised. The house is 3131 McCleary Jacoby Rd and the side lot is 3210 McCleary Jacoby Rd. 3141 McCleary Jacoby Rd is only the mailing address.";
@@ -54,7 +58,7 @@ export function seedRealEstate(db: Database.Database): void {
       state: "OH",
       postal_code: "44410",
       mailing_street: "3141 McCleary Jacoby Rd",
-      owner_name: "Icarus Kaizen Strategies Limited",
+      owner_name: CORTLAND_OWNER,
       estimate_caveat: CORTLAND_CAVEAT,
       hpi_place_id: "49660",
     });
@@ -119,6 +123,11 @@ export function seedRealEstate(db: Database.Database): void {
       balance_usd: 745_000,
       notes: "Owner estimate of about $745,000. Terms not entered, so this balance is not amortized.",
     });
+    db.prepare(
+      `UPDATE real_estate_properties
+       SET owner_name = ?, updated_at = datetime('now')
+       WHERE id = ? AND owner_name = ?`,
+    ).run(CORTLAND_OWNER, CORTLAND_ID, CORTLAND_OWNER_PREVIOUS);
   });
   tx();
 }
