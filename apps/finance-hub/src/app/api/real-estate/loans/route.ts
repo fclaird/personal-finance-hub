@@ -29,9 +29,13 @@ export async function POST(req: Request) {
   if (rawRate != null && annualRate == null) {
     return NextResponse.json({ ok: false, error: "interestRate must be a decimal like 0.065, or a percent like 6.5" }, { status: 400 });
   }
-  const startDate = str(body?.startDate);
+  const startDate = str(body?.firstPaymentDate) ?? str(body?.startDate);
   if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
-    return NextResponse.json({ ok: false, error: "startDate must be YYYY-MM-DD" }, { status: 400 });
+    return NextResponse.json({ ok: false, error: "firstPaymentDate must be YYYY-MM-DD" }, { status: 400 });
+  }
+  const termMonths = num(body?.termMonths);
+  if (termMonths != null && !Number.isInteger(termMonths)) {
+    return NextResponse.json({ ok: false, error: "termMonths must be a whole number of months" }, { status: 400 });
   }
   try {
     saveLoanTerms(getDb(), {
@@ -39,9 +43,11 @@ export async function POST(req: Request) {
       lender: str(body?.lender),
       originalPrincipal: num(body?.originalPrincipal),
       annualRate,
-      termMonths: num(body?.termMonths),
+      termMonths,
       startDate,
       monthlyPayment: num(body?.monthlyPayment),
+      monthlyEscrow: body && "monthlyEscrow" in body ? num(body.monthlyEscrow) : undefined,
+      extraPrincipal: body && "extraPrincipal" in body ? num(body.extraPrincipal) : undefined,
     });
     return NextResponse.json(await buildRealEstatePayload());
   } catch (error) {

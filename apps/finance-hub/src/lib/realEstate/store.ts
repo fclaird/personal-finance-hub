@@ -3,7 +3,7 @@ import type Database from "better-sqlite3";
 import { nyYmd } from "@/lib/market/usEquitySession";
 import { newId } from "@/lib/id";
 import { hpiSeriesId, type ParsedHpi } from "@/lib/realEstate/hpi";
-import { endOfMonth } from "@/lib/realEstate/months";
+import { endOfMonth, monthOf } from "@/lib/realEstate/months";
 import {
   displayBalance,
   latestBalance,
@@ -12,6 +12,16 @@ import {
   type BalancePoint,
   type LoanTerms,
 } from "@/lib/realEstate/loans";
+import {
+  buildMortgageView,
+  mortgageTermsReady,
+  recomputeComputedSplits,
+  type StoredPayment,
+  type MortgageTerms,
+  type MortgageView,
+  type SplitSource,
+  type StatementAnchor,
+} from "@/lib/realEstate/mortgage";
 import { composeNetWorth, type NetWorthStrip } from "@/lib/realEstate/netWorth";
 import { resolveOfficialSeries, type OfficialMonth, type ValuationInput, type ValueSource } from "@/lib/realEstate/resolveValue";
 
@@ -35,6 +45,20 @@ export type LoanWrite = {
   termMonths: number | null;
   startDate: string | null;
   monthlyPayment: number | null;
+  /** Undefined leaves the stored value. Null clears escrow. */
+  monthlyEscrow?: number | null;
+  extraPrincipal?: number | null;
+};
+
+export type PaymentWrite = {
+  paidOn: string;
+  totalPaid: number;
+  principal: number | null;
+  interest: number | null;
+  escrow: number | null;
+  extraPrincipal: number | null;
+  balanceAfter: number | null;
+  notes: string | null;
 };
 
 const SOURCES = new Set<ValueSource>(["appraisal", "assessor", "manual_avm", "purchase"]);
@@ -216,8 +240,19 @@ export function listHpiPlaceIds(db: Database.Database): string[] {
 }
 
 export function saveLoanTerms(db: Database.Database, write: LoanWrite, now = new Date()): void {
-  const loan = db.prepare(`SELECT id FROM real_estate_loans WHERE property_id = ?`).get(write.propertyId) as { id: string } | undefined;
+  const loan = db.prepare(`SELECT id, monthly_escrow AS monthlyEscrow, extra_principal AS extraPrincipal FROM real_estate_loans WHERE property_id = ?`).get(write.propertyId) as
+    | { id: string; monthlyEscrow: number | null; extraPrincipal: number | null }
+    | undefined;
   if (!loan) throw new Error("That property has no loan to update");
+  if (write.originalPrincipal != null && !(write.originalPrincipal > 0)) throw new Error("originalPrincipal must be greater than zero");
+  if (write.monthlyPayment != null && !(write.monthlyPayment > 0)) throw new Error("monthlyPayment must be greater than zero");
+  if (write.termMonths != null && (!Number.isInteger(write.termMonths) || write.termMonths < 1 || write.termMonths > 480)) {
+    throw new Error("termMonths must be a whole number from 1 to 480");
+  }
+  const extraPrincipal = write.extraPrincipal === undefined ? (loan.extraPrincipal ?? 0) : (write.extraPrincipal ?? 0);
+  const monthlyEscrow = write.monthlyEscrow === undefined ? loan.monthlyEscrow : write.monthlyEscrow;
+  if (!(extraPrincipal >= 0)) throw new Error("extraPrincipal must be zero or positive");
+  if (monthlyEscrow != null && !(monthlyEscrow >= 0)) throw new Error("monthlyEscrow must be zero or positive");
   const complete = loanDetailsComplete({
     annualRate: write.annualRate,
     monthlyPayment: write.monthlyPayment,
@@ -233,6 +268,8 @@ export function saveLoanTerms(db: Database.Database, write: LoanWrite, now = new
       term_months = @term_months,
       start_date = @start_date,
       monthly_payment = @monthly_payment,
+      monthly_escrow = @monthly_escrow,
+      extra_principal = @extra_principal,
       details_complete = @details_complete,
       updated_at = @updated_at
     WHERE id = @id
@@ -244,9 +281,12 @@ export function saveLoanTerms(db: Database.Database, write: LoanWrite, now = new
     term_months: write.termMonths,
     start_date: write.startDate,
     monthly_payment: write.monthlyPayment,
+    monthly_escrow: monthlyEscrow,
+    extra_principal: extraPrincipal,
     details_complete: complete ? 1 : 0,
     updated_at: now.toISOString(),
   });
+  resplitComputedPayments(db, loan.id, now);
   syncAmortization(db, currentMonth(now), now.toISOString());
 }
 
@@ -277,6 +317,241 @@ export function saveStatementBalance(
     created_at: now.toISOString(),
   });
   syncAmortization(db, currentMonth(now), now.toISOString());
+}
+
+export function parsePaymentPayload(body: unknown): { propertyId: string; payments: PaymentWrite[] } | { error: string } {
+  if (body == null || typeof body !== "object") return { error: "Expected a JSON object" };
+  const record = body as Record<string, unknown>;
+  const propertyId = stringField(record.propertyId);
+  if (!propertyId) return { error: "propertyId is required" };
+  const rawList = Array.isArray(record.payments) ? record.payments : [record];
+  if (rawList.length === 0) return { error: "No payments" };
+  if (rawList.length > 600) return { error: "At most 600 payments per call" };
+  const payments: PaymentWrite[] = [];
+  for (const raw of rawList) {
+    const parsed = parseOnePayment(raw);
+    if ("error" in parsed) return parsed;
+    payments.push(parsed);
+  }
+  return { propertyId, payments };
+}
+
+function parseOnePayment(raw: unknown): PaymentWrite | { error: string } {
+  if (raw == null || typeof raw !== "object") return { error: "Each payment must be an object" };
+  const row = raw as Record<string, unknown>;
+  const paidOn = stringField(row.paidOn);
+  if (!ISO_DATE.test(paidOn)) return { error: "paidOn must be YYYY-MM-DD" };
+  const totalPaid = numberField(row.totalPaid);
+  if (totalPaid == null || totalPaid < 0) return { error: "totalPaid must be zero or positive" };
+  const principal = numberField(row.principal);
+  const interest = numberField(row.interest);
+  const escrow = numberField(row.escrow);
+  const extraPrincipal = numberField(row.extraPrincipal);
+  const balanceAfter = numberField(row.balanceAfter);
+  for (const [name, value] of [
+    ["principal", principal],
+    ["interest", interest],
+    ["escrow", escrow],
+    ["extraPrincipal", extraPrincipal],
+    ["balanceAfter", balanceAfter],
+  ] as const) {
+    if (value != null && value < 0) return { error: `${name} must be zero or positive` };
+  }
+  if (!(totalPaid > 0) && !((principal ?? 0) + (interest ?? 0) + (extraPrincipal ?? 0) > 0)) {
+    return { error: "A payment needs a total or a principal amount" };
+  }
+  const notes = stringField(row.notes) || null;
+  if (notes && notes.length > 500) return { error: "notes must be 500 characters or fewer" };
+  return { paidOn, totalPaid, principal, interest, escrow, extraPrincipal, balanceAfter, notes };
+}
+
+export function upsertLoanPayments(db: Database.Database, propertyId: string, payments: PaymentWrite[], now = new Date()): string[] {
+  const loan = loanForProperty(db, propertyId);
+  const ids = writePayments(db, loan.id, payments, now);
+  resplitComputedPayments(db, loan.id, now);
+  syncAmortization(db, currentMonth(now), now.toISOString());
+  return ids;
+}
+
+export function updateLoanPayment(db: Database.Database, id: string, payment: PaymentWrite, now = new Date()): void {
+  const existing = db.prepare(`SELECT loan_id AS loanId FROM real_estate_loan_payments WHERE id = ?`).get(id) as { loanId: string } | undefined;
+  if (!existing) throw new Error("Payment not found");
+  const clash = db
+    .prepare(`SELECT id FROM real_estate_loan_payments WHERE loan_id = ? AND paid_on = ? AND id <> ?`)
+    .get(existing.loanId, payment.paidOn, id) as { id: string } | undefined;
+  if (clash) throw new Error("A payment is already logged on that date");
+  const splitSource: SplitSource = payment.principal != null && payment.interest != null ? "statement" : "computed";
+  if (splitSource === "computed" && !loadMortgageTerms(db, existing.loanId)) {
+    throw new Error("Enter original principal, rate, term, first payment date, and the monthly principal and interest before a total-only payment can be split");
+  }
+  db.prepare(`
+    UPDATE real_estate_loan_payments SET
+      paid_on = @paid_on,
+      total_paid = @total_paid,
+      principal = @principal,
+      interest = @interest,
+      escrow = @escrow,
+      extra_principal = @extra_principal,
+      balance_after = @balance_after,
+      notes = @notes,
+      split_source = @split_source,
+      updated_at = @updated_at
+    WHERE id = @id
+  `).run(paymentParams(id, existing.loanId, payment, splitSource, now));
+  resplitComputedPayments(db, existing.loanId, now);
+  syncAmortization(db, currentMonth(now), now.toISOString());
+}
+
+export function deleteLoanPayment(db: Database.Database, id: string, now = new Date()): void {
+  const existing = db.prepare(`SELECT loan_id AS loanId FROM real_estate_loan_payments WHERE id = ?`).get(id) as { loanId: string } | undefined;
+  if (!existing) throw new Error("Payment not found");
+  db.prepare(`DELETE FROM real_estate_loan_payments WHERE id = ?`).run(id);
+  resplitComputedPayments(db, existing.loanId, now);
+  syncAmortization(db, currentMonth(now), now.toISOString());
+}
+
+function loanForProperty(db: Database.Database, propertyId: string): { id: string } {
+  const loan = db.prepare(`SELECT id FROM real_estate_loans WHERE property_id = ?`).get(propertyId) as { id: string } | undefined;
+  if (!loan) throw new Error("That property has no loan");
+  return loan;
+}
+
+function writePayments(db: Database.Database, loanId: string, payments: PaymentWrite[], now: Date): string[] {
+  const terms = loadMortgageTerms(db, loanId);
+  const insert = db.prepare(`
+    INSERT INTO real_estate_loan_payments (
+      id, loan_id, paid_on, total_paid, principal, interest, escrow, extra_principal, balance_after, notes, split_source, created_at, updated_at
+    ) VALUES (
+      @id, @loan_id, @paid_on, @total_paid, @principal, @interest, @escrow, @extra_principal, @balance_after, @notes, @split_source, @created_at, @updated_at
+    )
+    ON CONFLICT(loan_id, paid_on) DO UPDATE SET
+      total_paid = excluded.total_paid,
+      principal = excluded.principal,
+      interest = excluded.interest,
+      escrow = excluded.escrow,
+      extra_principal = excluded.extra_principal,
+      balance_after = excluded.balance_after,
+      notes = excluded.notes,
+      split_source = excluded.split_source,
+      updated_at = excluded.updated_at
+    RETURNING id
+  `);
+  const ids: string[] = [];
+  const tx = db.transaction(() => {
+    for (const payment of payments) {
+      const splitSource: SplitSource = payment.principal != null && payment.interest != null ? "statement" : "computed";
+      if (splitSource === "computed" && !terms) {
+        throw new Error("Enter original principal, rate, term, first payment date, and the monthly principal and interest before a total-only payment can be split");
+      }
+      const row = insert.get(paymentParams(newId("repay"), loanId, payment, splitSource, now)) as { id: string };
+      ids.push(row.id);
+    }
+  });
+  tx();
+  return ids;
+}
+
+function paymentParams(id: string, loanId: string, payment: PaymentWrite, splitSource: SplitSource, now: Date) {
+  return {
+    id,
+    loan_id: loanId,
+    paid_on: payment.paidOn,
+    total_paid: payment.totalPaid,
+    principal: splitSource === "statement" ? payment.principal : null,
+    interest: splitSource === "statement" ? payment.interest : null,
+    escrow: payment.escrow,
+    extra_principal: splitSource === "statement" ? (payment.extraPrincipal ?? 0) : null,
+    balance_after: payment.balanceAfter,
+    notes: payment.notes,
+    split_source: splitSource,
+    created_at: now.toISOString(),
+    updated_at: now.toISOString(),
+  };
+}
+
+function resplitComputedPayments(db: Database.Database, loanId: string, now: Date): void {
+  const terms = loadMortgageTerms(db, loanId);
+  if (!terms) return;
+  const payments = loadPaymentRows(db, loanId);
+  const statements = loadStatementAnchors(db, loanId);
+  const updates = recomputeComputedSplits(terms, payments, statements);
+  const update = db.prepare(`
+    UPDATE real_estate_loan_payments SET
+      principal = @principal,
+      interest = @interest,
+      escrow = @escrow,
+      extra_principal = @extra_principal,
+      balance_after = @balance_after,
+      split_source = @split_source,
+      updated_at = @updated_at
+    WHERE id = @id
+  `);
+  const tx = db.transaction(() => {
+    for (const row of updates) {
+      update.run({
+        id: row.id,
+        principal: row.principal,
+        interest: row.interest,
+        escrow: row.escrow,
+        extra_principal: row.extraPrincipal,
+        balance_after: row.balanceAfter,
+        split_source: row.splitSource,
+        updated_at: now.toISOString(),
+      });
+    }
+  });
+  tx();
+}
+
+function loadMortgageTerms(db: Database.Database, loanId: string): MortgageTerms | null {
+  const row = db
+    .prepare(
+      `SELECT original_principal AS originalPrincipal, interest_rate AS annualRate, term_months AS termMonths,
+              start_date AS firstPaymentDate, monthly_payment AS monthlyPayment, monthly_escrow AS monthlyEscrow,
+              extra_principal AS extraPrincipal
+       FROM real_estate_loans WHERE id = ?`,
+    )
+    .get(loanId) as
+    | {
+        originalPrincipal: number | null;
+        annualRate: number | null;
+        termMonths: number | null;
+        firstPaymentDate: string | null;
+        monthlyPayment: number | null;
+        monthlyEscrow: number | null;
+        extraPrincipal: number | null;
+      }
+    | undefined;
+  if (!row) return null;
+  const terms: MortgageTerms = {
+    originalPrincipal: row.originalPrincipal ?? 0,
+    annualRate: row.annualRate ?? -1,
+    termMonths: row.termMonths ?? 0,
+    firstPaymentDate: row.firstPaymentDate ?? "",
+    monthlyPayment: row.monthlyPayment ?? 0,
+    monthlyEscrow: row.monthlyEscrow ?? 0,
+    extraPrincipal: row.extraPrincipal ?? 0,
+  };
+  return mortgageTermsReady(terms) ? terms : null;
+}
+
+function loadPaymentRows(db: Database.Database, loanId: string): StoredPayment[] {
+  return db
+    .prepare(
+      `SELECT id, paid_on AS paidOn, total_paid AS totalPaid, principal, interest, escrow,
+              extra_principal AS extraPrincipal, balance_after AS balanceAfter, notes, split_source AS splitSource
+       FROM real_estate_loan_payments WHERE loan_id = ? ORDER BY paid_on, id`,
+    )
+    .all(loanId) as StoredPayment[];
+}
+
+function loadStatementAnchors(db: Database.Database, loanId: string): StatementAnchor[] {
+  return db
+    .prepare(
+      `SELECT as_of AS asOf, balance_usd AS balanceUsd FROM real_estate_loan_balances
+       WHERE loan_id = ? AND source = 'statement' ORDER BY as_of`,
+    )
+    .all(loanId) as StatementAnchor[];
 }
 
 export function syncAmortization(db: Database.Database, throughMonth: string, computedAt: string): void {
@@ -351,7 +626,10 @@ export type DashboardProperty = {
     termMonths: number | null;
     startDate: string | null;
     monthlyPayment: number | null;
+    monthlyEscrow: number | null;
+    extraPrincipal: number;
     notes: string | null;
+    mortgage: MortgageView | null;
   } | null;
   readings: DashboardReading[];
   series: Array<OfficialMonth & { loanBalance: number; equity: number }>;
@@ -364,7 +642,8 @@ export function loadDashboard(db: Database.Database, investable: number, through
   properties: DashboardProperty[];
   hpiFetchedAt: string | null;
 } {
-  const asOf = endOfMonth(throughMonth);
+  const today = nyYmd(new Date());
+  const asOf = monthOf(today) === throughMonth ? today : endOfMonth(throughMonth);
   const properties = db
     .prepare(
       `SELECT id, label, street, city, state, postal_code AS postalCode, mailing_street AS mailingStreet,
@@ -391,6 +670,7 @@ export function loadDashboard(db: Database.Database, investable: number, through
       .prepare(
         `SELECT id, lender, interest_rate AS annualRate, monthly_payment AS monthlyPayment,
                 original_principal AS originalPrincipal, term_months AS termMonths, start_date AS startDate,
+                monthly_escrow AS monthlyEscrow, extra_principal AS extraPrincipal,
                 details_complete AS detailsComplete
          FROM real_estate_loans WHERE property_id = ?`,
       )
@@ -403,6 +683,8 @@ export function loadDashboard(db: Database.Database, investable: number, through
           originalPrincipal: number | null;
           termMonths: number | null;
           startDate: string | null;
+          monthlyEscrow: number | null;
+          extraPrincipal: number | null;
           detailsComplete: number;
         }
       | undefined;
@@ -425,11 +707,34 @@ export function loadDashboard(db: Database.Database, investable: number, through
          FROM real_estate_value_points WHERE property_id = ? AND month <= ? ORDER BY month`,
       )
       .all(property.id, throughMonth) as OfficialMonth[];
+    const official = [...points].reverse().find((point) => point.month <= throughMonth) ?? null;
+    const purchase = readings.find((reading) => reading.source === "purchase");
+    const ownerEstimate = manuals
+      .filter((point) => point.source === "owner_estimate")
+      .sort((a, b) => a.asOf.localeCompare(b.asOf))
+      .at(-1);
+    const mortgage = loanRow
+      ? buildMortgageView({
+          asOf,
+          lender: loanRow.lender,
+          terms: loadMortgageTerms(db, loanRow.id),
+          payments: loadPaymentRows(db, loanRow.id),
+          statements: manuals
+            .filter((point) => point.source === "statement")
+            .map((point) => ({ asOf: point.asOf, balanceUsd: point.balanceUsd })),
+          ownerEstimate: ownerEstimate ? { asOf: ownerEstimate.asOf, balanceUsd: ownerEstimate.balanceUsd } : null,
+          officialValue: official?.valueUsd ?? null,
+          official: points.map((point) => ({ month: point.month, valueUsd: point.valueUsd })),
+          purchaseMonth: purchase ? monthOf(purchase.asOf) : null,
+        })
+      : null;
+    const balanceAt = new Map((mortgage?.equitySeries ?? []).filter((point) => point.balance != null).map((point) => [point.month, point.balance as number]));
     const series = points.map((point) => {
-      const loanBalance = displayBalance(balances, point.month, terms?.detailsComplete === true);
+      const loanBalance = mortgage?.ready
+        ? (balanceAt.get(point.month) ?? mortgage.balanceUsd)
+        : displayBalance(balances, point.month, terms?.detailsComplete === true);
       return { ...point, loanBalance, equity: point.valueUsd - loanBalance };
     });
-    const official = [...series].reverse().find((point) => point.month <= throughMonth) ?? null;
     const latestBal = balances
       .filter((point) => point.asOf <= asOf)
       .sort((a, b) => a.asOf.localeCompare(b.asOf))
@@ -457,22 +762,25 @@ export function loadDashboard(db: Database.Database, investable: number, through
       loan: loanRow
         ? {
             id: loanRow.id,
-            balanceUsd: latestBalance(balances, asOf),
-            balanceAsOf: latestBal?.asOf ?? null,
-            balanceSource: latestBal?.source ?? null,
+            balanceUsd: mortgage?.ready ? mortgage.balanceUsd : latestBalance(balances, asOf),
+            balanceAsOf: mortgage?.ready ? mortgage.balanceAsOf : (latestBal?.asOf ?? null),
+            balanceSource: mortgage?.ready ? mortgage.balanceSource : (latestBal?.source ?? null),
             detailsComplete: loanRow.detailsComplete === 1,
             lender: loanRow.lender,
             annualRate: loanRow.annualRate,
             termMonths: loanRow.termMonths,
             startDate: loanRow.startDate,
             monthlyPayment: loanRow.monthlyPayment,
-            notes: latestBal ? balanceNote(db, loanRow.id, latestBal) : null,
+            monthlyEscrow: loanRow.monthlyEscrow,
+            extraPrincipal: loanRow.extraPrincipal ?? 0,
+            notes: mortgage?.balanceSource === "owner_estimate" && ownerEstimate ? balanceNote(db, loanRow.id, ownerEstimate) : null,
+            mortgage,
           }
         : null,
       readings,
       series,
       officialValue: official?.valueUsd ?? null,
-      loanBalance: latestBalance(balances, asOf),
+      loanBalance: mortgage?.ready ? mortgage.balanceUsd : latestBalance(balances, asOf),
     };
   });
 

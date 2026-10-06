@@ -7,6 +7,7 @@ import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { formatUsd2 } from "@/lib/format";
+import { MortgagePanel, type MortgageSnapshot } from "@/app/real-estate/MortgagePanel";
 
 type Reading = {
   id: string;
@@ -51,7 +52,12 @@ type Property = {
     notes: string | null;
     annualRate: number | null;
     monthlyPayment: number | null;
+    monthlyEscrow: number | null;
+    extraPrincipal: number;
     startDate: string | null;
+    termMonths: number | null;
+    lender: string | null;
+    mortgage: MortgageSnapshot | null;
   } | null;
   readings: Reading[];
   series: SeriesPoint[];
@@ -171,8 +177,6 @@ export default function RealEstatePage() {
     sourceUrl: "",
     notes: "",
   });
-  const [statement, setStatement] = useState({ asOf: new Date().toISOString().slice(0, 10), balanceUsd: "", notes: "" });
-  const [terms, setTerms] = useState({ annualRate: "", startDate: "", monthlyPayment: "", termMonths: "", originalPrincipal: "", lender: "" });
 
   const load = useCallback(async () => {
     const response = await fetch("/api/real-estate", { cache: "no-store" });
@@ -191,12 +195,12 @@ export default function RealEstatePage() {
     void load().catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, [load]);
 
-  async function post(url: string, body: unknown) {
+  async function post(url: string, body: unknown, method = "POST") {
     setBusy(true);
     setError(null);
     try {
       const response = await fetch(url, {
-        method: "POST",
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
@@ -271,7 +275,13 @@ export default function RealEstatePage() {
                   <dd className="font-medium">{property.hpiLatestPeriod ?? "Not downloaded"}</dd>
                 </div>
               </dl>
-              {property.loan && !property.loan.detailsComplete ? (
+              {property.loan?.mortgage?.ready ? (
+                <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                  Loan balance is {property.loan.mortgage.balanceSource === "statement" ? "the latest statement" : "amortized from the note and logged payments"}
+                  {property.loan.balanceAsOf ? ` as of ${property.loan.balanceAsOf}` : ""}.
+                </p>
+              ) : null}
+              {property.loan && !property.loan.mortgage?.ready ? (
                 <p className="text-sm text-zinc-600 dark:text-zinc-400">
                   Mortgage is an incomplete owner estimate
                   {property.loan.balanceAsOf ? ` as of ${property.loan.balanceAsOf}` : ""}. It is carried, not amortized.
@@ -322,7 +332,7 @@ export default function RealEstatePage() {
         },
       ]),
     );
-    return {
+    const tiles = {
       summary: {
         title: "Net worth",
         children: (
@@ -447,71 +457,30 @@ export default function RealEstatePage() {
                 Save reading
               </button>
             </div>
-            <div className="space-y-3 border-t border-zinc-200 pt-4 sm:col-span-2 dark:border-white/10">
-              <p className="text-sm font-medium">Crownsville mortgage</p>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="text-sm">
-                  Statement date
-                  <input className={inputClass} type="date" value={statement.asOf} onChange={(event) => setStatement({ ...statement, asOf: event.target.value })} />
-                </label>
-                <label className="text-sm">
-                  Principal
-                  <input className={inputClass} inputMode="decimal" value={statement.balanceUsd} onChange={(event) => setStatement({ ...statement, balanceUsd: event.target.value })} />
-                </label>
-              </div>
-              <button
-                className={buttonClass}
-                type="button"
-                disabled={busy || !statement.balanceUsd}
-                onClick={() =>
-                  void post("/api/real-estate/loan-balances", {
-                    propertyId: "re_crownsville",
-                    asOf: statement.asOf,
-                    balanceUsd: Number(statement.balanceUsd),
-                    notes: statement.notes || null,
-                  })
-                }
-              >
-                Save statement balance
-              </button>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <label className="text-sm">
-                  Rate
-                  <input className={inputClass} placeholder="6.5" value={terms.annualRate} onChange={(event) => setTerms({ ...terms, annualRate: event.target.value })} />
-                </label>
-                <label className="text-sm">
-                  Start
-                  <input className={inputClass} type="date" value={terms.startDate} onChange={(event) => setTerms({ ...terms, startDate: event.target.value })} />
-                </label>
-                <label className="text-sm">
-                  Payment
-                  <input className={inputClass} inputMode="decimal" value={terms.monthlyPayment} onChange={(event) => setTerms({ ...terms, monthlyPayment: event.target.value })} />
-                </label>
-              </div>
-              <button
-                className={buttonClass}
-                type="button"
-                disabled={busy || !terms.annualRate || !terms.startDate}
-                onClick={() =>
-                  void post("/api/real-estate/loans", {
-                    propertyId: "re_crownsville",
-                    lender: terms.lender || null,
-                    annualRate: Number(terms.annualRate),
-                    startDate: terms.startDate,
-                    monthlyPayment: terms.monthlyPayment ? Number(terms.monthlyPayment) : null,
-                    termMonths: terms.termMonths ? Number(terms.termMonths) : null,
-                    originalPrincipal: terms.originalPrincipal ? Number(terms.originalPrincipal) : null,
-                  })
-                }
-              >
-                Save loan terms
-              </button>
-            </div>
           </form>
         ),
       },
     };
-  }, [properties, privacy.masked, netWorth, payload, busy, form, statement, terms]);
+    const crownsville = properties.find((property) => property.id === "re_crownsville" && property.loan);
+    return {
+      ...tiles,
+      ...(crownsville?.loan
+        ? {
+            mortgage: {
+              title: "Crownsville mortgage",
+              children: (
+                <MortgagePanel
+                  loan={crownsville.loan}
+                  masked={privacy.masked}
+                  busy={busy}
+                  onSend={(url, body, method) => void post(url, body, method)}
+                />
+              ),
+            },
+          }
+        : {}),
+    };
+  }, [properties, privacy.masked, netWorth, payload, busy, form]);
 
   return (
     <div className="flex w-full max-w-[108rem] flex-1 flex-col gap-6 py-10 pl-5 pr-6 sm:pl-6 sm:pr-8">
@@ -528,7 +497,7 @@ export default function RealEstatePage() {
       {error ? <div className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-100">{error}</div> : null}
       {!payload && !error ? <p className="text-sm text-zinc-500">Loading…</p> : null}
       {payload?.ok ? (
-        <DraggableTileLayout storageKey="fh.realEstate.tiles.v1" defaultOrder={["summary", ...properties.map((property) => property.id), "entry"]} tiles={tiles} />
+        <DraggableTileLayout storageKey="fh.realEstate.tiles.v1" defaultOrder={["summary", ...properties.map((property) => property.id), "mortgage", "entry"]} tiles={tiles} />
       ) : null}
     </div>
   );

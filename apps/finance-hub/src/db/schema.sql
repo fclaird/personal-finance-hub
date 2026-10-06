@@ -665,10 +665,31 @@ CREATE TABLE IF NOT EXISTS real_estate_loans (
   term_months INTEGER,
   start_date TEXT,
   monthly_payment REAL,
+  monthly_escrow REAL,
+  extra_principal REAL NOT NULL DEFAULT 0,
   details_complete INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS real_estate_loan_payments (
+  id TEXT PRIMARY KEY,
+  loan_id TEXT NOT NULL REFERENCES real_estate_loans(id) ON DELETE CASCADE,
+  paid_on TEXT NOT NULL,
+  total_paid REAL NOT NULL,
+  principal REAL,
+  interest REAL,
+  escrow REAL,
+  extra_principal REAL,
+  balance_after REAL,
+  notes TEXT,
+  split_source TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(loan_id, paid_on)
+);
+
+CREATE INDEX IF NOT EXISTS idx_real_estate_loan_payments_loan ON real_estate_loan_payments(loan_id, paid_on);
 
 CREATE TABLE IF NOT EXISTS real_estate_loan_balances (
   id TEXT PRIMARY KEY,

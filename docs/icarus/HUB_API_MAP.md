@@ -40,7 +40,10 @@ These change **local** data or pull **reads** from Schwab. They do **not** place
 | `POST /api/alerts/run` | Evaluate rules → local events |
 | `POST /api/alerts/rules` | Enable/disable local rules |
 | `POST /api/real-estate/valuations` | Save one reading, or a month of readings for both properties |
-| `POST /api/real-estate/loans` | Save Crownsville loan terms (local only; incomplete loans are not amortized) |
+| `POST /api/real-estate/loans` | Save Crownsville loan terms on the existing loan row |
+| `POST /api/real-estate/loan-payments` | Log one mortgage payment, or a JSON array of them |
+| `PATCH /api/real-estate/loan-payments` | Replace one logged payment by id |
+| `DELETE /api/real-estate/loan-payments` | Delete one logged payment by id |
 | `POST /api/real-estate/loan-balances` | Save a mortgage statement balance |
 | `POST /api/real-estate/refresh` | Download the FHFA house-price index and rebuild official values |
 
@@ -83,7 +86,46 @@ These change **local** data or pull **reads** from Schwab. They do **not** place
 
 Official value for a month is the median of the distinct estimate sources in that month (the average when there are two). Months with fewer than two sources step from the last official value by the FHFA all-transactions index for Youngstown–Warren (place `49660`) or Baltimore–Columbia–Towson (place `12580`). Cortland is 3131 McCleary Jacoby Rd plus the side lot at 3210; 3141 is only the mailing address.
 
-`POST /api/real-estate/loans` body: `{ "propertyId": "re_crownsville", "interestRate": 6.5, "startDate": "2024-06-21", "monthlyPayment": 4200 }`. Rate may be a decimal (`0.065`) or a percent (`6.5`). Amortization starts only when rate, start date, and a payment (or principal and term) are all present.
+`POST /api/real-estate/loans` updates the existing Crownsville loan. It does not insert a second loan. Rate may be a decimal (`0.065`) or a percent (`6.5`). `firstPaymentDate` and `startDate` are the same field. Leave `monthlyEscrow` and `extraPrincipal` out of the JSON to keep the stored values. Until original principal, rate, term, first payment date, and the monthly principal-and-interest payment are all present, the balance stays the owner estimate and is not amortized.
+
+The numbers in the examples show the JSON shape. They are not the Crownsville note.
+
+```json
+{
+  "propertyId": "re_crownsville",
+  "lender": "Servicer name",
+  "originalPrincipal": 500000,
+  "interestRate": 6.5,
+  "termMonths": 360,
+  "firstPaymentDate": "2024-07-01",
+  "monthlyPayment": 3160.34,
+  "monthlyEscrow": 450,
+  "extraPrincipal": 80
+}
+```
+
+`POST /api/real-estate/loan-payments` accepts one payment or `{ "propertyId", "payments": [ ... ] }` (up to 600). The same property and `paidOn` updates that row. Send `principal` and `interest` together to keep a statement split. Omit them and send `totalPaid` plus `paidOn` to split the draft from the terms; that row is marked `computed`. Planned escrow is taken from the terms only when the total covers principal-and-interest plus escrow. Anything above that is extra principal. `balanceAfter` is optional and, when set, is a statement balance.
+
+```json
+{
+  "propertyId": "re_crownsville",
+  "payments": [
+    { "paidOn": "2024-07-01", "totalPaid": 3690.34, "notes": "July draft" },
+    {
+      "paidOn": "2024-08-01",
+      "totalPaid": 3690.34,
+      "principal": 612.1,
+      "interest": 2548.24,
+      "escrow": 450,
+      "extraPrincipal": 80,
+      "balanceAfter": 499307.9,
+      "notes": "August statement"
+    }
+  ]
+}
+```
+
+`PATCH /api/real-estate/loan-payments` uses the same payment fields plus `id`. `DELETE /api/real-estate/loan-payments` accepts `{ "id": "repay_..." }` or `?id=`. The balance used for equity and net worth is the latest statement balance, otherwise the amortized balance from the terms and logged payments (including the standing extra), otherwise the owner estimate. These POSTs stay off the read-only MCP allowlist.
 
 ## Auth / OAuth (browser only)
 
