@@ -77,6 +77,9 @@ describe("nav and route guards", () => {
     assert.equal(getFlavorConfig("peyton").label, "Peyton");
     assert.equal(getFlavorConfig("peyton").features.posterity, false);
     assert.equal(getFlavorConfig("peyton").features.strategies, false);
+    assert.equal(getFlavorConfig("peyton").features.realEstate, false);
+    assert.equal(getFlavorConfig("rorie").features.realEstate, false);
+    assert.equal(getFlavorConfig("main").features.realEstate, true);
     assert.notEqual(getFlavorConfig("peyton").accent.badgeClass, getFlavorConfig("rorie").accent.badgeClass);
     assert.notEqual(getFlavorConfig("peyton").accent.badgeClass, getFlavorConfig("main").accent.badgeClass);
     assert.match(getFlavorConfig("main").accent.badgeClass, /bg-zinc-100/);
@@ -96,6 +99,11 @@ describe("nav and route guards", () => {
     assert.equal(isPathAllowedForFlavor("/terminal/symbol/SPY", "rorie"), true);
     assert.equal(isPathAllowedForFlavor("/terminal/symbol/SPY", "peyton"), true);
     assert.equal(isPathAllowedForFlavor("/connections", "main"), true);
+    assert.equal(isPathAllowedForFlavor("/real-estate", "main"), true);
+    assert.equal(isPathAllowedForFlavor("/real-estate", "rorie"), false);
+    assert.equal(isPathAllowedForFlavor("/real-estate", "peyton"), false);
+    assert.equal(navForFlavor("main").some((n) => n.href === "/real-estate"), true);
+    assert.equal(navForFlavor("rorie").some((n) => n.href === "/real-estate"), false);
   });
 });
 

@@ -70,7 +70,7 @@ Treemap is **visual**; JSON APIs alone cannot reproduce the chart on the phone w
 
 1. Tailscale + `FINANCE_HUB_API_KEY` on hub.
 2. iOS **Personal Automation**: ~4:05 PM weekdays → Shortcut GETs `/api/terminal/us-markets` + `/api/terminal/heatmap` → **Show Notification**.
-3. Limitations: no NYSE holiday awareness; no treemap image; HTTPS cert quirks with `npm run dev --experimental-https` (prefer `npm run start` + HTTP on tailnet).
+3. Limitations: no NYSE holiday awareness; no treemap image; the local mkcert certificate does not cover a Tailscale IP, so a phone browser may warn when `SCHWAB_REDIRECT_URI` is https.
 
 ---
 

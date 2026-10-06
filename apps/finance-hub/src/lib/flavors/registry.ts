@@ -35,6 +35,7 @@ export type FlavorConfig = {
     earnings: boolean;
     strategies: boolean;
     posterity: boolean;
+    realEstate: boolean;
   };
   accent: FlavorAccent;
 };
@@ -45,6 +46,7 @@ const MAIN_NAV: SidebarNavItem[] = [
   { href: "/strategies/situations", label: "Option Strategies", prefix: "/strategies" },
   { href: "/allocation", label: "Allocation" },
   { href: "/diversification", label: "Diversification" },
+  { href: "/real-estate", label: "Real Estate" },
   { href: "/earnings", label: "Earnings" },
   { href: "/performance", label: "Performance" },
   { href: "/reports", label: "Realized gain/loss", prefix: "/reports" },
@@ -73,6 +75,7 @@ const DEDICATED_FEATURES: FlavorConfig["features"] = {
   earnings: false,
   strategies: false,
   posterity: false,
+  realEstate: false,
 };
 
 /**
@@ -102,7 +105,7 @@ export const FLAVOR_REGISTRY: Record<FlavorId, FlavorConfig> = {
     label: "Main",
     nav: MAIN_NAV,
     accountFilter: { kind: "exclude", ids: [...MAIN_EXCLUDED_ACCOUNT_IDS] },
-    features: { plaid: true, earnings: true, strategies: true, posterity: true },
+    features: { plaid: true, earnings: true, strategies: true, posterity: true, realEstate: true },
     accent: MAIN_ACCENT,
   },
   rorie: {

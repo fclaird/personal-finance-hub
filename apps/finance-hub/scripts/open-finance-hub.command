@@ -2,27 +2,24 @@
 # Finance Hub Dock / Automator launcher.
 #
 # Run `npm run build` once after code changes; this script does not build.
-# Production origin is http, not https (`npm run dev` is https://127.0.0.1:3000
-# and its Turbopack process grows to many GB of RAM — do not leave it up).
-# Set SCHWAB_REDIRECT_URI to http://127.0.0.1:3000/api/schwab/callback
-# and the same URL in the Schwab developer portal before reconnecting.
+# The URL follows SCHWAB_REDIRECT_URI. https uses certificates/ from `npm run dev`.
 # This script does not rewrite .env.local.
 # Leave FINANCE_HUB_ALLOW_BROKER_ORDERS unset. Do not bind off loopback.
 #
-# If http://127.0.0.1:3000/api/health is already 200, only the browser opens.
+# If that origin's /api/health is already 200, only the browser opens.
 
 set -eu
 
-PORT=3000
-HEALTH_URL="http://127.0.0.1:${PORT}/api/health"
-OPEN_URL="http://127.0.0.1:${PORT}/"
 SCRIPT_DIR="${0:A:h}"
 APP_ROOT="${SCRIPT_DIR:h}"
+ORIGIN="$(node "$APP_ROOT/scripts/print-listen-origin.mjs")"
+HEALTH_URL="${ORIGIN}/api/health"
+OPEN_URL="${ORIGIN}/"
 LOG_DIR="${HOME}/Library/Logs/finance-hub"
 LOG_FILE="${LOG_DIR}/server.log"
 MAX_BYTES=$((20 * 1024 * 1024))
 
-if curl -fsS --max-time 2 "$HEALTH_URL" >/dev/null 2>&1; then
+if curl -fsS -k --max-time 2 "$HEALTH_URL" >/dev/null 2>&1; then
   open "$OPEN_URL"
   exit 0
 fi
@@ -39,7 +36,7 @@ cd "$APP_ROOT"
 nohup npm run start >>"$LOG_FILE" 2>&1 &
 
 for attempt in {1..40}; do
-  if curl -fsS --max-time 2 "$HEALTH_URL" >/dev/null 2>&1; then
+  if curl -fsS -k --max-time 2 "$HEALTH_URL" >/dev/null 2>&1; then
     open "$OPEN_URL"
     exit 0
   fi

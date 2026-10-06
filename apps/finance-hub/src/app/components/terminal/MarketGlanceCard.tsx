@@ -39,6 +39,7 @@ import { cashIndexSegmentLabel, formatLondonGlancePointTime, formatTokyoGlancePo
 import type { FuturesGlanceKind } from "@/lib/market/futuresGlanceSession";
 import type { PostCashClosePlot } from "@/lib/market/glanceMiniChartSession";
 import { futuresExtendedPhaseLabel, futuresSegmentLabel } from "@/lib/market/futuresGlanceSession";
+import { portfolioBaselineNote, portfolioChangeLabel, type PortfolioChangeCaption } from "@/lib/terminal/portfolioChangeCaption";
 import { PortfolioGlanceValue } from "@/app/components/terminal/PortfolioGlanceValue";
 import {
   PortfolioSessionCloseHeadline,
@@ -102,6 +103,7 @@ export type UsMarketGlanceItem = {
   valueMode?: GlanceValueMode;
   netValue?: number | null;
   priorNetValue?: number | null;
+  changeCaption?: PortfolioChangeCaption;
   lastAccountValueSyncAt?: string | null;
   intradayStale?: boolean;
   cashFlowAdjusted?: boolean;
@@ -671,7 +673,7 @@ function GlanceChartTooltip({
       ) : null}
       {usdDayPnl != null && segment !== "prior" ? (
         <div className="mt-0.5 tabular-nums text-[10px] text-zinc-500 dark:text-zinc-400">
-          Day {formatUsd2(usdDayPnl)}
+          {portfolioChangeLabel(item.changeCaption)} {formatUsd2(usdDayPnl)}
         </div>
       ) : null}
     </div>
@@ -1084,11 +1086,17 @@ export function MarketGlanceCard({
                     netValue={sessionClosePlot.headlineKind === "dollars" ? sessionClosePlot.headlineValue : item.netValue}
                     changePct={sessionClosePlot.changePct}
                     changeLabel={sessionClosePlot.changeLabel}
+                    baselineNote={portfolioBaselineNote(item.changeCaption)}
                     indexLevel={sessionClosePlot.headlineKind === "index" ? sessionClosePlot.headlineValue : null}
                   />
                 </PortfolioSessionCloseHeadline>
               ) : (
-                <PortfolioGlanceValue netValue={item.netValue} changePct={item.changePct} />
+                <PortfolioGlanceValue
+                  netValue={item.netValue}
+                  changePct={item.changePct}
+                  changeLabel={portfolioChangeLabel(item.changeCaption)}
+                  baselineNote={portfolioBaselineNote(item.changeCaption)}
+                />
               )}
             </div>
           ) : showExtendedChart ? (
@@ -1372,8 +1380,15 @@ export function MarketGlanceCard({
                 </div>
               ) : null}
               <div>
-                <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                  {sessionClosePlot ? sessionClosePlot.changeLabel : "Day"}
+                <div
+                  className="text-[10px] text-zinc-500 dark:text-zinc-400"
+                  title={portfolioBaselineNote(item.changeCaption) ?? undefined}
+                >
+                  {sessionClosePlot
+                    ? sessionClosePlot.changeLabel
+                    : item.id === "portfolio"
+                      ? portfolioChangeLabel(displayItem.changeCaption)
+                      : "Day"}
                 </div>
                 <div className={"text-xs font-medium tabular-nums " + posNegClass(pct)}>
                   {formatGlanceDayPct(pct)}
@@ -1409,7 +1424,11 @@ export function MarketGlanceCard({
               </div>
               <div>
                 <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                  {sessionClosePlot ? sessionClosePlot.changeLabel : "Day %"}
+                  {sessionClosePlot
+                    ? sessionClosePlot.changeLabel
+                    : item.id === "portfolio"
+                      ? portfolioChangeLabel(displayItem.changeCaption)
+                      : "Day %"}
                 </div>
                 <div className={"text-xs font-medium tabular-nums " + posNegClass(pct)}>
                   {pct == null ? "—" : `${pct >= 0 ? "+" : ""}${PCT2.format(pct)}%`}

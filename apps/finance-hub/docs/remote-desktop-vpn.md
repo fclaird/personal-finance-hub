@@ -47,16 +47,16 @@ Same as above: the hub host is a VPN peer; bind `0.0.0.0` or the VPN interface a
 
 ## HTTPS
 
-`npm run start` is plain HTTP. That is acceptable on a private Tailscale/WireGuard network. For HTTPS:
+`npm start` uses the scheme in `SCHWAB_REDIRECT_URI`. An https callback serves HTTPS on the public port with the local mkcert files in `certificates/` (`npm run dev` creates them). An http callback stays plain HTTP, which is acceptable on a private Tailscale/WireGuard network. The dev certificate covers `localhost`, `127.0.0.1`, and `::1`, so a browser on another machine will warn until you trust that cert or terminate TLS another way:
 
 - Tailscale **MagicDNS** + HTTPS certificates, or
-- a reverse proxy on the Mac (Caddy/nginx) terminating TLS to `127.0.0.1:3000` (then you can leave `FINANCE_HUB_BIND_HOST` at loopback).
+- a reverse proxy on the Mac (Caddy/nginx) in front of the hub.
 
-`npm run dev` uses Next’s experimental HTTPS (self-signed). The remote browser will warn; trust only if you accept that, or use `start` instead.
+`npm run dev` uses Next’s experimental HTTPS when the redirect URI is https (or when the URI is unset). The remote browser will warn; trust only if you accept that.
 
 ## Schwab OAuth from the remote browser
 
-Redirect URIs are typically `http://127.0.0.1:3000/api/schwab/callback`. Completing **Connect Schwab** from the remote desktop will fail unless that callback is registered for the VPN hostname. Prefer connecting Schwab **on the Mac** (localhost), then only **view** from the other desktop.
+The callback URL has to be the same string in `.env.local` and in the Schwab developer portal. Completing **Connect Schwab** from the remote desktop will fail unless that callback host is one the remote browser can open. Prefer connecting Schwab **on the Mac**, then only **view** from the other desktop.
 
 ## Do not
 

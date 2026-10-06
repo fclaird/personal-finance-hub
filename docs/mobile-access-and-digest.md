@@ -6,7 +6,7 @@ This doc covers **Path A** (reach your local hub from a phone) and **Path B** (s
 
 | Approach | Exposure | Best for |
 |----------|----------|----------|
-| **Tailscale only** (no Funnel) | Mac is reachable only on the tailnet; no public URL. | Personal use, lowest blast radius. Phone installs Tailscale, opens `http://<100.x.y.z>:3000`. |
+| **Tailscale only** (no Funnel) | Mac is reachable only on the tailnet; no public URL. | Personal use, lowest blast radius. Phone installs Tailscale, opens the hub on port 3000 with the same scheme as `SCHWAB_REDIRECT_URI`. |
 | **Cloudflare Tunnel + Access** | HTTPS is public, but Access (or similar) gates who can hit the origin. | You need a shareable URL without installing Tailscale on every device. |
 | **ngrok / raw tunnel** | Public URL → your Next server. | Quick tests only unless you add auth in front. |
 
@@ -19,17 +19,17 @@ This doc covers **Path A** (reach your local hub from a phone) and **Path B** (s
 ### Tailscale (recommended)
 
 1. Install [Tailscale](https://tailscale.com/download) on the Mac and phone; log in to the same tailnet.
-2. On the Mac, run the hub: `npm run start` (preferred) or `npm run dev` (default port **3000**; dev uses HTTPS experimental—use the URL Next prints). Non-loopback bind requires `FINANCE_HUB_API_KEY`. For another **desktop** over VPN see [remote-desktop-vpn.md](../apps/finance-hub/docs/remote-desktop-vpn.md).
+2. On the Mac, run the hub with `npm start` (preferred) or `npm run dev` on port **3000**. The scheme matches `SCHWAB_REDIRECT_URI`. Non-loopback bind requires `FINANCE_HUB_API_KEY`. For another **desktop** over VPN see [remote-desktop-vpn.md](../apps/finance-hub/docs/remote-desktop-vpn.md).
 3. Find the Mac’s Tailscale IP: `tailscale ip -4`.
-4. On the phone’s browser: `https://<tailscale-ip>:3000` **or** `http://...` if you use plain HTTP for `next start`.
+4. On the phone’s browser, use the same scheme `npm start` is serving. That is `https://` when `SCHWAB_REDIRECT_URI` is https, and `http://` when it is http.
 
-If `next dev --experimental-https` uses a self-signed cert, the phone may warn—trust for development or use `next start` behind a reverse proxy.
+If the hub is on the local mkcert certificate, the phone may warn. Trust it for this Mac, or put a reverse proxy in front.
 
 **Checklist (tunnel-tailscale):**
 
 - [ ] Tailscale installed and signed in on **Mac** and **phone** (same tailnet).
-- [ ] Hub running on the Mac on port **3000** (`npm run start` recommended for predictable HTTP, or `npm run dev` if you accept cert prompts).
-- [ ] Phone loads the hub at `http://<tailscale-ip>:3000` (or your HTTPS URL).
+- [ ] Hub running on the Mac on port **3000** (`npm start`; the scheme matches `SCHWAB_REDIRECT_URI`).
+- [ ] Phone loads the hub at the same scheme and port as `SCHWAB_REDIRECT_URI` (for example `https://<tailscale-ip>:3000`).
 - [ ] Set `PUBLIC_APP_URL` in `.env.local` to a base URL the **phone can open** (Tailscale IP/hostname with scheme, or your tunnel URL) so digest SMS links work on cellular.
 
 ### Cloudflare Tunnel (quick reference)

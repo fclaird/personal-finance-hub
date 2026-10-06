@@ -8,7 +8,7 @@ Finance Hub can show posts from the [CaktusJxck](https://whatsapp.com/channel/00
 2. Set **`CRON_SECRET`** in `.env.local` (same secret used for other internal cron routes).
 3. Run the app with **`npm run dev`** (recommended for correct SQLite on Apple Silicon).
 
-**Important:** `npm run dev` starts Next with **`--experimental-https`**. Use **`https://`** (not `http://`) on port 3000. Plain HTTP to that port returns `curl: (1) Received HTTP/0.9 when not allowed`.
+**Important:** when `SCHWAB_REDIRECT_URI` is https (or unset), `npm run dev` starts Next with **`--experimental-https`**. Use **`https://`** on that port. Plain HTTP to an HTTPS port returns `curl: (1) Received HTTP/0.9 when not allowed`.
 
 ## Reachability from your iPhone
 
@@ -19,7 +19,7 @@ The Shortcut must reach your Mac (or server) running finance-hub:
 | Same Wi‑Fi (dev) | `https://192.168.x.x:3000/api/news/ingest` |
 | Tailscale / VPN (dev) | `https://100.x.x.x:3000/api/news/ingest` |
 | Tunnel | `https://your-subdomain.ngrok-free.app/api/news/ingest` |
-| Production (`npm run start`) | `http://127.0.0.1:3000/api/news/ingest` (plain HTTP) |
+| Production (`npm start`) | same scheme as `SCHWAB_REDIRECT_URI`, for example `https://127.0.0.1:3000/api/news/ingest` |
 
 Replace host/port with your machine. For local HTTPS dev, Shortcuts may need to allow insecure/local certs or use a tunnel that terminates HTTPS for you.
 
