@@ -1,13 +1,12 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { FlavorPasswordDialog } from "@/app/components/FlavorPasswordDialog";
 import type { FlavorId } from "@/lib/flavor";
-import { getFlavorConfig } from "@/lib/flavors/registry";
+import { defaultNavHref, getFlavorConfig } from "@/lib/flavors/registry";
 import { formatDisplayDateTime } from "@/lib/formatDate";
 import { fetchSyncFresh, oncePerPageOpen } from "@/lib/pageOpenSync";
 import { MAX_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
@@ -66,7 +65,6 @@ function flavorPillClass(active: boolean, activeClass: string) {
 }
 
 export default function ConnectionsPage({ listenWarning }: { listenWarning: string | null }) {
-  const router = useRouter();
   const [flavor, setFlavor] = useState<FlavorId | null>(null);
   const [flavorOptions, setFlavorOptions] = useState<FlavorOption[]>([]);
   const [pendingFlavor, setPendingFlavor] = useState<FlavorId | null>(null);
@@ -140,7 +138,8 @@ export default function ConnectionsPage({ listenWarning }: { listenWarning: stri
     setFlavor(unlocked);
     setPasswordOpen(false);
     setPendingFlavor(null);
-    router.push("/terminal");
+    // The client router keeps the middleware redirect from before this cookie existed.
+    window.location.assign(defaultNavHref(unlocked));
   }
 
   const pendingFlavorLabel =
