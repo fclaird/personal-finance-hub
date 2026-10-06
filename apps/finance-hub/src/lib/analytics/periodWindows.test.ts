@@ -27,18 +27,18 @@ test("resolvePeriodWindow daily uses glance session and prior close anchor", () 
   assert.equal(w.startAnchorYmd, "2026-08-28");
 });
 
-test("resolvePeriodWindow weekly is Monday through today in NY", () => {
+test("resolvePeriodWindow weekly opens on the Sunday of the futures week", () => {
   const now = new Date("2026-08-31T15:00:00-04:00");
   const w = resolvePeriodWindow("weekly", now);
-  assert.equal(w.startYmd, "2026-08-31");
+  assert.equal(w.startYmd, "2026-08-30");
   assert.equal(w.endYmd, "2026-08-31");
   assert.equal(w.startAnchorYmd, "2026-08-28");
 });
 
-test("resolvePeriodWindow monthly starts on first of NY month", () => {
+test("resolvePeriodWindow monthly is the Sunday that opens the oldest of five futures weeks", () => {
   const now = new Date("2026-08-31T15:00:00-04:00");
   const w = resolvePeriodWindow("monthly", now);
-  assert.equal(w.startYmd, "2026-08-01");
+  assert.equal(w.startYmd, "2026-08-02");
   assert.equal(w.endYmd, "2026-08-31");
   assert.equal(w.startAnchorYmd, "2026-07-31");
 });

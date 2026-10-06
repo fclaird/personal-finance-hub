@@ -177,4 +177,35 @@ test("loadRealizedTrades consumes out-of-window closes so later round-trips use 
   const { trades } = loadRealizedTrades(db, "main", "2026-08-10", "2026-08-11");
   const close = trades.find((t) => t.id === "tx_close_new:AAPL");
   assert.equal(close?.realizedDollars, 100);
+  assert.equal(close?.tradedAt, null);
+});
+
+test("loadRealizedTrades keeps the broker clock time without changing gainLoss dollars", () => {
+  const db = new Database(":memory:");
+  db.pragma("foreign_keys = ON");
+  db.exec(fs.readFileSync(path.join(process.cwd(), "src", "db", "schema.sql"), "utf-8"));
+  db.prepare(
+    `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('conn1', 'schwab', 'Schwab', 'active')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO accounts (id, connection_id, name, nickname, account_bucket, type)
+     VALUES ('schwab_1', 'conn1', 'Brokerage', 'joint_brokerage', 'brokerage', 'brokerage')`,
+  ).run();
+  const raw = JSON.stringify({
+    type: "TRADE",
+    gainLoss: 42.5,
+    tradeDate: "2026-10-04",
+    time: "2026-10-04T22:30:00.000Z",
+  });
+  db.prepare(
+    `INSERT INTO broker_transactions (
+       id, account_id, external_activity_id, trade_date, transaction_type, raw_json, symbol, leg_count
+     ) VALUES ('tx_sun', 'schwab_1', 'ext_sun', '2026-10-04', 'TRADE', ?, 'ES', 1)`,
+  ).run(raw);
+
+  const { trades } = loadRealizedTrades(db, "main", "2026-10-04", "2026-10-05");
+  assert.equal(trades.length, 1);
+  assert.equal(trades[0]!.realizedDollars, 42.5);
+  assert.equal(trades[0]!.tradedAt, "2026-10-04T22:30:00.000Z");
+  assert.equal(trades[0]!.tradeDate, "2026-10-04");
 });

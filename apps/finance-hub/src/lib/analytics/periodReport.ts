@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 
 import { getGlanceAlignedPortfolioValueSeriesByBucket } from "@/lib/analytics/glanceAlignedPerformance";
 import type { PortfolioValuePoint } from "@/lib/analytics/performance";
+import { futuresWeekContaining, rollingFuturesWeeks, tradeFallsInWeeks } from "@/lib/analytics/futuresWeek";
 import {
   parsePeriodKind,
   resolvePeriodWindow,
@@ -28,6 +29,7 @@ export type RealizedGainsByScope = {
 export type RealizedTradeRow = {
   id: string;
   tradeDate: string;
+  tradedAt: string | null;
   accountId: string;
   accountLabel: string;
   scope: RealizedGainScope;
@@ -164,6 +166,15 @@ function openingLotFromLeg(leg: SchwabTxnItem): FifoLot | null {
   return { qty, perUnit };
 }
 
+function tradedAtFromRaw(raw: SchwabTxnRaw): string | null {
+  for (const candidate of [raw.time, raw.tradeDate]) {
+    if (!candidate || candidate.trim().length <= 10) continue;
+    const parsed = new Date(candidate);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  return null;
+}
+
 function hasClosingLeg(raw: SchwabTxnRaw): boolean {
   return securityLegsOf(raw).some((leg) => (leg.positionEffect ?? "").toUpperCase() === "CLOSING");
 }
@@ -230,6 +241,7 @@ export function loadRealizedTrades(
 
     const scope = realizedGainScopeForNickname(row.account_nickname);
     const accountLabel = accountDisplayLabel(row.account_nickname, row.account_name);
+    const tradedAt = tradedAtFromRaw(raw);
 
     const topGain = pickGainLoss(raw as SchwabTxnRaw & Record<string, unknown>);
     const fifoTradesForRow: RealizedTradeRow[] = [];
@@ -263,6 +275,7 @@ export function loadRealizedTrades(
           fifoTradesForRow.push({
             id: `${row.id}:${sym}`,
             tradeDate: row.trade_date,
+            tradedAt,
             accountId: row.account_id,
             accountLabel,
             scope,
@@ -286,6 +299,7 @@ export function loadRealizedTrades(
       fifoTradesForRow.push({
         id: `${row.id}:${sym}`,
         tradeDate: row.trade_date,
+        tradedAt,
         accountId: row.account_id,
         accountLabel,
         scope,
@@ -299,6 +313,7 @@ export function loadRealizedTrades(
       trades.push({
         id: row.id,
         tradeDate: row.trade_date,
+        tradedAt,
         accountId: row.account_id,
         accountLabel,
         scope,
@@ -402,7 +417,13 @@ export async function computePeriodReport(options: {
   const vsSpy = computeVsBenchmark(portfolioPct, spyPct);
   const vsQqq = computeVsBenchmark(portfolioPct, qqqPct);
 
-  const { trades, ledgerComplete } = loadRealizedTrades(db, flavor, window.startYmd, window.endYmd);
+  const loaded = loadRealizedTrades(db, flavor, window.startYmd, window.endYmd);
+  const ledgerComplete = loaded.ledgerComplete;
+  let trades = loaded.trades;
+  if (window.period === "weekly" || window.period === "monthly") {
+    const weeks = window.period === "weekly" ? [futuresWeekContaining(now)] : rollingFuturesWeeks(now, 5);
+    trades = trades.filter((trade) => tradeFallsInWeeks(trade, weeks));
+  }
   const realizedGainsRaw = sumRealizedByScope(trades);
   const realizedGains =
     realizedGainsRaw.total != null
@@ -410,9 +431,6 @@ export async function computePeriodReport(options: {
       : ledgerComplete
         ? { jointBrokerage: 0, retirement: 0, total: 0 }
         : { jointBrokerage: null, retirement: null, total: null };
-  const includeTradeDetails =
-    window.period === "daily" || window.period === "weekly" || window.period === "monthly";
-
   const footnotes: string[] = [];
   if (window.period !== "daily") {
     footnotes.push("Period P&L is net liquidation change; deposits and withdrawals are not stripped.");
@@ -444,7 +462,7 @@ export async function computePeriodReport(options: {
       spyPct: spyPct != null ? Math.round(spyPct * 100) / 100 : null,
       qqqPct: qqqPct != null ? Math.round(qqqPct * 100) / 100 : null,
     },
-    trades: includeTradeDetails ? trades : [],
+    trades,
     tradeLedgerComplete: ledgerComplete,
     footnotes,
   };
