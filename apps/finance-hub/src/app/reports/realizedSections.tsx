@@ -257,7 +257,7 @@ function SummaryTable({
               <tr key={row.key} className="border-t border-zinc-100 dark:border-zinc-800/80">
                 <td className="whitespace-nowrap px-3 py-0.5 font-medium text-zinc-800 dark:text-zinc-100">
                   {row.label}
-                  {row.aside ? <span className="ml-2 font-normal text-zinc-500">{row.aside}</span> : null}
+                  {row.aside ? <span className="font-normal text-zinc-500"> {row.aside}</span> : null}
                 </td>
                 {quiet || !totals ? (
                   <td colSpan={3} className="whitespace-nowrap px-3 py-0.5 text-right text-zinc-500">
