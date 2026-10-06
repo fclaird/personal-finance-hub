@@ -1,5 +1,6 @@
 import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
 import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
+import { portfolioChangeLabel } from "@/lib/terminal/portfolioChangeCaption";
 import { PORTFOLIO_INDEX_BASE } from "@/lib/terminal/portfolioGlanceConstants";
 
 export type PortfolioGlanceDisplayMode = "indexed" | "dollar";
@@ -61,7 +62,7 @@ export type PortfolioSessionClosePlot = {
   headlineKind: "index" | "dollars" | "masked";
   headlineLabel: typeof PORTFOLIO_PREVIOUS_CLOSE_LABEL;
   changePct: number | null;
-  changeLabel: typeof PORTFOLIO_SESSION_CLOSE_LABEL;
+  changeLabel: string;
 };
 
 export type PortfolioGlancePlot = { mode: "live" } | PortfolioSessionClosePlot;
@@ -81,6 +82,10 @@ export function portfolioGlancePlot(args: {
   }
 
   const changePct = finiteOrNull(args.item.changePct);
+  const changeLabel =
+    args.item.changeCaption?.kind === "since"
+      ? portfolioChangeLabel(args.item.changeCaption)
+      : PORTFOLIO_SESSION_CLOSE_LABEL;
   const indexClose =
     finiteOrNull(args.item.last) ??
     finiteOrNull(args.item.sessionClose) ??
@@ -91,7 +96,7 @@ export function portfolioGlancePlot(args: {
     series: [] as [],
     changePct,
     headlineLabel: PORTFOLIO_PREVIOUS_CLOSE_LABEL,
-    changeLabel: PORTFOLIO_SESSION_CLOSE_LABEL,
+    changeLabel,
   };
 
   if (args.displayMode === "indexed") {

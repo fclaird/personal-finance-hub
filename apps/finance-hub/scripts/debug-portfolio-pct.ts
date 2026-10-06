@@ -6,7 +6,7 @@ import {
   priorNySessionYmd,
   schwabIntradayTotalsFromDb,
   schwabLiquidationFromDb,
-  schwabPriorLiquidationFromDb,
+  schwabLiquidationOnSession,
 } from "@/lib/terminal/portfolioAccountTotals";
 
 async function main() {
@@ -16,7 +16,7 @@ async function main() {
   const priorYmd = priorNySessionYmd(sessionYmd);
   const intraday = schwabIntradayTotalsFromDb(db, sessionYmd);
   const dbCur = schwabLiquidationFromDb(db);
-  const dbPrior = schwabPriorLiquidationFromDb(db, priorYmd);
+  const dbPrior = schwabLiquidationOnSession(db, priorYmd);
 
   console.log("sessionYmd", sessionYmd, "priorYmd", priorYmd);
   console.log("intraday count", intraday.length);
