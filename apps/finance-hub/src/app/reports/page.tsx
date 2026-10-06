@@ -20,17 +20,12 @@ import { formatUsd2 } from "@/lib/format";
 import { formatDisplayDate } from "@/lib/formatDate";
 import { posNegClass } from "@/lib/terminal/colors";
 
-type RealizedGainsByScope = {
-  jointBrokerage: number | null;
-  retirement: number | null;
-  total: number | null;
-};
-
 type ReportMetrics = {
   netBalance: number | null;
   plDollars: number | null;
   plPct: number | null;
-  realizedGains: RealizedGainsByScope;
+  plTitle?: string;
+  realizedDollars: number | null;
   vsSpy: number | null;
   vsQqq: number | null;
 };
@@ -195,7 +190,6 @@ function ReportsPageInner() {
   const metrics = data?.metrics;
   const trades = data?.trades ?? [];
   const footnotes = data?.footnotes ?? [];
-  const realized = metrics?.realizedGains;
 
   const plPct = metrics?.plPct;
   const plSub = useMemo(() => {
@@ -207,12 +201,9 @@ function ReportsPageInner() {
     router.replace(`/reports?period=${next}`);
   }
 
-  const jointTrades = trades.filter((t) => t.scope === "joint_brokerage");
-  const retirementTrades = trades.filter((t) => t.scope === "retirement");
-
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6">
-      <EditablePageHeading pageId="reports" defaultTitle="Reports" />
+      <EditablePageHeading pageId="reports" defaultTitle="Reports (realized gain/loss)" />
 
       <div className="flex flex-wrap gap-2">
         {PERIOD_KINDS.map((p) => (
@@ -241,29 +232,23 @@ function ReportsPageInner() {
         <div className="text-sm text-zinc-500 dark:text-zinc-400">Loading report…</div>
       ) : null}
 
-      {metrics && realized ? (
+      {metrics ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <MetricCard
               title="Net portfolio balance"
               value={usd2Masked(metrics.netBalance, privacy.masked)}
             />
             <MetricCard
-              title="Period P&L"
+              title={metrics.plTitle ?? "Period P&L"}
               value={usd2Masked(metrics.plDollars, privacy.masked)}
               sub={plSub}
               className={posNegClass(metrics.plDollars ?? 0)}
             />
             <MetricCard
-              title="Joint brokerage realized"
-              value={usd2Masked(realized.jointBrokerage, privacy.masked)}
-              className={posNegClass(realized.jointBrokerage ?? 0)}
-            />
-            <MetricCard
-              title="Retirement realized"
-              value={usd2Masked(realized.retirement, privacy.masked)}
-              sub="Secondary"
-              className={posNegClass(realized.retirement ?? 0)}
+              title="Realized"
+              value={usd2Masked(metrics.realizedDollars, privacy.masked)}
+              className={posNegClass(metrics.realizedDollars ?? 0)}
             />
             <MetricCard
               title="vs SPY"
@@ -277,11 +262,11 @@ function ReportsPageInner() {
             />
           </div>
 
-          {period === "ytd" && realized.total != null ? (
+          {period === "ytd" && metrics.realizedDollars != null ? (
             <p className="text-sm text-zinc-600 dark:text-zinc-300">
               Realized gains total:{" "}
-              <span className={`font-medium tabular-nums ${posNegClass(realized.total)}`}>
-                {usd2Masked(realized.total, privacy.masked)}
+              <span className={`font-medium tabular-nums ${posNegClass(metrics.realizedDollars)}`}>
+                {usd2Masked(metrics.realizedDollars, privacy.masked)}
               </span>
             </p>
           ) : null}
@@ -295,19 +280,7 @@ function ReportsPageInner() {
           ) : null}
 
           {period === "daily" ? (
-            <>
-              <RealizedTradesSection
-                title="Joint brokerage — realized trades"
-                trades={jointTrades}
-                masked={privacy.masked}
-              />
-              <RealizedTradesSection
-                title="Retirement — realized trades"
-                trades={retirementTrades}
-                masked={privacy.masked}
-                secondary
-              />
-            </>
+            <RealizedTradesSection title="Realized trades" trades={trades} masked={privacy.masked} />
           ) : null}
 
           {period === "weekly" ? (

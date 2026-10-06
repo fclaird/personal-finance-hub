@@ -28,7 +28,6 @@ export type ReportTrade = {
   tradedAt?: string | null;
   accountId: string;
   accountLabel: string;
-  scope: "joint_brokerage" | "retirement";
   symbol: string | null;
   description: string | null;
   realizedDollars: number | null;
@@ -40,17 +39,6 @@ function usd2Masked(v: number | null | undefined, masked: boolean): string {
   return formatUsd2(v, { mask: masked });
 }
 
-function sumScope(trades: ReportTrade[], scope: ReportTrade["scope"]): number | null {
-  let sum = 0;
-  let saw = false;
-  for (const trade of trades) {
-    if (trade.scope !== scope || trade.realizedDollars == null || !Number.isFinite(trade.realizedDollars)) continue;
-    sum += trade.realizedDollars;
-    saw = true;
-  }
-  return saw ? Math.round(sum * 100) / 100 : null;
-}
-
 function sumAllRealized(trades: ReportTrade[]): number | null {
   let sum = 0;
   let saw = false;
@@ -60,14 +48,6 @@ function sumAllRealized(trades: ReportTrade[]): number | null {
     saw = true;
   }
   return saw ? Math.round(sum * 100) / 100 : null;
-}
-
-function scopeTotals(trades: ReportTrade[]): { joint: number; retirement: number; total: number } {
-  return {
-    joint: sumScope(trades, "joint_brokerage") ?? 0,
-    retirement: sumScope(trades, "retirement") ?? 0,
-    total: sumAllRealized(trades) ?? 0,
-  };
 }
 
 function sortTrades(trades: ReportTrade[]): ReportTrade[] {
@@ -104,43 +84,13 @@ function useShowWeekend(): [boolean, (next: boolean) => void] {
   return [on, update];
 }
 
-function ScopeTotalsRow({
-  label,
-  joint,
-  retirement,
-  total,
-  masked,
-  className,
-  compact = false,
-}: {
-  label: string;
-  joint: number;
-  retirement: number;
-  total: number;
-  masked: boolean;
-  className?: string;
-  compact?: boolean;
-}) {
+function RealizedTotalBar({ label, amount, masked }: { label: string; amount: number; masked: boolean }) {
   return (
-    <div
-      className={`grid gap-2 text-sm ${
-        compact
-          ? "grid-cols-3 sm:grid-cols-3"
-          : "sm:grid-cols-[minmax(0,1fr)_repeat(3,minmax(5rem,auto))] sm:items-center"
-      } ${className ?? ""}`}
-    >
-      {!compact ? <div className="font-medium text-zinc-700 dark:text-zinc-200">{label}</div> : null}
-      <div className="flex flex-col sm:items-end">
-        <span className="text-[10px] uppercase tracking-wide text-zinc-500">Joint</span>
-        <span className={`tabular-nums ${posNegClass(joint)}`}>{usd2Masked(joint, masked)}</span>
-      </div>
-      <div className="flex flex-col sm:items-end">
-        <span className="text-[10px] uppercase tracking-wide text-zinc-500">Retirement</span>
-        <span className={`tabular-nums ${posNegClass(retirement)}`}>{usd2Masked(retirement, masked)}</span>
-      </div>
-      <div className="flex flex-col sm:items-end">
-        <span className="text-[10px] uppercase tracking-wide text-zinc-500">Total</span>
-        <span className={`font-semibold tabular-nums ${posNegClass(total)}`}>{usd2Masked(total, masked)}</span>
+    <div className="flex items-center justify-between gap-3 text-sm">
+      <div className="font-medium text-zinc-700 dark:text-zinc-200">{label}</div>
+      <div className="text-right">
+        <div className="text-[10px] uppercase tracking-wide text-zinc-500">Realized</div>
+        <div className={`font-semibold tabular-nums ${posNegClass(amount)}`}>{usd2Masked(amount, masked)}</div>
       </div>
     </div>
   );
@@ -244,37 +194,24 @@ function SummaryTable({
             <th className="px-3 py-0.5 text-left font-semibold">
               <span className="sr-only">Period</span>
             </th>
-            <th className="w-28 px-3 py-0.5 text-right font-semibold">Joint</th>
-            <th className="w-32 px-3 py-0.5 text-right font-semibold">Retirement</th>
-            <th className="w-28 px-3 py-0.5 text-right font-semibold">Total</th>
+            <th className="w-28 px-3 py-0.5 text-right font-semibold">Realized</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row) => {
-            const quiet = row.trades.length === 0;
-            const totals = quiet ? null : scopeTotals(row.trades);
+            const amount = sumAllRealized(row.trades);
             return (
               <tr key={row.key} className="border-t border-zinc-100 dark:border-zinc-800/80">
                 <td className="whitespace-nowrap px-3 py-0.5 font-medium text-zinc-800 dark:text-zinc-100">
                   {row.label}
                   {row.aside ? <span className="font-normal text-zinc-500"> {row.aside}</span> : null}
                 </td>
-                {quiet || !totals ? (
-                  <td colSpan={3} className="whitespace-nowrap px-3 py-0.5 text-right text-zinc-500">
-                    No trades
-                  </td>
+                {amount == null ? (
+                  <td className="whitespace-nowrap px-3 py-0.5 text-right text-zinc-500">No trades</td>
                 ) : (
-                  <>
-                    <td className={`whitespace-nowrap px-3 py-0.5 text-right tabular-nums ${posNegClass(totals.joint)}`}>
-                      {usd2Masked(totals.joint, masked)}
-                    </td>
-                    <td className={`whitespace-nowrap px-3 py-0.5 text-right tabular-nums ${posNegClass(totals.retirement)}`}>
-                      {usd2Masked(totals.retirement, masked)}
-                    </td>
-                    <td className={`whitespace-nowrap px-3 py-0.5 text-right font-semibold tabular-nums ${posNegClass(totals.total)}`}>
-                      {usd2Masked(totals.total, masked)}
-                    </td>
-                  </>
+                  <td className={`whitespace-nowrap px-3 py-0.5 text-right font-semibold tabular-nums ${posNegClass(amount)}`}>
+                    {usd2Masked(amount, masked)}
+                  </td>
                 )}
               </tr>
             );
@@ -299,33 +236,23 @@ function DayCard({
   onToggle: () => void;
 }) {
   if (trades.length === 0) return <QuietRow label={formatWeekdayDateLabel(ymd)} />;
-  const totals = scopeTotals(trades);
+  const amount = sumAllRealized(trades) ?? 0;
   return (
     <div className="overflow-hidden rounded-xl border border-zinc-200/80 dark:border-zinc-700/80">
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full flex-col gap-3 bg-white px-4 py-3 text-left transition-colors hover:bg-zinc-50 dark:bg-zinc-900/60 dark:hover:bg-zinc-900/80 sm:gap-2"
+        className="flex w-full items-center gap-2 bg-white px-4 py-3 text-left transition-colors hover:bg-zinc-50 dark:bg-zinc-900/60 dark:hover:bg-zinc-900/80"
         aria-expanded={expanded}
       >
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-400" aria-hidden>
-            {expanded ? "▾" : "▸"}
-          </span>
-          <span className="font-medium text-zinc-800 dark:text-zinc-100">{formatWeekdayDateLabel(ymd)}</span>
-          <span className="text-xs text-zinc-500">
-            {trades.length} trade{trades.length === 1 ? "" : "s"}
-          </span>
-        </div>
-        <ScopeTotalsRow
-          label=""
-          joint={totals.joint}
-          retirement={totals.retirement}
-          total={totals.total}
-          masked={masked}
-          compact
-          className="pl-6 sm:pl-7"
-        />
+        <span className="text-zinc-400" aria-hidden>
+          {expanded ? "▾" : "▸"}
+        </span>
+        <span className="font-medium text-zinc-800 dark:text-zinc-100">{formatWeekdayDateLabel(ymd)}</span>
+        <span className="text-xs text-zinc-500">
+          {trades.length} trade{trades.length === 1 ? "" : "s"}
+        </span>
+        <span className={`ml-auto font-semibold tabular-nums ${posNegClass(amount)}`}>{usd2Masked(amount, masked)}</span>
       </button>
       {expanded ? (
         <div className="border-t border-zinc-100 bg-white dark:border-zinc-800/80 dark:bg-zinc-950/40">
@@ -402,7 +329,7 @@ export function WeeklyRealizedTradesSection({ trades, masked }: { trades: Report
   const weekTrades = useMemo(() => trades.filter((trade) => tradeFallsInWeeks(trade, [week])), [trades, week]);
   const visibleDays = useMemo(() => daySlotsForDisplay(week.days, showWeekend), [week, showWeekend]);
   const hiddenWeekend = showWeekend ? [] : weekendSessionTrades(weekTrades, week.days);
-  const totals = scopeTotals(weekTrades);
+  const weekRealized = sumAllRealized(weekTrades) ?? 0;
   const [expandedDays, setExpandedDays] = useState<Set<string>>(() => {
     const open = activeDayKey(week.days, weekTrades, showWeekend);
     return new Set(open ? [open] : []);
@@ -422,13 +349,7 @@ export function WeeklyRealizedTradesSection({ trades, masked }: { trades: Report
       <SectionHeading title="Weekly realized trades" showWeekend={showWeekend} onToggleWeekend={setShowWeekend} />
       {weekTrades.length === 0 ? <EmptyLedgerHint /> : null}
       <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/80 p-4 dark:border-zinc-700/80 dark:bg-zinc-900/40">
-        <ScopeTotalsRow
-          label="Week total"
-          joint={totals.joint}
-          retirement={totals.retirement}
-          total={totals.total}
-          masked={masked}
-        />
+        <RealizedTotalBar label="Week total" amount={weekRealized} masked={masked} />
         <HiddenWeekendNote trades={hiddenWeekend} masked={masked} />
       </div>
       <DayList
@@ -449,20 +370,14 @@ function SectionTitle({ title }: { title: string }) {
 export function MonthlyRealizedTradesSection({ trades, masked }: { trades: ReportTrade[]; masked: boolean }) {
   const weeks = useMemo(() => rollingFuturesWeeks(new Date(), 5), []);
   const scoped = useMemo(() => trades.filter((trade) => tradeFallsInWeeks(trade, weeks)), [trades, weeks]);
-  const totals = scopeTotals(scoped);
+  const totalRealized = sumAllRealized(scoped) ?? 0;
 
   return (
     <section className="space-y-4">
       <SectionTitle title="Monthly realized trades (last 5 weeks)" />
       {scoped.length === 0 ? <EmptyLedgerHint /> : null}
       <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/80 p-4 dark:border-zinc-700/80 dark:bg-zinc-900/40">
-        <ScopeTotalsRow
-          label="5-week total"
-          joint={totals.joint}
-          retirement={totals.retirement}
-          total={totals.total}
-          masked={masked}
-        />
+        <RealizedTotalBar label="5-week total" amount={totalRealized} masked={masked} />
       </div>
       <SummaryTable
         masked={masked}

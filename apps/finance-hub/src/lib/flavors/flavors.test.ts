@@ -64,6 +64,13 @@ describe("nav and route guards", () => {
     ]);
   });
 
+  it("names Reports for realized gain and loss in every flavor", () => {
+    for (const id of ["main", "rorie", "peyton"] as const) {
+      const item = navForFlavor(id).find((entry) => entry.href === "/reports");
+      assert.equal(item?.label, "Reports (realized gain/loss)");
+    }
+  });
+
   it("peyton nav matches rorie", () => {
     assert.deepEqual(navForFlavor("peyton"), navForFlavor("rorie"));
     assert.equal(getFlavorConfig("peyton").label, "Peyton");

@@ -12,6 +12,7 @@ import {
   fifoRealizedForClosingLeg,
   loadRealizedTrades,
   parseRealizedGainFromRaw,
+  periodPlTitle,
   realizedGainScopeForNickname,
 } from "@/lib/analytics/periodReport";
 import type { SchwabTxnItem, SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
@@ -26,6 +27,24 @@ test("computePeriodPlFromSeries uses anchor day and subtracts session cash flow"
   assert.equal(out.endValue, 1_010_000);
   assert.equal(out.plDollars, 5_000);
   assert.equal(out.plPct, 0.5);
+  assert.deepEqual(out.baseline, { kind: "period" });
+  assert.equal(periodPlTitle(out.baseline, "2026-08-31"), "Period P&L");
+});
+
+test("computePeriodPlFromSeries labels a gap with the last print instead of the period", () => {
+  const series = [
+    { asOf: "2026-09-30T16:56:00.000Z", totalMarketValue: 5_090_000 },
+    { asOf: "2026-10-06T13:21:00.000Z", totalMarketValue: 5_669_000 },
+  ];
+  const out = computePeriodPlFromSeries(series, "2026-10-02", "2026-10-06");
+  assert.equal(out.startValue, 5_090_000);
+  assert.equal(out.endValue, 5_669_000);
+  assert.deepEqual(out.baseline, { kind: "since", baselineYmd: "2026-09-30" });
+  assert.equal(periodPlTitle(out.baseline, "2026-10-06"), "since Sep 30");
+});
+
+test("periodPlTitle includes the year when the last print is in a prior year", () => {
+  assert.equal(periodPlTitle({ kind: "since", baselineYmd: "2025-12-31" }, "2026-01-02"), "since Dec 31, 2025");
 });
 
 test("computePeriodPct and vs benchmark arithmetic", () => {
