@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 
 import { getGlanceAlignedPortfolioValueSeriesByBucket } from "@/lib/analytics/glanceAlignedPerformance";
 import type { PortfolioValuePoint } from "@/lib/analytics/performance";
+import { futuresWeekContaining, rollingFuturesWeeks, tradeFallsInWeeks } from "@/lib/analytics/futuresWeek";
 import {
   parsePeriodKind,
   resolvePeriodWindow,
@@ -14,20 +15,15 @@ import { accountsInFlavorWhereSql } from "@/lib/flavors/accounts";
 import { ensureBenchmarkHistory } from "@/lib/market/benchmarks";
 import { securityLegsOf, type SchwabTxnItem, type SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
 import { fetchSchwabSessionNetCashFlow } from "@/lib/terminal/portfolioCashFlows";
-import { closeOnOrBefore, lastPointOnOrBefore } from "@/lib/portfolio/snapshots";
+import { closeOnOrBefore, lastPointOnOrBefore, portfolioAsOfIsoDate } from "@/lib/portfolio/snapshots";
 
-/** Primary taxable bucket vs all other accounts (retirement, 529, etc.). */
+/** Joint brokerage is the only realized bucket on Reports. Other accounts stay out of the lists. */
 export type RealizedGainScope = "joint_brokerage" | "retirement";
-
-export type RealizedGainsByScope = {
-  jointBrokerage: number | null;
-  retirement: number | null;
-  total: number | null;
-};
 
 export type RealizedTradeRow = {
   id: string;
   tradeDate: string;
+  tradedAt: string | null;
   accountId: string;
   accountLabel: string;
   scope: RealizedGainScope;
@@ -43,7 +39,10 @@ export type PeriodReportMetrics = {
   plDollars: number | null;
   plPct: number | null;
   sessionCashFlow: number | null;
-  realizedGains: RealizedGainsByScope;
+  /** Joint-brokerage realized dollars. Null when the ledger is incomplete and empty. */
+  realizedDollars: number | null;
+  /** "Period P&L" when a print exists on the start anchor; otherwise "since <date>". */
+  plTitle: string;
   vsSpy: number | null;
   vsQqq: number | null;
   portfolioPct: number | null;
@@ -63,31 +62,15 @@ function accountDisplayLabel(nickname: string | null, name: string): string {
   return n || name;
 }
 
-function sumRealizedByScope(trades: RealizedTradeRow[]): RealizedGainsByScope {
-  let joint = 0;
-  let retirement = 0;
-  let sawJoint = false;
-  let sawRetirement = false;
-
-  for (const t of trades) {
-    if (t.realizedDollars == null || !Number.isFinite(t.realizedDollars)) continue;
-    if (t.scope === "joint_brokerage") {
-      joint += t.realizedDollars;
-      sawJoint = true;
-    } else {
-      retirement += t.realizedDollars;
-      sawRetirement = true;
-    }
+function sumRealizedDollars(trades: RealizedTradeRow[]): number | null {
+  let sum = 0;
+  let saw = false;
+  for (const trade of trades) {
+    if (trade.realizedDollars == null || !Number.isFinite(trade.realizedDollars)) continue;
+    sum += trade.realizedDollars;
+    saw = true;
   }
-
-  const jointBrokerage = sawJoint ? Math.round(joint * 100) / 100 : null;
-  const retirementTotal = sawRetirement ? Math.round(retirement * 100) / 100 : null;
-  const total =
-    sawJoint || sawRetirement
-      ? Math.round(((jointBrokerage ?? 0) + (retirementTotal ?? 0)) * 100) / 100
-      : null;
-
-  return { jointBrokerage, retirement: retirementTotal, total };
+  return saw ? Math.round(sum * 100) / 100 : null;
 }
 
 export type PeriodReportResult = {
@@ -164,6 +147,15 @@ function openingLotFromLeg(leg: SchwabTxnItem): FifoLot | null {
   return { qty, perUnit };
 }
 
+function tradedAtFromRaw(raw: SchwabTxnRaw): string | null {
+  for (const candidate of [raw.time, raw.tradeDate]) {
+    if (!candidate || candidate.trim().length <= 10) continue;
+    const parsed = new Date(candidate);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  return null;
+}
+
 function hasClosingLeg(raw: SchwabTxnRaw): boolean {
   return securityLegsOf(raw).some((leg) => (leg.positionEffect ?? "").toUpperCase() === "CLOSING");
 }
@@ -230,6 +222,7 @@ export function loadRealizedTrades(
 
     const scope = realizedGainScopeForNickname(row.account_nickname);
     const accountLabel = accountDisplayLabel(row.account_nickname, row.account_name);
+    const tradedAt = tradedAtFromRaw(raw);
 
     const topGain = pickGainLoss(raw as SchwabTxnRaw & Record<string, unknown>);
     const fifoTradesForRow: RealizedTradeRow[] = [];
@@ -263,6 +256,7 @@ export function loadRealizedTrades(
           fifoTradesForRow.push({
             id: `${row.id}:${sym}`,
             tradeDate: row.trade_date,
+            tradedAt,
             accountId: row.account_id,
             accountLabel,
             scope,
@@ -286,6 +280,7 @@ export function loadRealizedTrades(
       fifoTradesForRow.push({
         id: `${row.id}:${sym}`,
         tradeDate: row.trade_date,
+        tradedAt,
         accountId: row.account_id,
         accountLabel,
         scope,
@@ -299,6 +294,7 @@ export function loadRealizedTrades(
       trades.push({
         id: row.id,
         tradeDate: row.trade_date,
+        tradedAt,
         accountId: row.account_id,
         accountLabel,
         scope,
@@ -328,6 +324,20 @@ export function computeVsBenchmark(portfolioPct: number | null, benchmarkPct: nu
   return Math.round((portfolioPct - benchmarkPct) * 100) / 100;
 }
 
+const PL_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
+
+export type PeriodPlBaseline = { kind: "period" } | { kind: "since"; baselineYmd: string };
+
+/** Card title. A print on the anchor stays "Period P&L"; an older print is "since Mon D". */
+export function periodPlTitle(baseline: PeriodPlBaseline, endYmd: string): string {
+  if (baseline.kind !== "since") return "Period P&L";
+  const [y, m, d] = baseline.baselineYmd.split("-").map(Number);
+  const month = PL_MONTHS[(m ?? 0) - 1];
+  if (!y || !month || !d) return "Period P&L";
+  if (y !== Number(endYmd.slice(0, 4))) return `since ${month} ${d}, ${y}`;
+  return `since ${month} ${d}`;
+}
+
 export function computePeriodPlFromSeries(
   series: PortfolioValuePoint[],
   startAnchorYmd: string,
@@ -338,20 +348,24 @@ export function computePeriodPlFromSeries(
   endValue: number | null;
   plDollars: number | null;
   plPct: number | null;
+  baseline: PeriodPlBaseline;
 } {
   const startPt = lastPointOnOrBefore(series, startAnchorYmd);
   const endPt = lastPointOnOrBefore(series, endYmd) ?? (series.length ? series[series.length - 1]! : null);
+  const startDay = startPt ? portfolioAsOfIsoDate(startPt.asOf) : null;
+  const baseline: PeriodPlBaseline =
+    startDay != null && startDay < startAnchorYmd ? { kind: "since", baselineYmd: startDay } : { kind: "period" };
 
   const startValue = startPt?.totalMarketValue ?? null;
   const endValue = endPt?.totalMarketValue ?? null;
 
   if (startValue == null || endValue == null) {
-    return { startValue, endValue, plDollars: null, plPct: null };
+    return { startValue, endValue, plDollars: null, plPct: null, baseline };
   }
 
   const plDollars = endValue - startValue - sessionCashFlow;
   const plPct = computePeriodPct(startValue, startValue + plDollars);
-  return { startValue, endValue, plDollars, plPct };
+  return { startValue, endValue, plDollars, plPct, baseline };
 }
 
 export function computeBenchmarkPeriodPct(
@@ -386,12 +400,13 @@ export async function computePeriodReport(options: {
     sessionCashFlow = await fetchSchwabSessionNetCashFlow(window.startYmd, db, flavor);
   }
 
-  const { startValue, endValue, plDollars, plPct } = computePeriodPlFromSeries(
+  const { startValue, endValue, plDollars, plPct, baseline } = computePeriodPlFromSeries(
     series,
     window.startAnchorYmd,
     window.endYmd,
     sessionCashFlow ?? 0,
   );
+  const plTitle = periodPlTitle(baseline, window.endYmd);
 
   await ensureBenchmarkHistory("SPY", window.endYmd);
   await ensureBenchmarkHistory("QQQ", window.endYmd);
@@ -402,20 +417,23 @@ export async function computePeriodReport(options: {
   const vsSpy = computeVsBenchmark(portfolioPct, spyPct);
   const vsQqq = computeVsBenchmark(portfolioPct, qqqPct);
 
-  const { trades, ledgerComplete } = loadRealizedTrades(db, flavor, window.startYmd, window.endYmd);
-  const realizedGainsRaw = sumRealizedByScope(trades);
-  const realizedGains =
-    realizedGainsRaw.total != null
-      ? realizedGainsRaw
-      : ledgerComplete
-        ? { jointBrokerage: 0, retirement: 0, total: 0 }
-        : { jointBrokerage: null, retirement: null, total: null };
-  const includeTradeDetails =
-    window.period === "daily" || window.period === "weekly" || window.period === "monthly";
-
+  const loaded = loadRealizedTrades(db, flavor, window.startYmd, window.endYmd);
+  const ledgerComplete = loaded.ledgerComplete;
+  let trades = loaded.trades;
+  if (window.period === "weekly" || window.period === "monthly") {
+    const weeks = window.period === "weekly" ? [futuresWeekContaining(now)] : rollingFuturesWeeks(now, 5);
+    trades = trades.filter((trade) => tradeFallsInWeeks(trade, weeks));
+  }
+  trades = trades.filter((trade) => trade.scope === "joint_brokerage");
+  const realizedRaw = sumRealizedDollars(trades);
+  const realizedDollars = realizedRaw != null ? realizedRaw : ledgerComplete ? 0 : null;
   const footnotes: string[] = [];
   if (window.period !== "daily") {
-    footnotes.push("Period P&L is net liquidation change; deposits and withdrawals are not stripped.");
+    footnotes.push(
+      baseline.kind === "since"
+        ? `No portfolio print on ${window.startAnchorYmd}. Change is since ${baseline.baselineYmd}; deposits and withdrawals are not stripped.`
+        : "Period P&L is net liquidation change; deposits and withdrawals are not stripped.",
+    );
   } else if (sessionCashFlow != null && Math.abs(sessionCashFlow) > 1e-6) {
     footnotes.push("Daily P&L excludes session cash flows (deposits and withdrawals).");
   }
@@ -437,14 +455,15 @@ export async function computePeriodReport(options: {
       plDollars,
       plPct: plPct != null ? Math.round(plPct * 100) / 100 : null,
       sessionCashFlow,
-      realizedGains,
+      realizedDollars,
+      plTitle,
       vsSpy,
       vsQqq,
       portfolioPct: portfolioPct != null ? Math.round(portfolioPct * 100) / 100 : null,
       spyPct: spyPct != null ? Math.round(spyPct * 100) / 100 : null,
       qqqPct: qqqPct != null ? Math.round(qqqPct * 100) / 100 : null,
     },
-    trades: includeTradeDetails ? trades : [],
+    trades,
     tradeLedgerComplete: ledgerComplete,
     footnotes,
   };

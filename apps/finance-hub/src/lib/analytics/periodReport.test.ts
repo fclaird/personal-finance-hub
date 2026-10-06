@@ -12,6 +12,7 @@ import {
   fifoRealizedForClosingLeg,
   loadRealizedTrades,
   parseRealizedGainFromRaw,
+  periodPlTitle,
   realizedGainScopeForNickname,
 } from "@/lib/analytics/periodReport";
 import type { SchwabTxnItem, SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
@@ -26,6 +27,24 @@ test("computePeriodPlFromSeries uses anchor day and subtracts session cash flow"
   assert.equal(out.endValue, 1_010_000);
   assert.equal(out.plDollars, 5_000);
   assert.equal(out.plPct, 0.5);
+  assert.deepEqual(out.baseline, { kind: "period" });
+  assert.equal(periodPlTitle(out.baseline, "2026-08-31"), "Period P&L");
+});
+
+test("computePeriodPlFromSeries labels a gap with the last print instead of the period", () => {
+  const series = [
+    { asOf: "2026-09-30T16:56:00.000Z", totalMarketValue: 5_090_000 },
+    { asOf: "2026-10-06T13:21:00.000Z", totalMarketValue: 5_669_000 },
+  ];
+  const out = computePeriodPlFromSeries(series, "2026-10-02", "2026-10-06");
+  assert.equal(out.startValue, 5_090_000);
+  assert.equal(out.endValue, 5_669_000);
+  assert.deepEqual(out.baseline, { kind: "since", baselineYmd: "2026-09-30" });
+  assert.equal(periodPlTitle(out.baseline, "2026-10-06"), "since Sep 30");
+});
+
+test("periodPlTitle includes the year when the last print is in a prior year", () => {
+  assert.equal(periodPlTitle({ kind: "since", baselineYmd: "2025-12-31" }, "2026-01-02"), "since Dec 31, 2025");
 });
 
 test("computePeriodPct and vs benchmark arithmetic", () => {
@@ -177,4 +196,35 @@ test("loadRealizedTrades consumes out-of-window closes so later round-trips use 
   const { trades } = loadRealizedTrades(db, "main", "2026-08-10", "2026-08-11");
   const close = trades.find((t) => t.id === "tx_close_new:AAPL");
   assert.equal(close?.realizedDollars, 100);
+  assert.equal(close?.tradedAt, null);
+});
+
+test("loadRealizedTrades keeps the broker clock time without changing gainLoss dollars", () => {
+  const db = new Database(":memory:");
+  db.pragma("foreign_keys = ON");
+  db.exec(fs.readFileSync(path.join(process.cwd(), "src", "db", "schema.sql"), "utf-8"));
+  db.prepare(
+    `INSERT INTO institution_connections (id, type, display_name, status) VALUES ('conn1', 'schwab', 'Schwab', 'active')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO accounts (id, connection_id, name, nickname, account_bucket, type)
+     VALUES ('schwab_1', 'conn1', 'Brokerage', 'joint_brokerage', 'brokerage', 'brokerage')`,
+  ).run();
+  const raw = JSON.stringify({
+    type: "TRADE",
+    gainLoss: 42.5,
+    tradeDate: "2026-10-04",
+    time: "2026-10-04T22:30:00.000Z",
+  });
+  db.prepare(
+    `INSERT INTO broker_transactions (
+       id, account_id, external_activity_id, trade_date, transaction_type, raw_json, symbol, leg_count
+     ) VALUES ('tx_sun', 'schwab_1', 'ext_sun', '2026-10-04', 'TRADE', ?, 'ES', 1)`,
+  ).run(raw);
+
+  const { trades } = loadRealizedTrades(db, "main", "2026-10-04", "2026-10-05");
+  assert.equal(trades.length, 1);
+  assert.equal(trades[0]!.realizedDollars, 42.5);
+  assert.equal(trades[0]!.tradedAt, "2026-10-04T22:30:00.000Z");
+  assert.equal(trades[0]!.tradeDate, "2026-10-04");
 });
