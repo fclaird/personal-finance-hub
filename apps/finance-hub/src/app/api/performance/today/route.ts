@@ -4,31 +4,11 @@ import { getDb } from "@/lib/db";
 import { latestSnapshotIds, latestSnapshotScopeForMode } from "@/lib/holdings/latestSnapshots";
 import { POSITION_MARKET_VALUE_SQL } from "@/lib/holdings/positionMarketValue";
 import { schwabMarketFetch } from "@/lib/schwab/client";
-import { schwabQuoteObjectFromEntry } from "@/lib/schwab/quoteEntry";
+import { portfolioPctFromMarkedValues, quoteChangePctPoints } from "@/lib/terminal/portfolioDayMove";
 import { resolveViewScope } from "@/lib/viewScope";
 
 function normSym(s: string) {
   return (s ?? "").trim().toUpperCase();
-}
-
-function asNumber(v: unknown): number | null {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
-  return null;
-}
-
-function quoteChangePctFromResp(resp: Record<string, unknown>, sym: string): number | null {
-  const entry = resp[sym] ?? resp[sym.toUpperCase()];
-  const q = schwabQuoteObjectFromEntry(entry);
-  if (!q) return null;
-  const last = asNumber(q.lastPrice) ?? null;
-  const close = asNumber(q.closePrice) ?? null;
-  const change =
-    asNumber(q.netChange ?? q.change) ?? (last != null && close != null ? last - close : null);
-  const changePercent =
-    asNumber(q.netPercentChangeInDouble ?? q.changePercent) ??
-    (change != null && close != null && close !== 0 ? change / close : null);
-  return changePercent == null ? null : changePercent * 100;
 }
 
 export async function GET() {
@@ -69,18 +49,15 @@ export async function GET() {
 
   const resp = await schwabMarketFetch<Record<string, unknown>>(`/quotes?symbols=${encodeURIComponent(symbols.join(","))}`);
 
-  let cur = 0;
-  let prev = 0;
-  for (const [sym, mv] of mvBySym.entries()) {
-    const pct = quoteChangePctFromResp(resp, sym);
-    if (pct == null || !Number.isFinite(pct)) continue;
-    cur += mv;
-    prev += mv / (1 + pct / 100);
-  }
-  const portfolioPct = prev > 0 ? (cur / prev - 1) * 100 : null;
+  const portfolioPct = portfolioPctFromMarkedValues(
+    [...mvBySym.entries()].map(([symbol, marketValue]) => ({
+      marketValue,
+      changePctPoints: quoteChangePctPoints(resp, symbol),
+    })),
+  );
 
-  const SPY = quoteChangePctFromResp(resp, "SPY");
-  const QQQ = quoteChangePctFromResp(resp, "QQQ");
+  const SPY = quoteChangePctPoints(resp, "SPY");
+  const QQQ = quoteChangePctPoints(resp, "QQQ");
 
   return NextResponse.json({ ok: true, snapshotId: snapshotIds[0] ?? null, portfolioPct, SPY, QQQ, snapshots: snapshotIds.length });
 }

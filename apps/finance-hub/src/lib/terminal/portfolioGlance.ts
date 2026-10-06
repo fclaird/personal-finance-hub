@@ -12,8 +12,9 @@ import {
   resolvePortfolioAccountTotals,
   schwabIntradayTotalsFromDb,
 } from "@/lib/terminal/portfolioAccountTotals";
-import { portfolioDailyReturnPct } from "@/lib/terminal/portfolioCashFlows";
+import { loadPortfolioQuoteDayPct, presentPortfolioDayChange } from "@/lib/terminal/portfolioDayMove";
 import { selectPortfolioSessionValuation } from "@/lib/terminal/portfolioSessionValuation";
+import type { PortfolioChangeCaption } from "@/lib/terminal/portfolioChangeCaption";
 import { PORTFOLIO_INDEX_BASE } from "@/lib/terminal/portfolioGlanceConstants";
 
 export { PORTFOLIO_INDEX_BASE } from "@/lib/terminal/portfolioGlanceConstants";
@@ -28,6 +29,7 @@ export type PortfolioGlanceCard = Omit<UsMarketIndexCard, "id"> & {
   /** Withdrawal cash flow adjusted intraday path. */
   cashFlowAdjusted?: boolean;
   netCashFlow?: number | null;
+  changeCaption?: PortfolioChangeCaption;
 };
 
 export type OptionLeg = {
@@ -301,10 +303,6 @@ function emptyPortfolioCard(): PortfolioGlanceCard {
   };
 }
 
-/**
- * Portfolio glance from Schwab liquidation/account values plus non-Schwab accounts (529, Plaid, etc.).
- * Day % uses live liquidation vs prior-day equity; the sparkline follows stored intraday liquidation points.
- */
 export async function fetchPortfolioGlanceCard(
   now: Date = new Date(),
   gridOverride?: GlanceTimedGrid,
@@ -319,29 +317,42 @@ export async function fetchPortfolioGlanceCard(
       : null;
     const nowMs = now.getTime();
 
-    const totals = await resolvePortfolioAccountTotals(sessionYmd, priorNySessionYmd(sessionYmd), getDb(), flavor);
+    const db = getDb();
+    const totals = await resolvePortfolioAccountTotals(sessionYmd, priorNySessionYmd(sessionYmd), db, flavor);
     if (!totals) return emptyPortfolioCard();
 
-    const { netValue, priorNetValue, netCashFlow } = totals;
-    const previousClose = PORTFOLIO_INDEX_BASE;
-
-    const db = getDb();
     const intradayTotals = schwabIntradayTotalsFromDb(db, sessionYmd, flavor);
     const valuation = selectPortfolioSessionValuation({
       now,
       sessionYmd,
-      netValue,
-      priorNetValue,
-      netCashFlow,
+      netValue: totals.netValue,
+      priorNetValue: totals.priorNetValue,
+      netCashFlow: totals.netCashFlow,
       externalCurrent: totals.externalCurrent,
       schwabIntraday: intradayTotals,
     });
+    const quotePortfolioPct = totals.dayBaseline === "stale" ? await loadPortfolioQuoteDayPct(db, flavor) : null;
+    const presented = presentPortfolioDayChange({
+      netValue: valuation.netValueForReturn,
+      priorNetValue: totals.priorNetValue,
+      netCashFlow: totals.netCashFlow,
+      sessionYmd,
+      quotePortfolioPct,
+      baseline:
+        totals.dayBaseline === "stale"
+          ? { status: "stale", staleBaselineYmd: totals.staleBaselineYmd }
+          : { status: "prior_session" },
+    });
+    const previousClose = PORTFOLIO_INDEX_BASE;
+    const priorNetValue = presented.priorNetValue;
+    const netCashFlow = totals.netCashFlow;
     const returnNetValue = valuation.netValueForReturn;
     const seriesThroughMs = valuation.seriesThroughMs;
-    const flow = Number.isFinite(netCashFlow) ? netCashFlow : 0;
+    const quoteDay = totals.dayBaseline === "stale" && presented.caption.kind === "day";
+    const flow = quoteDay ? 0 : Number.isFinite(netCashFlow) ? netCashFlow : 0;
     const lastIndex = toIndex(returnNetValue - flow, priorNetValue);
     const change = lastIndex - previousClose;
-    const changePct = valuation.changePct ?? portfolioDailyReturnPct(returnNetValue, priorNetValue, netCashFlow) ?? change;
+    const changePct = presented.changePct ?? change;
 
     const chartStartMs = nyWallTimeMs(sessionYmd, GLANCE_PREMARKET_START_MIN);
     const sessionTotals = intradayTotals.filter((pt) => pt.tsMs >= chartStartMs && pt.tsMs <= seriesThroughMs);
@@ -362,7 +373,7 @@ export async function fetchPortfolioGlanceCard(
       sessionYmd,
       seriesThroughMs,
       totals.externalCurrent,
-      netCashFlow,
+      flow,
     );
     const bridgedSeries = bridgePortfolioSeriesGaps(series);
     const normalizedSeries = normalizeSeriesForChart(bridgedSeries, previousClose, lastIndex);
@@ -435,6 +446,7 @@ export async function fetchPortfolioGlanceCard(
       intradayStale,
       cashFlowAdjusted,
       netCashFlow,
+      changeCaption: presented.caption,
     };
 
     return portfolioCard;

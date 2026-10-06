@@ -3,10 +3,13 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { MarketGlanceCard } from "@/app/components/terminal/MarketGlanceCard";
+import { PortfolioGlanceUnlockProvider } from "@/app/components/terminal/portfolioGlanceUnlocked";
 import {
   PortfolioSessionCloseHeadline,
   PortfolioSessionClosePlot,
 } from "@/app/components/terminal/PortfolioSessionClosePlot";
+import { PrivacyProvider } from "@/app/components/PrivacyProvider";
 import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
 import { resolveGlanceInstrumentId } from "@/lib/market/glanceMiniChartSession";
 import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
@@ -97,6 +100,25 @@ test("after the 16:00 ET close the portfolio drops its series and holds the sess
   assert.equal(plot.changePct, -2.67);
   assert.equal(plot.changeLabel, "At close");
   assert.ok(portfolio.series.length >= 2);
+});
+
+test("a closed session keeps a stale baseline label instead of calling it the close", () => {
+  const now = at("2026-05-20T21:00:00.000Z");
+  assert.equal(isUsEquityRegularSessionOpen(now), false);
+  const plot = portfolioGlancePlot({
+    now,
+    item: {
+      ...portfolio,
+      changePct: 11.43,
+      changeCaption: { kind: "since", baselineYmd: "2026-09-30", sessionYmd: "2026-10-06" },
+    },
+    displayMode: "indexed",
+    balanceUnlocked: true,
+  });
+  assert.equal(plot.mode, "session_close");
+  if (plot.mode !== "session_close") return;
+  assert.equal(plot.changeLabel, "since Sep 30");
+  assert.equal(plot.changePct, 11.43);
 });
 
 test("pre-open Monday uses the session close, same as the futures proxy", () => {
@@ -223,4 +245,36 @@ test("a benchmark id does not enter the portfolio session-close plot", () => {
     balanceUnlocked: false,
   });
   assert.deepEqual(plot, { mode: "live" });
+});
+
+test("open-session tile renders a stale baseline as since that date", () => {
+  const now = at("2026-10-06T13:51:00.000Z");
+  assert.equal(isUsEquityRegularSessionOpen(now), true);
+  const html = renderToStaticMarkup(
+    createElement(
+      PrivacyProvider,
+      null,
+      createElement(
+        PortfolioGlanceUnlockProvider,
+        null,
+        createElement(MarketGlanceCard, {
+          item: {
+            ...portfolio,
+            last: 111.43,
+            change: 11.43,
+            changePct: 11.43,
+            netValue: 5_665_919.59,
+            priorNetValue: 5_084_709.31,
+            changeCaption: { kind: "since", baselineYmd: "2026-09-30", sessionYmd: "2026-10-06" },
+          },
+          glanceNow: now,
+          marketOpen: true,
+          sessionYmd: "2026-10-06",
+        }),
+      ),
+    ),
+  );
+  assert.match(html, /since Sep 30/);
+  assert.match(html, /Last stored baseline is 2026-09-30, not the prior session close/);
+  assert.equal(html.includes(">Day<"), false);
 });

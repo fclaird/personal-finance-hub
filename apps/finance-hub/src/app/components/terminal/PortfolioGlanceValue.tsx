@@ -11,21 +11,25 @@ function formatDayPct(pct: number | null | undefined): string {
 export function PortfolioGlanceValue({
   netValue,
   changePct,
-  changeLabel = "day",
+  changeLabel = "Day",
+  baselineNote,
   indexLevel,
 }: {
   netValue: number | null | undefined;
   changePct?: number | null;
   changeLabel?: string;
+  baselineNote?: string | null;
   indexLevel?: number | null;
 }) {
   const { unlocked, startEditing, lock } = usePortfolioGlanceUnlocked();
-  const pctLine =
-    changePct != null ? (
-      <div className="text-[10px] font-medium tabular-nums text-zinc-500 dark:text-zinc-400">
-        {formatDayPct(changePct)} {changeLabel}
-      </div>
-    ) : null;
+  const pctLine = (
+    <div
+      className="text-[10px] font-medium tabular-nums text-zinc-500 dark:text-zinc-400"
+      title={baselineNote ?? undefined}
+    >
+      {formatDayPct(changePct)} {changeLabel}
+    </div>
+  );
 
   if (indexLevel != null && Number.isFinite(indexLevel)) {
     return (

@@ -7,6 +7,7 @@ import type { FlavorId } from "@/lib/flavor";
 import { isAccountInFlavor } from "@/lib/flavors/accounts";
 import { buildLiveEquityMarkMap } from "@/lib/market/liveEquityMarks";
 import { isoDateInUsEastern } from "@/lib/market/glanceSession";
+import { isNyseHolidayYmd } from "@/lib/market/usEquitySession";
 import {
   markToMarketFund,
   needsPlanFundPricing,
@@ -39,7 +40,10 @@ export type PortfolioAccountTotals = {
   externalCurrent: number;
   externalPrior: number;
   source: "schwab_live" | "schwab_db";
-};
+} & (
+  | { dayBaseline: "prior_session" }
+  | { dayBaseline: "stale"; staleBaselineYmd: string }
+);
 
 function schwabAccountId(sa: SchwabAccountPayload["securitiesAccount"], flavor: FlavorId): string | null {
   const acctIdPart =
@@ -51,12 +55,14 @@ function schwabAccountId(sa: SchwabAccountPayload["securitiesAccount"], flavor: 
   return accountId;
 }
 
-/** Sum latest Schwab liquidation values stored from sync. */
-export function schwabLiquidationFromDb(db: Database.Database, flavor: FlavorId = "main"): { current: number; byAccount: Map<string, number> } {
+export function schwabLiquidationFromDb(
+  db: Database.Database,
+  flavor: FlavorId = "main",
+): { current: number; byAccount: Map<string, number>; asOfByAccount: Map<string, string> } {
   const rows = db
     .prepare(
       `
-      SELECT av.account_id AS account_id, av.equity_value AS equity_value
+      SELECT av.account_id AS account_id, av.as_of AS as_of, av.equity_value AS equity_value
       FROM account_value_points av
       JOIN accounts a ON a.id = av.account_id
       JOIN (
@@ -67,31 +73,26 @@ export function schwabLiquidationFromDb(db: Database.Database, flavor: FlavorId 
       WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql(flavor, "a")}
     `,
     )
-    .all() as Array<{ account_id: string; equity_value: number }>;
+    .all() as Array<{ account_id: string; as_of: string; equity_value: number }>;
 
   const byAccount = new Map<string, number>();
+  const asOfByAccount = new Map<string, string>();
   let current = 0;
   for (const row of rows) {
     const v = row.equity_value;
-    if (!Number.isFinite(v)) continue;
+    const ts = Date.parse(row.as_of);
+    if (!Number.isFinite(v) || !Number.isFinite(ts)) continue;
     byAccount.set(row.account_id, v);
+    asOfByAccount.set(row.account_id, isoDateInUsEastern(ts));
     current += v;
   }
-  return { current, byAccount };
+  return { current, byAccount, asOfByAccount };
 }
 
-/**
- * Last stored Schwab liquidation per account on or before a session date in
- * America/New_York. SQLite `date(as_of)` is UTC, so a Thursday 21:00 ET print
- * (Friday 01:00 UTC) would be dropped from Thursday and the day % would use an
- * older, often much smaller, baseline.
- */
-export function schwabPriorLiquidationFromDb(
-  db: Database.Database,
-  sessionYmd: string,
-  flavor: FlavorId = "main",
-): { prior: number; byAccount: Map<string, number> } {
-  const rows = db
+type SchwabValuePoint = { account_id: string; as_of: string; equity_value: number };
+
+function schwabValuePoints(db: Database.Database, flavor: FlavorId): SchwabValuePoint[] {
+  return db
     .prepare(
       `
       SELECT av.account_id AS account_id, av.as_of AS as_of, av.equity_value AS equity_value
@@ -100,13 +101,19 @@ export function schwabPriorLiquidationFromDb(
       WHERE a.id LIKE 'schwab_%' AND ${allSyncedAccountsWhereSql(flavor, "a")}
     `,
     )
-    .all() as Array<{ account_id: string; as_of: string; equity_value: number }>;
+    .all() as SchwabValuePoint[];
+}
 
+export function schwabLiquidationOnSession(
+  db: Database.Database,
+  sessionYmd: string,
+  flavor: FlavorId = "main",
+): { prior: number; byAccount: Map<string, number> } {
   const best = new Map<string, { ts: number; value: number }>();
-  for (const row of rows) {
+  for (const row of schwabValuePoints(db, flavor)) {
     const ts = Date.parse(row.as_of);
     if (!Number.isFinite(ts) || !Number.isFinite(row.equity_value)) continue;
-    if (isoDateInUsEastern(ts) > sessionYmd) continue;
+    if (isoDateInUsEastern(ts) !== sessionYmd) continue;
     const prev = best.get(row.account_id);
     if (!prev || ts >= prev.ts) best.set(row.account_id, { ts, value: row.equity_value });
   }
@@ -118,6 +125,25 @@ export function schwabPriorLiquidationFromDb(
     prior += row.value;
   }
   return { prior, byAccount };
+}
+
+export function schwabLiquidationBeforeYmd(
+  db: Database.Database,
+  sessionYmd: string,
+  flavor: FlavorId = "main",
+): { byAccount: Map<string, { value: number; asOfYmd: string }> } {
+  const best = new Map<string, { ts: number; value: number; asOfYmd: string }>();
+  for (const row of schwabValuePoints(db, flavor)) {
+    const ts = Date.parse(row.as_of);
+    if (!Number.isFinite(ts) || !Number.isFinite(row.equity_value)) continue;
+    const ymd = isoDateInUsEastern(ts);
+    if (ymd >= sessionYmd) continue;
+    const prev = best.get(row.account_id);
+    if (!prev || ts >= prev.ts) best.set(row.account_id, { ts, value: row.equity_value, asOfYmd: ymd });
+  }
+  const byAccount = new Map<string, { value: number; asOfYmd: string }>();
+  for (const [accountId, row] of best) byAccount.set(accountId, { value: row.value, asOfYmd: row.asOfYmd });
+  return { byAccount };
 }
 
 /** Manual, Plaid, and other non-Schwab accounts from latest holding snapshots. */
@@ -139,7 +165,7 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
     )
     .get() as { mv: number } | undefined;
 
-  const priorSnapIds = latestExternalSnapshotIdsOnOrBefore(db, priorSessionYmd, flavor);
+  const priorSnapIds = latestExternalSnapshotIdsOnSession(db, priorSessionYmd, flavor);
   const priorRow =
     priorSnapIds.length === 0
       ? undefined
@@ -164,12 +190,7 @@ export function externalMarketValueFromDb(db: Database.Database, priorSessionYmd
   };
 }
 
-/**
- * Latest non-Schwab snapshot per account whose US/Eastern calendar date is on or
- * before `sessionYmd`. SQLite `date(as_of)` is UTC, so a Thursday 21:00 ET print
- * (Friday 01:00 UTC) would otherwise be dropped from Thursday's prior baseline.
- */
-function latestExternalSnapshotIdsOnOrBefore(
+function latestExternalSnapshotIdsOnSession(
   db: Database.Database,
   sessionYmd: string,
   flavor: FlavorId,
@@ -189,7 +210,7 @@ function latestExternalSnapshotIdsOnOrBefore(
   const best = new Map<string, { snapshotId: string; ts: number }>();
   for (const snap of snaps) {
     const ts = Date.parse(snap.as_of);
-    if (!Number.isFinite(ts) || isoDateInUsEastern(ts) > sessionYmd) continue;
+    if (!Number.isFinite(ts) || isoDateInUsEastern(ts) !== sessionYmd) continue;
     const prev = best.get(snap.account_id);
     if (!prev || ts >= prev.ts) best.set(snap.account_id, { snapshotId: snap.snapshot_id, ts });
   }
@@ -306,7 +327,7 @@ export async function resolveExternalMarketValue(
       )
       .all() as Array<{ snapshot_id: string }>
   ).map((row) => row.snapshot_id);
-  const priorSnapIds = latestExternalSnapshotIdsOnOrBefore(db, priorSessionYmd, flavor);
+  const priorSnapIds = latestExternalSnapshotIdsOnSession(db, priorSessionYmd, flavor);
   const currentRows = listExternalPositions(db, currentSnapIds);
   const priorRows = listExternalPositions(db, priorSnapIds);
   const planFundSymbols = collectPlanFundSymbols([...currentRows, ...priorRows]);
@@ -375,11 +396,12 @@ export async function fetchSchwabLiquidationLive(flavor: FlavorId = "main"): Pro
 export function schwabPriorEquityFromLatestSync(db: Database.Database, flavor: FlavorId = "main"): {
   prior: number;
   byAccount: Map<string, number>;
+  asOfByAccount: Map<string, string>;
 } {
   const rows = db
     .prepare(
       `
-      SELECT av.account_id AS account_id, av.prior_equity_value AS prior_equity_value
+      SELECT av.account_id AS account_id, av.as_of AS as_of, av.prior_equity_value AS prior_equity_value
       FROM account_value_points av
       JOIN accounts a ON a.id = av.account_id
       JOIN (
@@ -393,51 +415,99 @@ export function schwabPriorEquityFromLatestSync(db: Database.Database, flavor: F
         AND av.prior_equity_value > 0
     `,
     )
-    .all() as Array<{ account_id: string; prior_equity_value: number }>;
+    .all() as Array<{ account_id: string; as_of: string; prior_equity_value: number }>;
 
   const byAccount = new Map<string, number>();
+  const asOfByAccount = new Map<string, string>();
   let prior = 0;
   for (const row of rows) {
     const v = row.prior_equity_value;
-    if (!Number.isFinite(v)) continue;
+    const ts = Date.parse(row.as_of);
+    if (!Number.isFinite(v) || !Number.isFinite(ts)) continue;
     byAccount.set(row.account_id, v);
+    asOfByAccount.set(row.account_id, isoDateInUsEastern(ts));
     prior += v;
   }
-  return { prior, byAccount };
+  return { prior, byAccount, asOfByAccount };
 }
 
-function resolveSchwabAccountTotals(
-  live: Awaited<ReturnType<typeof fetchSchwabLiquidationLive>>,
-  dbCurrent: ReturnType<typeof schwabLiquidationFromDb>,
-  dbPrior: ReturnType<typeof schwabPriorLiquidationFromDb>,
-  dbPriorEquity: ReturnType<typeof schwabPriorEquityFromLatestSync>,
-): { current: number; prior: number } {
+export type SchwabDayBaseline = {
+  current: number;
+  prior: number;
+} & ({ status: "prior_session" } | { status: "stale"; staleBaselineYmd: string });
+
+type AccountPrior =
+  | { kind: "session"; value: number }
+  | { kind: "broker"; value: number }
+  | { kind: "stale"; value: number; asOfYmd: string }
+  | { kind: "carried"; value: number };
+
+function pickAccountPrior(args: {
+  current: number;
+  updatedToday: boolean;
+  sessionPoint: number | undefined;
+  brokerPrior: number | null;
+  stale: { value: number; asOfYmd: string } | undefined;
+}): AccountPrior {
+  if (args.sessionPoint != null && Number.isFinite(args.sessionPoint) && args.sessionPoint > 0) {
+    return { kind: "session", value: args.sessionPoint };
+  }
+  if (args.brokerPrior != null && Number.isFinite(args.brokerPrior) && args.brokerPrior > 0) {
+    return { kind: "broker", value: args.brokerPrior };
+  }
+  if (args.updatedToday && args.stale != null && Number.isFinite(args.stale.value) && args.stale.value > 0) {
+    return { kind: "stale", value: args.stale.value, asOfYmd: args.stale.asOfYmd };
+  }
+  return { kind: "carried", value: args.current };
+}
+
+export function resolveStoredSchwabBaseline(
+  db: Database.Database,
+  sessionYmd: string,
+  priorSessionYmd: string,
+  flavor: FlavorId = "main",
+  live: Awaited<ReturnType<typeof fetchSchwabLiquidationLive>> = null,
+): SchwabDayBaseline {
+  const dbCurrent = schwabLiquidationFromDb(db, flavor);
+  const dbPrior = schwabLiquidationOnSession(db, priorSessionYmd, flavor);
+  const dbPriorEquity = schwabPriorEquityFromLatestSync(db, flavor);
+  const dbStale = schwabLiquidationBeforeYmd(db, sessionYmd, flavor);
   const accountIds = new Set<string>([
     ...dbCurrent.byAccount.keys(),
     ...dbPrior.byAccount.keys(),
     ...dbPriorEquity.byAccount.keys(),
+    ...dbStale.byAccount.keys(),
     ...(live?.byAccount.keys() ?? []),
   ]);
+
   let current = 0;
   let prior = 0;
+  let staleBaselineYmd: string | null = null;
   for (const accountId of accountIds) {
     const liveEntry = live?.byAccount.get(accountId);
     const cur = liveEntry?.current ?? dbCurrent.byAccount.get(accountId);
     if (cur == null || !Number.isFinite(cur) || cur <= 0) continue;
-    // Prefer synced prior-session liquidation over live previousDayEquity when both exist —
-    // the API field can disagree with liquidation and inflate day %.
-    let pri =
-      dbPrior.byAccount.get(accountId) ??
-      liveEntry?.prior ??
-      dbPriorEquity.byAccount.get(accountId) ??
-      null;
-    if (pri == null || !Number.isFinite(pri) || pri <= 0) {
-      pri = cur;
+    const latestYmd = dbCurrent.asOfByAccount.get(accountId) ?? null;
+    const equityAsOf = dbPriorEquity.asOfByAccount.get(accountId);
+    const storedBrokerPrior = equityAsOf === sessionYmd ? dbPriorEquity.byAccount.get(accountId) : undefined;
+    const picked = pickAccountPrior({
+      current: cur,
+      updatedToday: liveEntry != null || latestYmd === sessionYmd,
+      sessionPoint: dbPrior.byAccount.get(accountId),
+      brokerPrior: liveEntry?.prior ?? storedBrokerPrior ?? null,
+      stale: dbStale.byAccount.get(accountId),
+    });
+    if (picked.kind === "stale" && (staleBaselineYmd == null || picked.asOfYmd < staleBaselineYmd)) {
+      staleBaselineYmd = picked.asOfYmd;
     }
     current += cur;
-    prior += pri;
+    prior += picked.value;
   }
-  return { current, prior };
+
+  if (staleBaselineYmd != null) {
+    return { current, prior, status: "stale", staleBaselineYmd };
+  }
+  return { current, prior, status: "prior_session" };
 }
 
 /** Intraday Schwab liquidation totals for one NY session day (for portfolio sparklines). */
@@ -480,13 +550,9 @@ export async function resolvePortfolioAccountTotals(
   db: Database.Database = getDb(),
   flavor: FlavorId = "main",
 ): Promise<PortfolioAccountTotals | null> {
-  const live =
-    schwabAccountValuesFresh(db) ? null : await fetchSchwabLiquidationLive(flavor);
-  const dbSchwab = schwabLiquidationFromDb(db, flavor);
-  const dbPriorSchwab = schwabPriorLiquidationFromDb(db, priorSessionYmd, flavor);
-  const dbPriorEquity = schwabPriorEquityFromLatestSync(db, flavor);
+  const live = schwabAccountValuesFresh(db) ? null : await fetchSchwabLiquidationLive(flavor);
+  const schwabTotals = resolveStoredSchwabBaseline(db, sessionYmd, priorSessionYmd, flavor, live);
   const external = await resolveExternalMarketValue(db, priorSessionYmd, flavor);
-  const schwabTotals = resolveSchwabAccountTotals(live, dbSchwab, dbPriorSchwab, dbPriorEquity);
 
   const schwabCurrent = schwabTotals.current;
   if (schwabCurrent <= 0 && external.current <= 0) return null;
@@ -516,15 +582,21 @@ export async function resolvePortfolioAccountTotals(
     externalCurrent: external.current,
     externalPrior: external.prior,
     source: live != null ? "schwab_live" : "schwab_db",
+    ...(schwabTotals.status === "stale"
+      ? { dayBaseline: "stale" as const, staleBaselineYmd: schwabTotals.staleBaselineYmd }
+      : { dayBaseline: "prior_session" as const }),
   };
 }
 
-/** Prior NY session date before `sessionYmd` (YYYY-MM-DD). */
 export function priorNySessionYmd(sessionYmd: string): string {
   const d = new Date(`${sessionYmd}T12:00:00-05:00`);
-  d.setDate(d.getDate() - 1);
-  while (d.getDay() === 0 || d.getDay() === 6) {
+  for (let i = 0; i < 14; i++) {
     d.setDate(d.getDate() - 1);
+    const ymd = isoDateInUsEastern(d.getTime());
+    const weekday = new Date(`${ymd}T12:00:00Z`).getUTCDay();
+    if (weekday === 0 || weekday === 6) continue;
+    if (isNyseHolidayYmd(ymd)) continue;
+    return ymd;
   }
-  return isoDateInUsEastern(d.getTime());
+  return sessionYmd;
 }
