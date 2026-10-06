@@ -188,11 +188,11 @@ export function MortgagePanel({
           <p className="text-xs leading-5 text-zinc-500">
             Payoff dates and interest saved start from the current balance. With extra keeps paying the standing extra each month. Without extra pays principal and interest only.
           </p>
-          <ChartFrame title="Principal balance" caption="Dollars of principal by month. Solid lines run through today. Dashed lines carry the same path forward.">
+          <ChartFrame title="Principal balance" caption="Vertical axis is principal in dollars. Horizontal axis is the month. Solid lines run through today. Dashed lines carry the same path forward.">
             <LineChart data={mortgage.balanceSeries.map((point) => ({ ...point, label: monthLabel(point.month) }))} margin={{ top: 8, right: 8, left: 8, bottom: 24 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.15} />
-              <XAxis dataKey="label" tick={{ fontSize: 11 }} interval={tickGap} label={{ value: "Month", position: "insideBottom", offset: -12, fontSize: 12 }} />
-              <YAxis tickFormatter={(value) => (masked ? "" : axisUsd(Number(value)))} width={64} tick={{ fontSize: 11 }} domain={[0, "auto"]} label={{ value: "Principal balance", angle: -90, position: "insideLeft", fontSize: 12, dy: 40 }} />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} interval={tickGap} height={36} />
+              <YAxis tickFormatter={(value) => (masked ? "" : axisUsd(Number(value)))} width={56} tick={{ fontSize: 11 }} domain={[0, "auto"]} />
               <Tooltip formatter={(value, name) => [usd(typeof value === "number" ? value : Number(value), masked), String(name)]} />
               <Legend />
               <Line type="monotone" dataKey="actual" name="Actual" stroke="#b45309" strokeWidth={2} dot={false} connectNulls />
@@ -201,11 +201,11 @@ export function MortgagePanel({
               <Line type="monotone" dataKey="scheduledProjected" name="Scheduled, projected" stroke="#71717a" strokeDasharray="5 4" dot={false} connectNulls />
             </LineChart>
           </ChartFrame>
-          <ChartFrame title="Equity" caption="Official value minus principal, from the June 2024 purchase through this month. Months without an official value stay blank.">
+          <ChartFrame title="Equity" caption="Vertical axis is dollars. Horizontal axis is the month, from the June 2024 purchase through this month. Equity is official value minus principal. Months without an official value stay blank.">
             <LineChart data={mortgage.equitySeries.map((point) => ({ ...point, label: monthLabel(point.month) }))} margin={{ top: 8, right: 8, left: 8, bottom: 24 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.15} />
-              <XAxis dataKey="label" tick={{ fontSize: 11 }} interval={tickGap} label={{ value: "Month", position: "insideBottom", offset: -12, fontSize: 12 }} />
-              <YAxis tickFormatter={(value) => (masked ? "" : axisUsd(Number(value)))} width={64} tick={{ fontSize: 11 }} label={{ value: "Dollars", angle: -90, position: "insideLeft", fontSize: 12, dy: 28 }} />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} interval={tickGap} height={36} />
+              <YAxis tickFormatter={(value) => (masked ? "" : axisUsd(Number(value)))} width={56} tick={{ fontSize: 11 }} />
               <Tooltip formatter={(value, name) => [usd(typeof value === "number" ? value : Number(value), masked), String(name)]} />
               <Legend />
               <Line type="monotone" dataKey="value" name="Official value" stroke="#0f766e" strokeWidth={2} dot={false} connectNulls />
@@ -216,11 +216,11 @@ export function MortgagePanel({
           {mortgage.paymentSeries.length === 0 ? (
             <p className="text-sm text-zinc-500">No payments logged yet. A total and a date are enough; the split is computed from the terms.</p>
           ) : (
-            <ChartFrame title="Payment split" caption="Logged payments by month, stacked as principal, interest, and extra principal.">
+            <ChartFrame title="Payment split" caption="Vertical axis is dollars paid. Horizontal axis is the month. Each bar stacks principal, interest, and extra principal.">
               <BarChart data={mortgage.paymentSeries.map((point) => ({ ...point, label: monthLabel(point.month) }))} margin={{ top: 8, right: 8, left: 8, bottom: 24 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.15} />
-                <XAxis dataKey="label" tick={{ fontSize: 11 }} label={{ value: "Month", position: "insideBottom", offset: -12, fontSize: 12 }} />
-                <YAxis tickFormatter={(value) => (masked ? "" : axisUsd(Number(value)))} width={64} tick={{ fontSize: 11 }} label={{ value: "Payment", angle: -90, position: "insideLeft", fontSize: 12, dy: 28 }} />
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} height={36} />
+                <YAxis tickFormatter={(value) => (masked ? "" : axisUsd(Number(value)))} width={56} tick={{ fontSize: 11 }} />
                 <Tooltip formatter={(value, name) => [usd(typeof value === "number" ? value : Number(value), masked), String(name)]} />
                 <Legend />
                 <Bar dataKey="principal" name="Principal" stackId="pay" fill="#0f766e" />
