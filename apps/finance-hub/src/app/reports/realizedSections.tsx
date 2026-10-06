@@ -17,7 +17,7 @@ import {
   ytdMonthsThrough,
   type FuturesDaySlot,
 } from "@/lib/analytics/futuresWeek";
-import { mostRecentActiveKey } from "@/lib/analytics/reportActivityRows";
+import { mostRecentActiveKey, tradeCountLabel, winLossLabel } from "@/lib/analytics/reportActivityRows";
 import { formatUsd2 } from "@/lib/format";
 import { nyYmd } from "@/lib/market/usEquitySession";
 import { posNegClass } from "@/lib/terminal/colors";
@@ -34,6 +34,11 @@ export type ReportTrade = {
 };
 
 const SHOW_WEEKEND_KEY = "fh-reports-show-weekend";
+
+/** Reports-only rules. Dark mode uses an opaque white tint so lines stay visible on black. */
+const REPORT_FRAME = "border-zinc-300 dark:border-white/25";
+const REPORT_RULE = "border-zinc-200 dark:border-white/20";
+const REPORT_HEADER_RULE = "border-zinc-400 dark:border-white/40";
 
 function usd2Masked(v: number | null | undefined, masked: boolean): string {
   return formatUsd2(v, { mask: masked });
@@ -84,13 +89,28 @@ function useShowWeekend(): [boolean, (next: boolean) => void] {
   return [on, update];
 }
 
-function RealizedTotalBar({ label, amount, masked }: { label: string; amount: number; masked: boolean }) {
+function TradeCountDetail({ trades }: { trades: ReportTrade[] }) {
+  if (trades.length === 0) return null;
+  return (
+    <span className="whitespace-nowrap text-sm text-zinc-500 dark:text-zinc-300">
+      {tradeCountLabel(trades.length)}
+      <span className="mx-1.5 text-zinc-300 dark:text-white/30">·</span>
+      {winLossLabel(trades)}
+    </span>
+  );
+}
+
+function RealizedTotalBar({ label, trades, masked }: { label: string; trades: ReportTrade[]; masked: boolean }) {
+  const amount = sumAllRealized(trades) ?? 0;
   return (
     <div className="flex items-center justify-between gap-3 text-sm">
       <div className="font-medium text-zinc-700 dark:text-zinc-200">{label}</div>
-      <div className="text-right">
-        <div className="text-[10px] uppercase tracking-wide text-zinc-500">Realized</div>
-        <div className={`font-semibold tabular-nums ${posNegClass(amount)}`}>{usd2Masked(amount, masked)}</div>
+      <div className="flex items-center gap-4">
+        {trades.length === 0 ? <span className="text-sm text-zinc-500">No trades</span> : <TradeCountDetail trades={trades} />}
+        <div className="text-right">
+          <div className="text-[10px] uppercase tracking-wide text-zinc-500">Realized</div>
+          <div className={`font-semibold tabular-nums ${posNegClass(amount)}`}>{usd2Masked(amount, masked)}</div>
+        </div>
       </div>
     </div>
   );
@@ -100,8 +120,8 @@ function RealizedTradeTable({ trades, masked }: { trades: ReportTrade[]; masked:
   const rows = sortTrades(trades);
   return (
     <div className="overflow-x-auto">
-      <table className="min-w-full text-left text-sm">
-        <thead className="bg-zinc-50 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:bg-zinc-900/80 dark:text-zinc-400">
+      <table className="min-w-full border-collapse text-left text-sm">
+        <thead className={`border-b ${REPORT_HEADER_RULE} bg-zinc-50 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:bg-zinc-900/80 dark:text-zinc-400`}>
           <tr>
             <th className="px-3 py-2">Account</th>
             <th className="px-3 py-2">Symbol</th>
@@ -111,7 +131,7 @@ function RealizedTradeTable({ trades, masked }: { trades: ReportTrade[]; masked:
         </thead>
         <tbody>
           {rows.map((trade) => (
-            <tr key={trade.id} className="border-t border-zinc-100 dark:border-zinc-800/80">
+            <tr key={trade.id} className={`border-t ${REPORT_RULE}`}>
               <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-300">{trade.accountLabel}</td>
               <td className="px-3 py-2 font-medium">{trade.symbol ?? "—"}</td>
               <td className="max-w-md truncate px-3 py-2 text-zinc-600 dark:text-zinc-300">
@@ -171,7 +191,7 @@ function EmptyLedgerHint() {
 
 function QuietRow({ label, aside }: { label: string; aside?: string }) {
   return (
-    <div className="flex items-center gap-2 rounded-xl border border-zinc-200/80 bg-white px-4 py-2 dark:border-zinc-700/80 dark:bg-zinc-900/60">
+    <div className={`flex items-center gap-2 rounded-xl border ${REPORT_FRAME} bg-white px-4 py-2 dark:bg-zinc-900/60`}>
       <span className="font-medium text-zinc-800 dark:text-zinc-100">{label}</span>
       {aside ? <span className="text-sm text-zinc-500">{aside}</span> : null}
       <span className="ml-auto shrink-0 text-sm text-zinc-500">No trades</span>
@@ -187,13 +207,14 @@ function SummaryTable({
   masked: boolean;
 }) {
   return (
-    <div className="overflow-hidden rounded-xl border border-zinc-200/80 dark:border-zinc-700/80">
-      <table className="w-full text-sm">
-        <thead className="bg-zinc-50 text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:bg-zinc-900/80 dark:text-zinc-400">
+    <div className={`overflow-hidden rounded-xl border ${REPORT_FRAME}`}>
+      <table className="w-full border-collapse text-sm">
+        <thead className={`border-b ${REPORT_HEADER_RULE} bg-zinc-50 text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:bg-zinc-900/80 dark:text-zinc-400`}>
           <tr>
             <th className="px-3 py-0.5 text-left font-semibold">
               <span className="sr-only">Period</span>
             </th>
+            <th className="px-3 py-0.5 text-right font-semibold">Trades</th>
             <th className="w-28 px-3 py-0.5 text-right font-semibold">Realized</th>
           </tr>
         </thead>
@@ -201,17 +222,24 @@ function SummaryTable({
           {rows.map((row) => {
             const amount = sumAllRealized(row.trades);
             return (
-              <tr key={row.key} className="border-t border-zinc-100 dark:border-zinc-800/80">
+              <tr key={row.key} className={`border-t ${REPORT_RULE}`}>
                 <td className="whitespace-nowrap px-3 py-0.5 font-medium text-zinc-800 dark:text-zinc-100">
                   {row.label}
                   {row.aside ? <span className="font-normal text-zinc-500"> {row.aside}</span> : null}
                 </td>
                 {amount == null ? (
-                  <td className="whitespace-nowrap px-3 py-0.5 text-right text-zinc-500">No trades</td>
-                ) : (
-                  <td className={`whitespace-nowrap px-3 py-0.5 text-right font-semibold tabular-nums ${posNegClass(amount)}`}>
-                    {usd2Masked(amount, masked)}
+                  <td colSpan={2} className="whitespace-nowrap px-3 py-0.5 text-right text-zinc-500">
+                    No trades
                   </td>
+                ) : (
+                  <>
+                    <td className="whitespace-nowrap px-3 py-0.5 text-right">
+                      <TradeCountDetail trades={row.trades} />
+                    </td>
+                    <td className={`whitespace-nowrap px-3 py-0.5 text-right font-semibold tabular-nums ${posNegClass(amount)}`}>
+                      {usd2Masked(amount, masked)}
+                    </td>
+                  </>
                 )}
               </tr>
             );
@@ -238,24 +266,24 @@ function DayCard({
   if (trades.length === 0) return <QuietRow label={formatWeekdayDateLabel(ymd)} />;
   const amount = sumAllRealized(trades) ?? 0;
   return (
-    <div className="overflow-hidden rounded-xl border border-zinc-200/80 dark:border-zinc-700/80">
+    <div className={`overflow-hidden rounded-xl border ${REPORT_FRAME}`}>
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center gap-2 bg-white px-4 py-3 text-left transition-colors hover:bg-zinc-50 dark:bg-zinc-900/60 dark:hover:bg-zinc-900/80"
+        className="flex w-full items-center gap-3 bg-white px-4 py-3 text-left transition-colors hover:bg-zinc-50 dark:bg-zinc-900/60 dark:hover:bg-zinc-900/80"
         aria-expanded={expanded}
       >
         <span className="text-zinc-400" aria-hidden>
           {expanded ? "▾" : "▸"}
         </span>
         <span className="font-medium text-zinc-800 dark:text-zinc-100">{formatWeekdayDateLabel(ymd)}</span>
-        <span className="text-xs text-zinc-500">
-          {trades.length} trade{trades.length === 1 ? "" : "s"}
+        <span className="ml-auto">
+          <TradeCountDetail trades={trades} />
         </span>
-        <span className={`ml-auto font-semibold tabular-nums ${posNegClass(amount)}`}>{usd2Masked(amount, masked)}</span>
+        <span className={`font-semibold tabular-nums ${posNegClass(amount)}`}>{usd2Masked(amount, masked)}</span>
       </button>
       {expanded ? (
-        <div className="border-t border-zinc-100 bg-white dark:border-zinc-800/80 dark:bg-zinc-950/40">
+        <div className={`border-t ${REPORT_HEADER_RULE} bg-white dark:bg-zinc-950/40`}>
           <RealizedTradeTable trades={trades} masked={masked} />
         </div>
       ) : null}
@@ -329,7 +357,6 @@ export function WeeklyRealizedTradesSection({ trades, masked }: { trades: Report
   const weekTrades = useMemo(() => trades.filter((trade) => tradeFallsInWeeks(trade, [week])), [trades, week]);
   const visibleDays = useMemo(() => daySlotsForDisplay(week.days, showWeekend), [week, showWeekend]);
   const hiddenWeekend = showWeekend ? [] : weekendSessionTrades(weekTrades, week.days);
-  const weekRealized = sumAllRealized(weekTrades) ?? 0;
   const [expandedDays, setExpandedDays] = useState<Set<string>>(() => {
     const open = activeDayKey(week.days, weekTrades, showWeekend);
     return new Set(open ? [open] : []);
@@ -348,8 +375,8 @@ export function WeeklyRealizedTradesSection({ trades, masked }: { trades: Report
     <section className="space-y-4">
       <SectionHeading title="Weekly realized trades" showWeekend={showWeekend} onToggleWeekend={setShowWeekend} />
       {weekTrades.length === 0 ? <EmptyLedgerHint /> : null}
-      <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/80 p-4 dark:border-zinc-700/80 dark:bg-zinc-900/40">
-        <RealizedTotalBar label="Week total" amount={weekRealized} masked={masked} />
+      <div className={`rounded-xl border ${REPORT_HEADER_RULE} bg-zinc-50/80 p-4 dark:bg-zinc-900/40`}>
+        <RealizedTotalBar label="Week total" trades={weekTrades} masked={masked} />
         <HiddenWeekendNote trades={hiddenWeekend} masked={masked} />
       </div>
       <DayList
@@ -370,14 +397,12 @@ function SectionTitle({ title }: { title: string }) {
 export function MonthlyRealizedTradesSection({ trades, masked }: { trades: ReportTrade[]; masked: boolean }) {
   const weeks = useMemo(() => rollingFuturesWeeks(new Date(), 5), []);
   const scoped = useMemo(() => trades.filter((trade) => tradeFallsInWeeks(trade, weeks)), [trades, weeks]);
-  const totalRealized = sumAllRealized(scoped) ?? 0;
-
   return (
     <section className="space-y-4">
       <SectionTitle title="Monthly realized trades (last 5 weeks)" />
       {scoped.length === 0 ? <EmptyLedgerHint /> : null}
-      <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/80 p-4 dark:border-zinc-700/80 dark:bg-zinc-900/40">
-        <RealizedTotalBar label="5-week total" amount={totalRealized} masked={masked} />
+      <div className={`rounded-xl border ${REPORT_HEADER_RULE} bg-zinc-50/80 p-4 dark:bg-zinc-900/40`}>
+        <RealizedTotalBar label="5-week total" trades={scoped} masked={masked} />
       </div>
       <SummaryTable
         masked={masked}

@@ -12,6 +12,7 @@ import {
   YtdRealizedTradesSection,
   type ReportTrade,
 } from "@/app/reports/realizedSections";
+import { tradeCountLabel, winLossLabel } from "@/lib/analytics/reportActivityRows";
 import {
   PERIOD_KINDS,
   type PeriodKind,
@@ -68,7 +69,7 @@ function MetricCard({
   className?: string;
 }) {
   return (
-    <div className="rounded-xl border border-zinc-200/80 bg-white p-4 shadow-sm dark:border-zinc-700/80 dark:bg-zinc-900/60">
+    <div className="rounded-xl border border-zinc-300 bg-white p-4 shadow-sm dark:border-white/25 dark:bg-zinc-900/60">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
         {title}
       </div>
@@ -109,9 +110,9 @@ function RealizedTradesSection({
           on Connections if you expect activity.
         </p>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-zinc-200/80 dark:border-zinc-700/80">
-          <table className="min-w-full text-left text-sm">
-            <thead className="bg-zinc-50 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:bg-zinc-900/80 dark:text-zinc-400">
+        <div className="overflow-x-auto rounded-xl border border-zinc-300 dark:border-white/25">
+          <table className="min-w-full border-collapse text-left text-sm">
+            <thead className="border-b border-zinc-400 bg-zinc-50 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:border-white/40 dark:bg-zinc-900/80 dark:text-zinc-400">
               <tr>
                 <th className="px-3 py-2">Date</th>
                 <th className="px-3 py-2">Account</th>
@@ -122,7 +123,7 @@ function RealizedTradesSection({
             </thead>
             <tbody>
               {trades.map((t) => (
-                <tr key={t.id} className="border-t border-zinc-100 dark:border-zinc-800/80">
+                <tr key={t.id} className="border-t border-zinc-200 dark:border-white/20">
                   <td className="whitespace-nowrap px-3 py-2 tabular-nums">
                     {formatDisplayDate(t.tradeDate, { fallback: t.tradeDate })}
                   </td>
@@ -268,6 +269,12 @@ function ReportsPageInner() {
               <span className={`font-medium tabular-nums ${posNegClass(metrics.realizedDollars)}`}>
                 {usd2Masked(metrics.realizedDollars, privacy.masked)}
               </span>
+              {trades.length > 0 ? (
+                <span className="text-zinc-500 dark:text-zinc-300">
+                  {" "}
+                  · {tradeCountLabel(trades.length)} · {winLossLabel(trades)}
+                </span>
+              ) : null}
             </p>
           ) : null}
 

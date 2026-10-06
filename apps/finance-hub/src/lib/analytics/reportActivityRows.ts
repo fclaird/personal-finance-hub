@@ -9,3 +9,21 @@ export function mostRecentActiveKey(rows: readonly { key: string; tradeCount: nu
   }
   return null;
 }
+
+/** Closing trades, counted the same way the daily list counts rows. */
+export function tradeCountLabel(count: number): string {
+  return count === 1 ? "1 trade" : `${count} trades`;
+}
+
+/** Positive realized closes are wins. Negative closes are losses. Zero and blank dollars are neither. */
+export function winLossLabel(trades: readonly { realizedDollars: number | null }[]): string {
+  let wins = 0;
+  let losses = 0;
+  for (const trade of trades) {
+    const dollars = trade.realizedDollars;
+    if (dollars == null || !Number.isFinite(dollars) || dollars === 0) continue;
+    if (dollars > 0) wins += 1;
+    else losses += 1;
+  }
+  return `${wins}W / ${losses}L`;
+}
