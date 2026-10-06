@@ -510,7 +510,7 @@ export function recomputeComputedSplits(
       interest: applied.interest,
       escrow: applied.escrow,
       extraPrincipal: applied.extraPrincipal,
-      balanceAfter: payment.balanceAfter != null ? roundCents(payment.balanceAfter) : applied.balanceAfter,
+      balanceAfter: payment.balanceAfter != null ? roundCents(payment.balanceAfter) : null,
       splitSource: "computed",
     };
     updates.push({

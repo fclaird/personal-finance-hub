@@ -199,6 +199,52 @@ describe("mortgage amortization", () => {
     assert.ok(view.payoffWithExtra && view.payoffWithout && view.payoffWithExtra < view.payoffWithout);
   });
 
+  it("keeps amortizing after a computed payment and stops at a stated balance", () => {
+    const terms: MortgageTerms = { ...zero, extraPrincipal: 0 };
+    const computed = resolveMortgageBalance({
+      asOf: "2024-03-01",
+      terms,
+      payments: [
+        {
+          paidOn: "2024-02-01",
+          totalPaid: 100,
+          principal: 100,
+          interest: 0,
+          escrow: 0,
+          extraPrincipal: 0,
+          balanceAfter: null,
+          notes: null,
+          splitSource: "computed",
+        },
+      ],
+      statements: [],
+      ownerEstimate: { asOf: "2026-10-06", balanceUsd: 745_000 },
+    });
+    assert.equal(computed.source, "amortization");
+    assert.equal(computed.balanceUsd, 700);
+    const stated = resolveMortgageBalance({
+      asOf: "2024-03-01",
+      terms,
+      payments: [
+        {
+          paidOn: "2024-02-01",
+          totalPaid: 100,
+          principal: 100,
+          interest: 0,
+          escrow: 0,
+          extraPrincipal: 0,
+          balanceAfter: 888,
+          notes: "sample statement",
+          splitSource: "statement",
+        },
+      ],
+      statements: [],
+      ownerEstimate: null,
+    });
+    assert.equal(stated.source, "statement");
+    assert.equal(stated.balanceUsd, 888);
+  });
+
   it("re-splits a computed payment after an earlier month on the schedule", () => {
     const terms: MortgageTerms = { ...zero, extraPrincipal: 0, monthlyEscrow: 0 };
     const updates = recomputeComputedSplits(
@@ -220,7 +266,7 @@ describe("mortgage amortization", () => {
       [],
     );
     assert.equal(updates[0]?.principal, 100);
-    assert.equal(updates[0]?.balanceAfter, 800);
+    assert.equal(updates[0]?.balanceAfter, null);
     assert.equal(updates[0]?.splitSource, "computed");
   });
 });
