@@ -229,36 +229,58 @@ function QuietRow({ label, aside }: { label: string; aside?: string }) {
   );
 }
 
-function SummaryCard({
-  label,
-  aside,
-  trades,
+function SummaryTable({
+  rows,
   masked,
 }: {
-  label: string;
-  aside?: string;
-  trades: ReportTrade[];
+  rows: { key: string; label: string; aside?: string; trades: ReportTrade[] }[];
   masked: boolean;
 }) {
-  if (trades.length === 0) return <QuietRow label={label} aside={aside} />;
-  const totals = scopeTotals(trades);
   return (
-    <div className="flex w-full flex-col gap-3 rounded-xl border border-zinc-200/80 bg-white px-4 py-3 dark:border-zinc-700/80 dark:bg-zinc-900/60 sm:gap-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-medium text-zinc-800 dark:text-zinc-100">{label}</span>
-        {aside ? <span className="text-sm text-zinc-500">{aside}</span> : null}
-        <span className="text-xs text-zinc-500">
-          {trades.length} trade{trades.length === 1 ? "" : "s"}
-        </span>
-      </div>
-      <ScopeTotalsRow
-        label=""
-        joint={totals.joint}
-        retirement={totals.retirement}
-        total={totals.total}
-        masked={masked}
-        compact
-      />
+    <div className="overflow-hidden rounded-xl border border-zinc-200/80 dark:border-zinc-700/80">
+      <table className="w-full text-sm">
+        <thead className="bg-zinc-50 text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:bg-zinc-900/80 dark:text-zinc-400">
+          <tr>
+            <th className="px-3 py-0.5 text-left font-semibold">
+              <span className="sr-only">Period</span>
+            </th>
+            <th className="w-28 px-3 py-0.5 text-right font-semibold">Joint</th>
+            <th className="w-32 px-3 py-0.5 text-right font-semibold">Retirement</th>
+            <th className="w-28 px-3 py-0.5 text-right font-semibold">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const quiet = row.trades.length === 0;
+            const totals = quiet ? null : scopeTotals(row.trades);
+            return (
+              <tr key={row.key} className="border-t border-zinc-100 dark:border-zinc-800/80">
+                <td className="whitespace-nowrap px-3 py-0.5 font-medium text-zinc-800 dark:text-zinc-100">
+                  {row.label}
+                  {row.aside ? <span className="ml-2 font-normal text-zinc-500">{row.aside}</span> : null}
+                </td>
+                {quiet || !totals ? (
+                  <td colSpan={3} className="whitespace-nowrap px-3 py-0.5 text-right text-zinc-500">
+                    No trades
+                  </td>
+                ) : (
+                  <>
+                    <td className={`whitespace-nowrap px-3 py-0.5 text-right tabular-nums ${posNegClass(totals.joint)}`}>
+                      {usd2Masked(totals.joint, masked)}
+                    </td>
+                    <td className={`whitespace-nowrap px-3 py-0.5 text-right tabular-nums ${posNegClass(totals.retirement)}`}>
+                      {usd2Masked(totals.retirement, masked)}
+                    </td>
+                    <td className={`whitespace-nowrap px-3 py-0.5 text-right font-semibold tabular-nums ${posNegClass(totals.total)}`}>
+                      {usd2Masked(totals.total, masked)}
+                    </td>
+                  </>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -442,20 +464,15 @@ export function MonthlyRealizedTradesSection({ trades, masked }: { trades: Repor
           masked={masked}
         />
       </div>
-      <div className="space-y-2">
-        {weeks.map((week, index) => {
-          const weekTrades = scoped.filter((trade) => tradeFallsInWeeks(trade, [week]));
-          return (
-            <SummaryCard
-              key={week.mondayYmd}
-              label={ROLLING_WEEK_LABELS[index] ?? `Week ${index + 1}`}
-              aside={formatMonthDayRange(week.mondayYmd, week.closeSundayYmd)}
-              trades={weekTrades}
-              masked={masked}
-            />
-          );
-        })}
-      </div>
+      <SummaryTable
+        masked={masked}
+        rows={weeks.map((week, index) => ({
+          key: week.mondayYmd,
+          label: ROLLING_WEEK_LABELS[index] ?? `Week ${index + 1}`,
+          aside: formatMonthDayRange(week.mondayYmd, week.closeSundayYmd),
+          trades: scoped.filter((trade) => tradeFallsInWeeks(trade, [week])),
+        }))}
+      />
     </section>
   );
 }
@@ -469,18 +486,16 @@ export function YtdRealizedTradesSection({ trades, masked }: { trades: ReportTra
   const months = useMemo(() => ytdMonthsThrough(new Date()), []);
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-1">
       <SectionTitle title="Realized by month" />
-      <div className="space-y-2">
-        {months.map((month) => (
-          <SummaryCard
-            key={month.key}
-            label={month.label}
-            trades={monthTrades(trades, month.key, todayYmd)}
-            masked={masked}
-          />
-        ))}
-      </div>
+      <SummaryTable
+        masked={masked}
+        rows={months.map((month) => ({
+          key: month.key,
+          label: month.label,
+          trades: monthTrades(trades, month.key, todayYmd),
+        }))}
+      />
     </section>
   );
 }
