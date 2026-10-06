@@ -2,6 +2,8 @@ import fs from "node:fs";
 
 import Database from "better-sqlite3";
 
+import { seedRealEstate } from "@/lib/realEstate/seed";
+
 import { ensureDirSync } from "@/lib/fs";
 import { getAppDataDir, getDbPath } from "@/lib/paths";
 
@@ -202,5 +204,13 @@ function migrate(db: Database.Database) {
   if (!exists) {
     db.prepare("INSERT INTO schema_migrations (name) VALUES (?)").run(name);
   }
+  const hasRealEstateLoans = db
+    .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='real_estate_loans' LIMIT 1`)
+    .get();
+  if (hasRealEstateLoans) {
+    ensureColumn(db, "real_estate_loans", "monthly_escrow", "monthly_escrow REAL");
+    ensureColumn(db, "real_estate_loans", "extra_principal", "extra_principal REAL NOT NULL DEFAULT 0");
+  }
+  seedRealEstate(db);
 }
 

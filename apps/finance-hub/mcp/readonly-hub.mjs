@@ -23,6 +23,7 @@ const ALLOW = new Set([
   "/api/performance",
   "/api/accounts",
   "/api/health",
+  "/api/real-estate",
 ]);
 
 function assertAllowed(method, pathWithQuery) {

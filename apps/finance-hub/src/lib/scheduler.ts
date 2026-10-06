@@ -3,6 +3,7 @@ import { logError, logLine } from "@/lib/log";
 import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import { runSchwabRefreshSchedulerTick } from "@/lib/schwab/refreshOrchestrator";
 import { maybeSyncBookForwardSnapsOnSchedulerTick } from "@/lib/dividends/bookForwardSnapScheduler";
+import { maybeSyncRealEstateMonthly } from "@/lib/realEstate/monthly";
 import { warmGlanceCache } from "@/lib/terminal/glanceCache";
 
 type SchedulerState = {
@@ -70,6 +71,7 @@ export function startSchedulerOnce() {
     void maybeSyncBookForwardSnapsOnSchedulerTick().catch((e) =>
       logError("scheduler_book_forward_snap_failed", e),
     );
+    void maybeSyncRealEstateMonthly().catch((e) => logError("scheduler_real_estate_failed", e));
     // Keep the terminal quick-glance payload warm so page opens are a local cache read.
     void warmGlanceCache().catch((e) => logError("scheduler_glance_warm_failed", e));
   }
