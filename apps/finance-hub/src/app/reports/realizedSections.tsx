@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { Fragment, useMemo, useState, useSyncExternalStore } from "react";
 
 import {
   ROLLING_WEEK_LABELS,
@@ -10,6 +10,7 @@ import {
   formatWeekdayDateLabel,
   futuresWeekContaining,
   monthKeyForTrade,
+  monthWeekPortions,
   rollingFuturesWeeks,
   sessionYmdForTrade,
   tradeFallsInWeeks,
@@ -424,18 +425,107 @@ function monthTrades(trades: ReportTrade[], monthKey: string, throughYmd: string
 export function YtdRealizedTradesSection({ trades, masked }: { trades: ReportTrade[]; masked: boolean }) {
   const todayYmd = nyYmd(new Date());
   const months = useMemo(() => ytdMonthsThrough(new Date()), []);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+
+  function toggleMonth(monthKey: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(monthKey)) next.delete(monthKey);
+      else next.add(monthKey);
+      return next;
+    });
+  }
 
   return (
     <section className="space-y-1">
       <SectionTitle title="Realized by month" />
-      <SummaryTable
-        masked={masked}
-        rows={months.map((month) => ({
-          key: month.key,
-          label: month.label,
-          trades: monthTrades(trades, month.key, todayYmd),
-        }))}
-      />
+      <div className={`overflow-hidden rounded-xl border ${REPORT_FRAME}`}>
+        <table className="w-full border-collapse text-sm">
+          <thead className={`border-b ${REPORT_HEADER_RULE} bg-zinc-50 text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:bg-zinc-900/80 dark:text-zinc-400`}>
+            <tr>
+              <th className="px-3 py-0.5 text-left font-semibold">
+                <span className="sr-only">Period</span>
+              </th>
+              <th className="px-3 py-0.5 text-right font-semibold">Trades</th>
+              <th className="w-28 px-3 py-0.5 text-right font-semibold">Realized</th>
+            </tr>
+          </thead>
+          <tbody>
+            {months.map((month) => {
+              const rows = monthTrades(trades, month.key, todayYmd);
+              const amount = sumAllRealized(rows);
+              const open = expanded.has(month.key);
+              if (amount == null) {
+                return (
+                  <tr key={month.key} className={`border-t ${REPORT_RULE}`}>
+                    <td className="whitespace-nowrap px-3 py-0.5 font-medium text-zinc-800 dark:text-zinc-100">{month.label}</td>
+                    <td colSpan={2} className="whitespace-nowrap px-3 py-0.5 text-right text-zinc-500">
+                      No trades
+                    </td>
+                  </tr>
+                );
+              }
+              const portions = monthWeekPortions(month.year, month.month, trades, todayYmd);
+              return (
+                <Fragment key={month.key}>
+                  <tr
+                    className={`cursor-pointer border-t ${REPORT_RULE} hover:bg-zinc-50 dark:hover:bg-zinc-900/80`}
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={open}
+                    onClick={() => toggleMonth(month.key)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        toggleMonth(month.key);
+                      }
+                    }}
+                  >
+                    <td className="whitespace-nowrap px-3 py-0.5 font-medium text-zinc-800 dark:text-zinc-100">
+                      <span className="mr-2 inline-block w-3 text-zinc-400" aria-hidden>
+                        {open ? "▾" : "▸"}
+                      </span>
+                      {month.label}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-0.5 text-right">
+                      <TradeCountDetail trades={rows} />
+                    </td>
+                    <td className={`whitespace-nowrap px-3 py-0.5 text-right font-semibold tabular-nums ${posNegClass(amount)}`}>
+                      {usd2Masked(amount, masked)}
+                    </td>
+                  </tr>
+                  {open
+                    ? portions.map((portion) => {
+                        const weekAmount = sumAllRealized(portion.trades);
+                        return (
+                          <tr key={portion.key} className={`border-t ${REPORT_RULE}`}>
+                            <td className="whitespace-nowrap py-0.5 pl-8 pr-3 text-zinc-700 dark:text-zinc-200">{portion.label}</td>
+                            {weekAmount == null ? (
+                              <td colSpan={2} className="whitespace-nowrap px-3 py-0.5 text-right text-zinc-500">
+                                No trades
+                              </td>
+                            ) : (
+                              <>
+                                <td className="whitespace-nowrap px-3 py-0.5 text-right">
+                                  <TradeCountDetail trades={portion.trades} />
+                                </td>
+                                <td
+                                  className={`whitespace-nowrap px-3 py-0.5 text-right font-semibold tabular-nums ${posNegClass(weekAmount)}`}
+                                >
+                                  {usd2Masked(weekAmount, masked)}
+                                </td>
+                              </>
+                            )}
+                          </tr>
+                        );
+                      })
+                    : null}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }

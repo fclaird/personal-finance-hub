@@ -274,3 +274,88 @@ export function formatMonthDayRange(startYmd: string, endYmd: string): string {
   if (startYear === endYear) return `${shortMonthDay(startYmd)} \u2013 ${shortMonthDay(endYmd)}`;
   return `${shortMonthDay(startYmd)}, ${startYear} \u2013 ${shortMonthDay(endYmd)}, ${endYear}`;
 }
+
+/**
+ * Headline for one month's slice of a futures week.
+ * Same month drops the repeated month name: "Week of Jan 5–11".
+ * A single day is "Week of Jan 4". A slice that crosses months names both.
+ */
+export function formatWeekOfLabel(startYmd: string, endYmd: string): string {
+  if (startYmd === endYmd) return `Week of ${shortMonthDay(startYmd)}`;
+  if (startYmd.slice(0, 7) === endYmd.slice(0, 7)) {
+    return `Week of ${shortMonthDay(startYmd)}\u2013${Number(endYmd.slice(8, 10))}`;
+  }
+  return `Week of ${shortMonthDay(startYmd)}\u2013${shortMonthDay(endYmd)}`;
+}
+
+export type MonthWeekPortion<T extends SessionTrade = SessionTrade> = {
+  key: string;
+  mondayYmd: string;
+  label: string;
+  startYmd: string;
+  endYmd: string;
+  trades: T[];
+};
+
+/**
+ * Week headlines for one calendar month.
+ *
+ * A futures week that crosses a month boundary is not given wholly to either
+ * month. Each month lists only the session days that belong to it, labeled
+ * with that slice ("Week of Dec 29–31" under December, "Week of Jan 1–4"
+ * under January). Trades already have one month via monthKeyForTrade, so the
+ * portions of a month add up to that month's realized total.
+ *
+ * A Sunday at or after 18:00 ET sessions onto the next calendar day. When that
+ * day is past `throughYmd`, monthKeyForTrade keeps the trade on the current
+ * month. Those session days are not inside the month's clipped weeks, so they
+ * get their own headline under the clamped month. Dropping them would make
+ * the month total larger than the weeks under it.
+ */
+export function monthWeekPortions<T extends SessionTrade>(
+  year: number,
+  month: number,
+  trades: readonly T[],
+  throughYmd: string,
+): MonthWeekPortion<T>[] {
+  const monthKey = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
+  const inMonth = trades.filter((trade) => monthKeyForTrade(trade, throughYmd) === monthKey);
+  const assigned = new Set<T>();
+  const portions: MonthWeekPortion<T>[] = clippedMonthWeeks(year, month).map((clipped) => {
+    const days = new Set(clipped.clippedDays.map((day) => day.ymd));
+    const bucket = inMonth.filter((trade) => days.has(sessionYmdForTrade(trade)));
+    for (const trade of bucket) assigned.add(trade);
+    return {
+      key: `${monthKey}:${clipped.clippedStartYmd}:${clipped.clippedEndYmd}`,
+      mondayYmd: clipped.week.mondayYmd,
+      label: formatWeekOfLabel(clipped.clippedStartYmd, clipped.clippedEndYmd),
+      startYmd: clipped.clippedStartYmd,
+      endYmd: clipped.clippedEndYmd,
+      trades: bucket,
+    };
+  });
+
+  const spillByMonday = new Map<string, T[]>();
+  for (const trade of inMonth) {
+    if (assigned.has(trade)) continue;
+    const monday = mondayOfSessionYmd(sessionYmdForTrade(trade));
+    const bucket = spillByMonday.get(monday);
+    if (bucket) bucket.push(trade);
+    else spillByMonday.set(monday, [trade]);
+  }
+  for (const monday of [...spillByMonday.keys()].sort()) {
+    const bucket = spillByMonday.get(monday)!;
+    const ymds = [...new Set(bucket.map((trade) => sessionYmdForTrade(trade)))].sort();
+    const startYmd = ymds[0]!;
+    const endYmd = ymds[ymds.length - 1]!;
+    portions.push({
+      key: `${monthKey}:spill:${startYmd}:${endYmd}`,
+      mondayYmd: monday,
+      label: formatWeekOfLabel(startYmd, endYmd),
+      startYmd,
+      endYmd,
+      trades: bucket,
+    });
+  }
+  return portions;
+}

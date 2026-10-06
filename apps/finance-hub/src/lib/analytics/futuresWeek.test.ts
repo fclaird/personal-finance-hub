@@ -4,11 +4,13 @@ import test from "node:test";
 import {
   clippedMonthWeeks,
   formatMonthDayRange,
+  formatWeekOfLabel,
   formatWeekdayDateLabel,
   futuresSessionYmd,
   futuresWeekByMonday,
   futuresWeekContaining,
   monthKeyForTrade,
+  monthWeekPortions,
   rollingFuturesWeeks,
   sessionYmdForTrade,
   spillSessionYmds,
@@ -126,4 +128,91 @@ test("year-to-date months run January through the current New York month", () =>
   assert.equal(months[0]!.key, "2026-01");
   assert.equal(months[months.length - 1]!.label, "October");
   assert.equal(months.length, 10);
+});
+
+function realizedSum(trades: readonly { realizedDollars?: number | null }[]): number {
+  return Math.round(trades.reduce((sum, trade) => sum + (trade.realizedDollars ?? 0), 0) * 100) / 100;
+}
+
+test("week-of labels name the month once when the slice stays inside it", () => {
+  assert.equal(formatWeekOfLabel("2026-01-05", "2026-01-11"), "Week of Jan 5\u201311");
+  assert.equal(formatWeekOfLabel("2026-01-04", "2026-01-04"), "Week of Jan 4");
+  assert.equal(formatWeekOfLabel("2025-12-29", "2026-01-04"), "Week of Dec 29\u2013Jan 4");
+});
+
+test("a month's week portions are that month's days only and still add up to the month", () => {
+  const trades = [
+    { id: "dec", tradeDate: "2025-12-31", realizedDollars: 10 },
+    { id: "jan-early", tradeDate: "2026-01-02", realizedDollars: 20 },
+    { id: "jan-mid", tradeDate: "2026-01-15", realizedDollars: 420.25 },
+    { id: "sep", tradeDate: "2026-09-30", realizedDollars: 4 },
+    { id: "oct", tradeDate: "2026-10-02", realizedDollars: 3 },
+  ];
+  const through = "2026-10-06";
+  const december = monthWeekPortions(2025, 12, trades, through);
+  const january = monthWeekPortions(2026, 1, trades, through);
+  const october = monthWeekPortions(2026, 10, trades, through);
+
+  assert.deepEqual(
+    january.map((portion) => portion.label),
+    ["Week of Jan 1\u20134", "Week of Jan 5\u201311", "Week of Jan 12\u201318", "Week of Jan 19\u201325", "Week of Jan 26\u201331"],
+  );
+  assert.equal(january.find((portion) => portion.trades.some((trade) => trade.id === "jan-early"))?.label, "Week of Jan 1\u20134");
+  assert.equal(january.find((portion) => portion.trades.some((trade) => trade.id === "jan-mid"))?.label, "Week of Jan 12\u201318");
+  assert.equal(january.some((portion) => portion.trades.length === 0), true);
+  assert.equal(
+    january.some((portion) => portion.trades.some((trade) => trade.id === "dec")),
+    false,
+  );
+
+  const decemberTrade = december.find((portion) => portion.trades.some((trade) => trade.id === "dec"));
+  assert.equal(decemberTrade?.label, "Week of Dec 29\u201331");
+  assert.equal(
+    december.some((portion) => portion.trades.some((trade) => trade.id === "jan-early")),
+    false,
+  );
+
+  for (const [year, month, portions] of [
+    [2025, 12, december],
+    [2026, 1, january],
+    [2026, 10, october],
+  ] as const) {
+    const monthKey = `${year}-${String(month).padStart(2, "0")}`;
+    const owned = trades.filter((trade) => monthKeyForTrade(trade, through) === monthKey);
+    const listed = portions.flatMap((portion) => portion.trades);
+    assert.equal(listed.length, owned.length);
+    assert.equal(realizedSum(listed), realizedSum(owned));
+    const ids = listed.map((trade) => trade.id);
+    assert.equal(new Set(ids).size, ids.length);
+  }
+
+  assert.deepEqual(
+    october.find((portion) => portion.trades.length > 0)?.label,
+    "Week of Oct 1\u20134",
+  );
+  assert.equal(
+    october.some((portion) => portion.trades.some((trade) => trade.id === "sep")),
+    false,
+  );
+});
+
+test("a Sunday evening past the current month is a week headline on that month", () => {
+  const trade = { id: "spill", tradeDate: "2026-05-31", tradedAt: "2026-05-31T22:30:00.000Z", realizedDollars: 7 };
+  const throughMay = "2026-05-31";
+  const may = monthWeekPortions(2026, 5, [trade], throughMay);
+  const spill = may.find((portion) => portion.trades.some((row) => row.id === "spill"));
+  assert.equal(spill?.label, "Week of Jun 1");
+  assert.equal(may.length, clippedMonthWeeks(2026, 5).length + 1);
+  assert.equal(realizedSum(may.flatMap((portion) => portion.trades)), 7);
+  assert.equal(
+    realizedSum(may.flatMap((portion) => portion.trades)),
+    realizedSum([trade].filter((row) => monthKeyForTrade(row, throughMay) === "2026-05")),
+  );
+
+  const throughOctober = "2026-10-06";
+  const mayLater = monthWeekPortions(2026, 5, [trade], throughOctober);
+  assert.equal(mayLater.every((portion) => portion.trades.length === 0), true);
+  const june = monthWeekPortions(2026, 6, [trade], throughOctober);
+  assert.equal(june.find((portion) => portion.trades.length > 0)?.label, "Week of Jun 1\u20137");
+  assert.equal(realizedSum(june.flatMap((portion) => portion.trades)), 7);
 });
