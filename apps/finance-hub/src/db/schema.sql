@@ -593,6 +593,16 @@ CREATE TABLE IF NOT EXISTS option_flow_daily (
 
 CREATE INDEX IF NOT EXISTS idx_option_flow_daily_symbol_date ON option_flow_daily(symbol, session_date DESC);
 
+-- One cached full option chain per symbol for Strategy Lab. Local SQLite only.
+CREATE TABLE IF NOT EXISTS option_chain_cache (
+  symbol TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  normalizer_version INTEGER NOT NULL,
+  quote_time TEXT,
+  fetched_at TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+);
+
 -- Owned homes (Main flavor). These totals stay off the terminal day-return series.
 CREATE TABLE IF NOT EXISTS real_estate_properties (
   id TEXT PRIMARY KEY,

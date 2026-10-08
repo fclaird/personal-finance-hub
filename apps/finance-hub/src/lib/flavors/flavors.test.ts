@@ -96,6 +96,13 @@ describe("nav and route guards", () => {
     assert.equal(isPathAllowedForFlavor("/strategies/situations", "main"), true);
     assert.equal(isPathAllowedForFlavor("/strategies/realized", "main"), true);
     assert.equal(navForFlavor("main").some((n) => n.href === "/strategies/situations"), true);
+    assert.equal(isPathAllowedForFlavor("/strategy-lab", "main"), true);
+    assert.equal(isPathAllowedForFlavor("/strategy-lab", "rorie"), false);
+    assert.equal(isPathAllowedForFlavor("/strategy-lab", "peyton"), false);
+    const mainHrefs = navForFlavor("main").map((n) => n.href);
+    assert.equal(mainHrefs[mainHrefs.indexOf("/strategies/situations") + 1], "/strategy-lab");
+    assert.equal(navForFlavor("rorie").some((n) => n.href === "/strategy-lab"), false);
+    assert.equal(navForFlavor("peyton").some((n) => n.href === "/strategy-lab"), false);
     assert.equal(isPathAllowedForFlavor("/terminal/symbol/SPY", "rorie"), true);
     assert.equal(isPathAllowedForFlavor("/terminal/symbol/SPY", "peyton"), true);
     assert.equal(isPathAllowedForFlavor("/connections", "main"), true);

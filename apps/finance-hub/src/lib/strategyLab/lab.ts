@@ -1,0 +1,578 @@
+import {
+  addCalendarDays,
+  addCalendarMonths,
+  calendarDaysBetween,
+  formatExpiryLabel,
+  listedStrikes,
+  nearestExpiry,
+  nearestStrike,
+  type IsoDate,
+  type OptionChain,
+  type OptionRight,
+} from "@/lib/optionChain/chain";
+import {
+  entryDollars,
+  expiryPnl,
+  expiryRisk,
+  markAt,
+  netFromLegs,
+  packageGreeks,
+  priceLegs,
+  type Assumptions,
+  type ExpiryRisk,
+  type PricedLeg,
+} from "@/lib/strategyLab/internal/pricing";
+import { resolveTemplate, TEMPLATE_CATALOG, type TemplateRequest } from "@/lib/strategyLab/internal/templates";
+
+export { TEMPLATE_CATALOG };
+export type { TemplateRequest };
+
+export const LAB_LIMITS = { structures: 4, horizons: 10, legs: 6 } as const;
+export const STRUCTURE_SLOTS = [0, 1, 2, 3] as const;
+export type StructureSlot = (typeof STRUCTURE_SLOTS)[number];
+
+export const DEFAULT_RATE = 0.04;
+
+export type EntryBasis = { readonly kind: "mid" } | { readonly kind: "natural" } | { readonly kind: "limit"; readonly netPerShare: number };
+
+export type LegSpec = {
+  readonly right: OptionRight;
+  readonly strike: number;
+  readonly ratio: number;
+  readonly ivOverride: number | null;
+};
+
+export type StructureSpec = {
+  readonly id: string;
+  readonly label: string;
+  readonly expiry: IsoDate;
+  readonly snappedFrom: IsoDate | null;
+  readonly legs: readonly LegSpec[];
+  readonly entry: EntryBasis;
+  readonly capitalOverride: number | null;
+  readonly slot: StructureSlot;
+  readonly origin: { readonly request: TemplateRequest; readonly tracking: boolean } | null;
+  readonly resolveError: string | null;
+};
+
+export type Basis =
+  | { readonly kind: "perPackage" }
+  | { readonly kind: "equalCapital"; readonly capital: number; readonly units: "whole" | "fractional" };
+
+export type HorizonSpec =
+  | { readonly kind: "entry" }
+  | { readonly kind: "date"; readonly date: IsoDate }
+  | { readonly kind: "monthsFromEntry"; readonly months: number }
+  | { readonly kind: "fractionToAnchor"; readonly fraction: number }
+  | { readonly kind: "anchorExpiry" };
+
+export type LabScenario = {
+  readonly symbol: string;
+  readonly assumptions: Assumptions;
+  readonly basis: Basis;
+  readonly horizons: readonly HorizonSpec[];
+  readonly structures: readonly StructureSpec[];
+  readonly window: { readonly lowMultiple: number; readonly highMultiple: number };
+  readonly showStock: boolean;
+  readonly seq: number;
+  readonly createdFrom: { readonly spot: number; readonly tradeDate: IsoDate };
+};
+
+export type LabEdit =
+  | { readonly kind: "setAssumptions"; readonly patch: Partial<Assumptions> }
+  | { readonly kind: "setBasis"; readonly basis: Basis }
+  | { readonly kind: "setHorizons"; readonly horizons: readonly HorizonSpec[] }
+  | { readonly kind: "setShowStock"; readonly show: boolean }
+  | {
+      readonly kind: "addStructure";
+      readonly expiry: IsoDate;
+      readonly request: TemplateRequest;
+      readonly entry?: EntryBasis;
+      readonly label?: string;
+    }
+  | { readonly kind: "removeStructure"; readonly id: string }
+  | { readonly kind: "setExpiry"; readonly id: string; readonly expiry: IsoDate }
+  | { readonly kind: "setStrike"; readonly id: string; readonly legIndex: number; readonly strike: number }
+  | { readonly kind: "stepStrike"; readonly id: string; readonly legIndex: number; readonly steps: number }
+  | { readonly kind: "setEntry"; readonly id: string; readonly entry: EntryBasis }
+  | { readonly kind: "setIvOverride"; readonly id: string; readonly legIndex: number; readonly iv: number | null }
+  | { readonly kind: "setCapitalOverride"; readonly id: string; readonly dollars: number | null }
+  | { readonly kind: "setLabel"; readonly id: string; readonly label: string }
+  | { readonly kind: "retarget"; readonly id: string };
+
+export type CurvePoint = { readonly spot: number; readonly pnl: number };
+
+export type Sizing =
+  | { readonly status: "perPackage"; readonly packages: 1; readonly invested: number; readonly idleCash: 0; readonly leverage: number | null }
+  | { readonly status: "sized"; readonly packages: number; readonly invested: number; readonly idleCash: number; readonly leverage: number | null }
+  | { readonly status: "needsCapitalOverride" };
+
+export type HorizonView = {
+  readonly id: string;
+  readonly date: IsoDate;
+  readonly label: string;
+  readonly shared: boolean;
+  readonly structureId: string | null;
+};
+
+export type LabIssue = {
+  readonly severity: "info" | "warn" | "block";
+  readonly structureId: string | null;
+  readonly code: string;
+  readonly message: string;
+};
+
+export type PricedStructure = {
+  readonly status: "priced";
+  readonly spec: StructureSpec;
+  readonly legs: readonly PricedLeg[];
+  readonly days: number;
+  readonly ownHalfway: IsoDate;
+  readonly midPerShare: number | null;
+  readonly naturalPerShare: number | null;
+  readonly usedPerShare: number;
+  readonly debit: number;
+  readonly risk: ExpiryRisk;
+  readonly greeks: { readonly delta: number; readonly gamma: number; readonly theta: number; readonly vega: number } | null;
+  readonly sizing: Sizing;
+  readonly curves: readonly { readonly horizonId: string; readonly points: readonly CurvePoint[] }[];
+};
+
+export type StructureEval = PricedStructure | { readonly status: "blocked"; readonly spec: StructureSpec; readonly reason: string };
+
+export type LabEvaluation = {
+  readonly entryDate: IsoDate;
+  readonly spot: number;
+  readonly anchorExpiry: IsoDate | null;
+  readonly axis: readonly number[];
+  readonly horizons: readonly HorizonView[];
+  readonly structures: readonly StructureEval[];
+  readonly stock: readonly { readonly horizonId: string; readonly points: readonly CurvePoint[] }[];
+  readonly issues: readonly LabIssue[];
+  readonly basis: Basis;
+};
+
+const LETTERS = ["A", "B", "C", "D"] as const;
+
+export function createLab(chain: OptionChain): LabScenario {
+  return {
+    symbol: chain.symbol,
+    assumptions: { rate: DEFAULT_RATE, dividendYield: 0, ivSource: "mid" },
+    basis: { kind: "equalCapital", capital: 10_000, units: "whole" },
+    horizons: [
+      { kind: "fractionToAnchor", fraction: 0.5 },
+      { kind: "anchorExpiry" },
+    ],
+    structures: [],
+    window: { lowMultiple: 0.7, highMultiple: 2 },
+    showStock: true,
+    seq: 1,
+    createdFrom: { spot: chain.spot, tradeDate: chain.tradeDate },
+  };
+}
+
+function mapStructure(lab: LabScenario, id: string, fn: (s: StructureSpec) => StructureSpec): LabScenario {
+  return { ...lab, structures: lab.structures.map((s) => (s.id === id ? fn(s) : s)) };
+}
+
+function withLegs(chain: OptionChain, lab: LabScenario, spec: StructureSpec, request: TemplateRequest, expiry: IsoDate, tracking: boolean): StructureSpec {
+  const resolved = resolveTemplate(request, chain, expiry, lab.assumptions);
+  if ("error" in resolved) {
+    return { ...spec, expiry, legs: [], origin: { request, tracking }, resolveError: resolved.error };
+  }
+  return {
+    ...spec,
+    expiry,
+    legs: resolved.legs.map((leg) => ({ ...leg, ivOverride: null })),
+    origin: { request, tracking },
+    resolveError: null,
+  };
+}
+
+function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScenario {
+  switch (edit.kind) {
+    case "setAssumptions":
+      return { ...lab, assumptions: { ...lab.assumptions, ...edit.patch } };
+    case "setBasis":
+      return { ...lab, basis: edit.basis };
+    case "setHorizons":
+      return { ...lab, horizons: edit.horizons.slice(0, LAB_LIMITS.horizons) };
+    case "setShowStock":
+      return { ...lab, showStock: edit.show };
+    case "addStructure": {
+      if (lab.structures.length >= LAB_LIMITS.structures) return lab;
+      const used = new Set(lab.structures.map((s) => s.slot));
+      const slot = STRUCTURE_SLOTS.find((s) => !used.has(s));
+      if (slot == null) return lab;
+      const listed = nearestExpiry(chain, edit.expiry);
+      if (!listed) return lab;
+      const id = `s${lab.seq}`;
+      const blank: StructureSpec = {
+        id,
+        label: edit.label?.trim() || LETTERS[slot],
+        expiry: listed,
+        snappedFrom: listed === edit.expiry ? null : edit.expiry,
+        legs: [],
+        entry: edit.entry ?? { kind: "mid" },
+        capitalOverride: null,
+        slot,
+        origin: null,
+        resolveError: null,
+      };
+      const spec = withLegs(chain, lab, blank, edit.request, listed, true);
+      return { ...lab, seq: lab.seq + 1, structures: [...lab.structures, spec] };
+    }
+    case "removeStructure":
+      return { ...lab, structures: lab.structures.filter((s) => s.id !== edit.id) };
+    case "setExpiry":
+      return mapStructure(lab, edit.id, (spec) => {
+        const listed = nearestExpiry(chain, edit.expiry) ?? spec.expiry;
+        const snappedFrom = listed === edit.expiry ? null : edit.expiry;
+        if (spec.origin?.tracking) {
+          return { ...withLegs(chain, lab, spec, spec.origin.request, listed, true), snappedFrom };
+        }
+        return {
+          ...spec,
+          expiry: listed,
+          snappedFrom,
+          legs: spec.legs.map((leg) => {
+            const snapped = nearestStrike(listedStrikes(chain, listed, leg.right), leg.strike);
+            return snapped == null ? leg : { ...leg, strike: snapped };
+          }),
+        };
+      });
+    case "setStrike":
+      return mapStructure(lab, edit.id, (spec) => ({
+        ...spec,
+        origin: spec.origin ? { ...spec.origin, tracking: false } : null,
+        legs: spec.legs.map((leg, i) => {
+          if (i !== edit.legIndex) return leg;
+          const snapped = nearestStrike(listedStrikes(chain, spec.expiry, leg.right), edit.strike);
+          return snapped == null ? leg : { ...leg, strike: snapped };
+        }),
+      }));
+    case "stepStrike":
+      return mapStructure(lab, edit.id, (spec) => ({
+        ...spec,
+        origin: spec.origin ? { ...spec.origin, tracking: false } : null,
+        legs: spec.legs.map((leg, i) => {
+          if (i !== edit.legIndex) return leg;
+          const strikes = listedStrikes(chain, spec.expiry, leg.right);
+          const idx = strikes.findIndex((s) => Math.round(s * 1000) === Math.round(leg.strike * 1000));
+          const next = strikes[idx + edit.steps];
+          return next == null ? leg : { ...leg, strike: next };
+        }),
+      }));
+    case "setEntry":
+      return mapStructure(lab, edit.id, (spec) => ({ ...spec, entry: edit.entry }));
+    case "setIvOverride":
+      return mapStructure(lab, edit.id, (spec) => ({
+        ...spec,
+        legs: spec.legs.map((leg, i) => (i === edit.legIndex ? { ...leg, ivOverride: edit.iv } : leg)),
+      }));
+    case "setCapitalOverride":
+      return mapStructure(lab, edit.id, (spec) => ({ ...spec, capitalOverride: edit.dollars }));
+    case "setLabel":
+      return mapStructure(lab, edit.id, (spec) => ({ ...spec, label: edit.label }));
+    case "retarget":
+      return mapStructure(lab, edit.id, (spec) => {
+        if (!spec.origin) return spec;
+        return withLegs(chain, lab, spec, spec.origin.request, spec.expiry, true);
+      });
+    default:
+      return lab;
+  }
+}
+
+export function editLab(lab: LabScenario, edit: LabEdit | readonly LabEdit[], chain: OptionChain): LabScenario {
+  const edits = Array.isArray(edit) ? edit : [edit];
+  return edits.reduce((current, one) => applyOne(current, one, chain), lab);
+}
+
+function horizonViews(lab: LabScenario, chain: OptionChain): { horizons: HorizonView[]; anchor: IsoDate | null } {
+  const expiries = lab.structures.map((s) => s.expiry);
+  const anchor = expiries.length ? expiries.reduce((a, b) => (a < b ? a : b)) : null;
+  const allSame = expiries.length > 0 && expiries.every((e) => e === anchor);
+  const horizons: HorizonView[] = [];
+  for (const spec of lab.horizons) {
+    if (spec.kind === "entry") {
+      horizons.push({
+        id: `entry:${chain.tradeDate}`,
+        date: chain.tradeDate,
+        label: `Shared date · ${formatExpiryLabel(chain.tradeDate)}`,
+        shared: true,
+        structureId: null,
+      });
+      continue;
+    }
+    if (spec.kind === "date") {
+      horizons.push({
+        id: `date:${spec.date}`,
+        date: spec.date,
+        label: `Shared date · ${formatExpiryLabel(spec.date)}`,
+        shared: true,
+        structureId: null,
+      });
+      continue;
+    }
+    if (spec.kind === "monthsFromEntry") {
+      const date = addCalendarMonths(chain.tradeDate, spec.months);
+      horizons.push({
+        id: `m:${spec.months}:${date}`,
+        date,
+        label: `Shared date · +${spec.months} mo · ${formatExpiryLabel(date)}`,
+        shared: true,
+        structureId: null,
+      });
+      continue;
+    }
+    if (!anchor) continue;
+    const pushOwn = (structure: StructureSpec, date: IsoDate, label: string) => {
+      horizons.push({
+        id: `${spec.kind}:${structure.id}:${date}`,
+        date,
+        label,
+        shared: false,
+        structureId: structure.id,
+      });
+    };
+    if (allSame) {
+      const days = calendarDaysBetween(chain.tradeDate, anchor);
+      const date = spec.kind === "anchorExpiry" ? anchor : addCalendarDays(chain.tradeDate, Math.floor(days * spec.fraction));
+      const label =
+        spec.kind === "anchorExpiry"
+          ? `Expiry · ${formatExpiryLabel(date)}`
+          : `Halfway to ${formatExpiryLabel(anchor)} · ${formatExpiryLabel(date)}`;
+      horizons.push({
+        id: `${spec.kind}:${date}`,
+        date,
+        label,
+        shared: true,
+        structureId: null,
+      });
+    } else {
+      for (const structure of lab.structures) {
+        const days = calendarDaysBetween(chain.tradeDate, structure.expiry);
+        const date =
+          spec.kind === "anchorExpiry"
+            ? structure.expiry
+            : addCalendarDays(chain.tradeDate, Math.floor(days * spec.fraction));
+        const label =
+          spec.kind === "anchorExpiry"
+            ? `Expiry · ${structure.label} · ${formatExpiryLabel(structure.expiry)}`
+            : `Halfway · ${structure.label} · ${formatExpiryLabel(date)} (own expiry ${formatExpiryLabel(structure.expiry)})`;
+        pushOwn(structure, date, label);
+      }
+    }
+  }
+  return { horizons, anchor };
+}
+
+function buildAxis(chain: OptionChain, lab: LabScenario, extras: number[]): number[] {
+  const lo = chain.spot * lab.window.lowMultiple;
+  const hi = chain.spot * lab.window.highMultiple;
+  const n = 241;
+  const spots = new Set<number>();
+  for (let i = 0; i < n; i++) spots.add(lo + ((hi - lo) * i) / (n - 1));
+  spots.add(chain.spot);
+  for (const s of extras) if (s >= lo && s <= hi) spots.add(s);
+  return [...spots].sort((a, b) => a - b);
+}
+
+function sizeOf(
+  basis: Basis,
+  maxLoss: number | "unbounded",
+  override: number | null,
+  delta: number | null,
+  spot: number,
+): Sizing {
+  const capitalPer = override ?? (typeof maxLoss === "number" ? maxLoss : null);
+  if (basis.kind === "perPackage") {
+    const leverage = capitalPer && delta != null && capitalPer > 0 ? (delta * spot) / capitalPer : null;
+    return { status: "perPackage", packages: 1, invested: capitalPer ?? 0, idleCash: 0, leverage };
+  }
+  if (capitalPer == null || !(capitalPer > 0)) return { status: "needsCapitalOverride" };
+  if (basis.units === "whole") {
+    const packages = Math.floor(basis.capital / capitalPer);
+    const invested = packages * capitalPer;
+    const leverage = delta != null && basis.capital > 0 ? (delta * packages * spot) / basis.capital : null;
+    return { status: "sized", packages, invested, idleCash: basis.capital - invested, leverage };
+  }
+  const packages = basis.capital / capitalPer;
+  const leverage = delta != null && basis.capital > 0 ? (delta * packages * spot) / basis.capital : null;
+  return { status: "sized", packages, invested: basis.capital, idleCash: 0, leverage };
+}
+
+export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation {
+  const issues: LabIssue[] = [];
+  const { horizons, anchor } = horizonViews(lab, chain);
+  const priced: PricedStructure[] = [];
+  const blocked: StructureEval[] = [];
+  const axisExtras: number[] = [];
+
+  for (const spec of lab.structures) {
+    if (spec.snappedFrom) {
+      issues.push({
+        severity: "info",
+        structureId: spec.id,
+        code: "snapped-expiry",
+        message: `${formatExpiryLabel(spec.snappedFrom)} is not listed. Using ${formatExpiryLabel(spec.expiry)}.`,
+      });
+    }
+    if (spec.resolveError || spec.legs.length === 0) {
+      blocked.push({ status: "blocked", spec, reason: spec.resolveError ?? "No legs." });
+      issues.push({ severity: "block", structureId: spec.id, code: "unresolved", message: spec.resolveError ?? "No legs." });
+      continue;
+    }
+    const quoted = priceLegs(chain, spec.expiry, spec.legs, lab.assumptions);
+    if ("error" in quoted) {
+      blocked.push({ status: "blocked", spec, reason: quoted.error });
+      issues.push({ severity: "block", structureId: spec.id, code: "no-quote", message: quoted.error });
+      continue;
+    }
+    if (quoted.ivFallback) {
+      issues.push({
+        severity: "warn",
+        structureId: spec.id,
+        code: "iv-fallback",
+        message: "A leg used the other IV source because the selected one did not solve.",
+      });
+    }
+    const midPerShare = netFromLegs(quoted.legs, "mid");
+    const naturalPerShare = netFromLegs(quoted.legs, "natural");
+    if (spec.entry.kind === "natural" && naturalPerShare == null) {
+      issues.push({
+        severity: "warn",
+        structureId: spec.id,
+        code: "natural-missing",
+        message: "Natural price needs a bid on short legs and an ask on long legs.",
+      });
+    }
+    const usedPerShare =
+      spec.entry.kind === "limit" ? spec.entry.netPerShare : spec.entry.kind === "natural" ? naturalPerShare : midPerShare;
+    if (usedPerShare == null) {
+      blocked.push({ status: "blocked", spec, reason: "No entry price." });
+      issues.push({ severity: "block", structureId: spec.id, code: "no-entry", message: "No entry price." });
+      continue;
+    }
+    const debit = entryDollars(usedPerShare);
+    const risk = expiryRisk(quoted.legs, debit, chain.spot);
+    const greeks = packageGreeks(chain, spec.expiry, quoted.legs, lab.assumptions);
+    const sizing = sizeOf(lab.basis, risk.maxLoss, spec.capitalOverride, greeks?.delta ?? null, chain.spot);
+    if (sizing.status === "needsCapitalOverride") {
+      issues.push({
+        severity: "warn",
+        structureId: spec.id,
+        code: "needs-capital",
+        message: "Undefined risk. Equal-dollar sizing waits for a typed dollars-at-risk number.",
+      });
+    }
+    if (sizing.status === "sized" && sizing.packages === 0) {
+      issues.push({
+        severity: "warn",
+        structureId: spec.id,
+        code: "below-one-package",
+        message: "Capital does not cover one package.",
+      });
+    }
+    for (const b of risk.breakevens) axisExtras.push(b);
+    for (const leg of quoted.legs) axisExtras.push(leg.strike);
+    const days = calendarDaysBetween(chain.tradeDate, spec.expiry);
+    priced.push({
+      status: "priced",
+      spec,
+      legs: quoted.legs,
+      days,
+      ownHalfway: addCalendarDays(chain.tradeDate, Math.floor(days / 2)),
+      midPerShare,
+      naturalPerShare,
+      usedPerShare,
+      debit,
+      risk,
+      greeks,
+      sizing,
+      curves: [],
+    });
+  }
+
+  const createdRatio = chain.spot / lab.createdFrom.spot;
+  const whole = Math.round(createdRatio);
+  if (whole >= 2 && Math.abs(createdRatio - whole) / whole < 0.04) {
+    const missing = lab.structures.some((s) =>
+      s.legs.some((leg) => !listedStrikes(chain, s.expiry, leg.right).some((k) => Math.round(k * 1000) === Math.round(leg.strike * 1000))),
+    );
+    if (missing) {
+      issues.push({
+        severity: "warn",
+        structureId: null,
+        code: "possible-corporate-action",
+        message: `Spot moved about ${whole}× and a strike is no longer listed. Strikes were not adjusted.`,
+      });
+    }
+  }
+
+  const axis = buildAxis(chain, lab, axisExtras);
+  const withCurves: PricedStructure[] = priced.map((structure) => {
+    if (structure.sizing.status === "needsCapitalOverride") return structure;
+    const packages = structure.sizing.packages;
+    const curves = horizons
+      .filter((h) => h.structureId == null || h.structureId === structure.spec.id)
+      .map((h) => {
+        const settled = calendarDaysBetween(h.date, structure.spec.expiry) <= 0;
+        if (!settled && structure.legs.some((leg) => leg.iv == null)) return null;
+        const points = axis.map((spot) => {
+          const value = markAt(chain, structure.spec.expiry, structure.legs, lab.assumptions, spot, h.date);
+          const per = (value ?? 0) - structure.debit;
+          return { spot, pnl: per * packages };
+        });
+        return { horizonId: h.id, points };
+      })
+      .filter((c): c is { horizonId: string; points: CurvePoint[] } => c != null);
+    if (!structure.legs.every((leg) => leg.iv != null || horizons.every((h) => calendarDaysBetween(h.date, structure.spec.expiry) <= 0))) {
+      if (structure.legs.some((leg) => leg.iv == null)) {
+        issues.push({
+          severity: "warn",
+          structureId: structure.spec.id,
+          code: "iv-missing",
+          message: "A leg has no IV, so dates before expiry have no curve.",
+        });
+      }
+    }
+    return { ...structure, curves };
+  });
+
+  const capital = lab.basis.kind === "equalCapital" ? lab.basis.capital : chain.spot * 100;
+  const stock = lab.showStock
+    ? horizons
+        .filter((h) => h.shared)
+        .map((h) => ({
+          horizonId: h.id,
+          points: axis.map((spot) => ({ spot, pnl: ((spot - chain.spot) / chain.spot) * capital })),
+        }))
+    : [];
+
+  const structures: StructureEval[] = [
+    ...withCurves,
+    ...blocked,
+  ].sort((a, b) => a.spec.slot - b.spec.slot);
+
+  return {
+    entryDate: chain.tradeDate,
+    spot: chain.spot,
+    anchorExpiry: anchor,
+    axis,
+    horizons,
+    structures,
+    stock,
+    issues,
+    basis: lab.basis,
+  };
+}
+
+export function expiryPnlAtSpot(
+  legs: readonly { right: OptionRight; strike: number; ratio: number }[],
+  debit: number,
+  spot: number,
+): number {
+  return expiryPnl(legs, debit, spot);
+}

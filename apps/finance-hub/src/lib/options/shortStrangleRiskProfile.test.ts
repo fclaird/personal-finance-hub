@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { bsmPrice } from "@/lib/options/blackScholes";
 import {
-  blackScholesPrice,
   bookCreditDollars,
   bookCurrentPnl,
   buildShortStrangleRiskProfile,
@@ -59,8 +59,10 @@ describe("shortStrangleRiskProfile", () => {
     assert.ok(Math.abs(mid.expirationPnl - model.maxProfit!) < 1);
   });
 
-  it("blackScholesPrice is near intrinsic at expiry", () => {
-    assert.ok(Math.abs(blackScholesPrice("C", 110, 100, 0, 0.05, 0.2) - 10) < 1e-9);
-    assert.ok(Math.abs(blackScholesPrice("P", 90, 100, 0, 0.05, 0.2) - 10) < 1e-9);
+  it("bsmPrice is near intrinsic at expiry", () => {
+    const call = bsmPrice({ right: "C", spot: 110, strike: 100, years: 0, rate: 0.05, dividendYield: 0, vol: 0.2 });
+    const put = bsmPrice({ right: "P", spot: 90, strike: 100, years: 0, rate: 0.05, dividendYield: 0, vol: 0.2 });
+    assert.ok(Math.abs(call - 10) < 1e-9);
+    assert.ok(Math.abs(put - 10) < 1e-9);
   });
 });

@@ -1,9 +1,6 @@
 import type Database from "better-sqlite3";
 
-import {
-  blackScholesDelta,
-  impliedVolFromPrice,
-} from "@/lib/options/shortStrangleRiskProfile";
+import { bsmGreeks, impliedVol } from "@/lib/options/blackScholes";
 import { nyCalendarIso } from "@/lib/analytics/allocationNyDate";
 import { optionDte } from "@/lib/strategy/optionParse";
 
@@ -109,10 +106,26 @@ export function deltaAtFillFromDb(db: Database.Database, input: FillDeltaInput, 
   if (dte == null || dte < 0) return null;
   const years = Math.max(dte, 0.5) / 365; // floor tiny DTE so IV/delta remain defined
 
-  const iv = impliedVolFromPrice(input.right, spot, input.strike, years, rate, Math.abs(input.price));
-  if (iv == null || !(iv > 0)) return null;
+  const solved = impliedVol({
+    right: input.right,
+    spot,
+    strike: input.strike,
+    years,
+    rate,
+    dividendYield: 0,
+    price: Math.abs(input.price),
+  });
+  if (!solved.ok || !(solved.vol > 0)) return null;
 
-  const delta = blackScholesDelta(input.right, spot, input.strike, years, rate, iv);
-  if (delta == null || !Number.isFinite(delta)) return null;
+  const delta = bsmGreeks({
+    right: input.right,
+    spot,
+    strike: input.strike,
+    years,
+    rate,
+    dividendYield: 0,
+    vol: solved.vol,
+  }).delta;
+  if (!Number.isFinite(delta)) return null;
   return Math.round(delta * 1000) / 1000;
 }

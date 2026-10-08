@@ -126,7 +126,7 @@ export function SidebarNav({
     <aside className="sticky top-0 hidden h-dvh w-64 shrink-0 overflow-y-auto border-r border-zinc-300 bg-white/70 p-5 backdrop-blur dark:border-white/20 dark:bg-black/40 md:block">
       <div className="px-1 py-1">
         <div className="flex items-center justify-between gap-2">
-          <div className="text-[15px] font-semibold tracking-tight">Finance Hub</div>
+          <div className="text-[15px] font-semibold tracking-tight">Financial Bridge</div>
           <div className="flex shrink-0 items-center gap-1.5">
             {schwabLive != null ? (
               <span
