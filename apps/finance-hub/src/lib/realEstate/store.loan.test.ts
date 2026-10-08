@@ -7,7 +7,7 @@ import { describe, it } from "node:test";
 import Database from "better-sqlite3";
 
 import { seedRealEstate } from "@/lib/realEstate/seed";
-import { deleteLoanPayment, loadDashboard, saveLoanTerms, upsertLoanPayments } from "@/lib/realEstate/store";
+import { deleteLoanPayment, loadDashboard, saveLoanTerms, updateLoanPayment, upsertLoanPayments } from "@/lib/realEstate/store";
 
 function memoryDb(): Database.Database {
   const db = new Database(":memory:");
@@ -73,5 +73,70 @@ describe("crownsville loan storage", () => {
     deleteLoanPayment(db, first[0]!);
     const remaining = db.prepare(`SELECT COUNT(*) AS n FROM real_estate_loan_payments`).get() as { n: number };
     assert.equal(remaining.n, 0);
+  });
+
+  it("re-splits a computed payment when an edit only corrects the total", () => {
+    const db = memoryDb();
+    saveLoanTerms(db, {
+      propertyId: "re_crownsville",
+      lender: "Sample servicer",
+      originalPrincipal: 12_000,
+      annualRate: 0,
+      termMonths: 12,
+      startDate: "2024-07-01",
+      monthlyPayment: 1_000,
+      monthlyEscrow: 0,
+      extraPrincipal: 0,
+    });
+    const [id] = upsertLoanPayments(db, "re_crownsville", [
+      { paidOn: "2024-07-01", totalPaid: 1_000, principal: null, interest: null, escrow: null, extraPrincipal: null, balanceAfter: null, notes: null },
+    ]);
+    const stored = db
+      .prepare(
+        `SELECT principal, interest, escrow, extra_principal AS extraPrincipal, balance_after AS balanceAfter
+         FROM real_estate_loan_payments WHERE id = ?`,
+      )
+      .get(id) as { principal: number; interest: number; escrow: number | null; extraPrincipal: number; balanceAfter: number | null };
+    assert.equal(stored.principal, 1_000);
+    assert.equal(stored.extraPrincipal, 0);
+
+    updateLoanPayment(db, id!, {
+      paidOn: "2024-07-01",
+      totalPaid: 1_080,
+      principal: stored.principal,
+      interest: stored.interest,
+      escrow: stored.escrow,
+      extraPrincipal: stored.extraPrincipal,
+      balanceAfter: stored.balanceAfter,
+      notes: "corrected total",
+    });
+    const resplit = db
+      .prepare(
+        `SELECT total_paid AS totalPaid, principal, extra_principal AS extraPrincipal, split_source AS splitSource, notes
+         FROM real_estate_loan_payments WHERE id = ?`,
+      )
+      .get(id) as { totalPaid: number; principal: number; extraPrincipal: number; splitSource: string; notes: string };
+    assert.equal(resplit.totalPaid, 1_080);
+    assert.equal(resplit.splitSource, "computed");
+    assert.equal(resplit.principal, 1_000);
+    assert.equal(resplit.extraPrincipal, 80);
+    assert.equal(resplit.notes, "corrected total");
+
+    updateLoanPayment(db, id!, {
+      paidOn: "2024-07-01",
+      totalPaid: 1_080,
+      principal: 900,
+      interest: 0,
+      escrow: 0,
+      extraPrincipal: 0,
+      balanceAfter: null,
+      notes: "statement split",
+    });
+    const locked = db
+      .prepare(`SELECT principal, extra_principal AS extraPrincipal, split_source AS splitSource FROM real_estate_loan_payments WHERE id = ?`)
+      .get(id) as { principal: number; extraPrincipal: number; splitSource: string };
+    assert.equal(locked.splitSource, "statement");
+    assert.equal(locked.principal, 900);
+    assert.equal(locked.extraPrincipal, 0);
   });
 });
