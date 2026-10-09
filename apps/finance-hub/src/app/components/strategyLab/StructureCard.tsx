@@ -3,7 +3,7 @@
 import { formatExpiryLabel, listedStrikes, type OptionChain } from "@/lib/optionChain/chain";
 import { formatNum, formatSignedUsd2, formatUsd2 } from "@/lib/format";
 import type { LabEdit, StructureEval } from "@/lib/strategyLab/lab";
-import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
+import { LAB_PALETTE, labControl, labLabel } from "@/lib/strategyLab/palette";
 
 function usd(n: number | null | undefined, mask: boolean): string {
   return formatUsd2(n, { mask });
@@ -36,6 +36,7 @@ export function StructureCard({
   onEdit: (edit: LabEdit) => void;
 }) {
   const spec = row.spec;
+  const color = LAB_PALETTE.series[spec.slot] ?? LAB_PALETTE.series[0];
   const strikesFor = (index: number) => {
     const leg = spec.legs[index];
     if (!leg) return [];
@@ -43,14 +44,22 @@ export function StructureCard({
   };
 
   return (
-    <article className={`${labCard} p-4`}>
+    <article className="rounded-xl border-2 bg-white p-4 dark:bg-zinc-950" style={{ borderColor: color }}>
+      <div className="mb-3 h-1.5 rounded-full" style={{ backgroundColor: color }} />
       <div className="mb-3 flex items-center justify-between gap-2">
-        <input
-          aria-label={`${spec.label} name`}
-          value={spec.label}
-          onChange={(e) => onEdit({ kind: "setLabel", id: spec.id, label: e.target.value })}
-          className={`w-40 px-2 py-1 text-sm font-semibold ${labControl}`}
-        />
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="inline-block h-4 w-4 shrink-0 rounded-sm border border-zinc-950" style={{ backgroundColor: color }} aria-hidden />
+          <span className="rounded-full px-2 py-0.5 text-xs font-bold text-zinc-950" style={{ backgroundColor: color }}>
+            {spec.label || "Structure"}
+          </span>
+          <input
+            aria-label={`${spec.label} name`}
+            value={spec.label}
+            onChange={(e) => onEdit({ kind: "setLabel", id: spec.id, label: e.target.value })}
+            className="w-28 border-2 bg-transparent px-2 py-1 text-sm font-semibold text-zinc-950 dark:text-zinc-50"
+            style={{ borderColor: color }}
+          />
+        </div>
         <button
           type="button"
           onClick={() => onEdit({ kind: "removeStructure", id: spec.id })}
@@ -59,7 +68,9 @@ export function StructureCard({
           Remove
         </button>
       </div>
-      <p className="mb-3 text-xs font-medium text-zinc-700 dark:text-zinc-200">{bestWhen}</p>
+      <p className="mb-3 border-l-4 pl-2 text-xs font-semibold text-zinc-800 dark:text-zinc-100" style={{ borderColor: color }}>
+        {bestWhen}
+      </p>
 
       <label className={`mb-3 block ${labLabel}`}>
         Expiry

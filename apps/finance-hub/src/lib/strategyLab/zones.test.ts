@@ -230,11 +230,32 @@ describe("evaluateLab expiry boards", () => {
       near(capitalExpiryPnl(byLabel.B!, spot) ?? NaN, pnlB(spot), 1e-6, `B at ${spot}`);
       near(capitalExpiryPnl(byLabel.C!, spot) ?? NaN, pnlC(spot), 1e-6, `C at ${spot}`);
     }
-    const halfway = ev.horizons.find((horizon) => !horizon.settlement);
     const expiry = ev.horizons.find((horizon) => horizon.settlement);
-    assert.ok(halfway && expiry);
-    assert.ok(ev.modelCrossovers.every((crossover) => crossover.approximate && crossover.horizonId === halfway!.id));
+    const openIds = new Set(ev.horizons.filter((horizon) => !horizon.settlement).map((horizon) => horizon.id));
+    assert.ok(expiry);
+    assert.ok(openIds.size >= 9);
+    assert.ok(ev.modelCrossovers.length > 0);
+    assert.ok(ev.modelCrossovers.every((crossover) => crossover.approximate && openIds.has(crossover.horizonId)));
     assert.equal(ev.modelCrossovers.some((crossover) => crossover.horizonId === expiry!.id), false);
+    assert.equal(ev.spotWindow.source, "fit");
+    for (const crossover of board.crossovers) {
+      assert.ok(crossover.spot > ev.spotWindow.min, `${crossover.spot} is above ${ev.spotWindow.min}`);
+      assert.ok(crossover.spot < ev.spotWindow.max, `${crossover.spot} is below ${ev.spotWindow.max}`);
+    }
+    for (const crossover of ev.modelCrossovers) {
+      assert.ok(crossover.spot > ev.spotWindow.min && crossover.spot < ev.spotWindow.max);
+    }
+    assert.ok(ev.axis[0]! <= ev.spotWindow.min + 1e-6);
+    assert.ok(ev.axis.at(-1)! >= ev.spotWindow.max - 1e-6);
+  });
+
+  it("lets a typed min and max replace the fitted window", () => {
+    const ev = evaluateLab(editLab(lab, { kind: "setWindow", window: { kind: "manual", min: 100, max: 220 } }, chain), chain);
+    assert.equal(ev.spotWindow.source, "manual");
+    assert.equal(ev.spotWindow.min, 100);
+    assert.equal(ev.spotWindow.max, 220);
+    assert.ok(ev.spotWindow.fittedMax > C_PASSES_B);
+    assert.ok(ev.spotWindow.fittedMin < A_PASSES_C);
   });
 
   it("moves the crossover when whole-contract counts stop scaling together", () => {

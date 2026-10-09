@@ -44,7 +44,7 @@ export type { ExpiryCrossover, ExpiryZone };
 export { TEMPLATE_CATALOG };
 export type { TemplateRequest };
 
-export const LAB_LIMITS = { structures: 4, horizons: 10, legs: 6 } as const;
+export const LAB_LIMITS = { structures: 4, horizons: 24, legs: 6 } as const;
 export const STRUCTURE_SLOTS = [0, 1, 2, 3] as const;
 export type StructureSlot = (typeof STRUCTURE_SLOTS)[number];
 
@@ -81,7 +81,13 @@ export type HorizonSpec =
   | { readonly kind: "date"; readonly date: IsoDate }
   | { readonly kind: "monthsFromEntry"; readonly months: number }
   | { readonly kind: "fractionToAnchor"; readonly fraction: number }
-  | { readonly kind: "anchorExpiry" };
+  | { readonly kind: "anchorExpiry" }
+  /** Today, then every three calendar months, through the earliest expiry. */
+  | { readonly kind: "quartersToAnchor" };
+
+export type SpotWindow =
+  | { readonly kind: "fit" }
+  | { readonly kind: "manual"; readonly min: number; readonly max: number };
 
 export type LabScenario = {
   readonly symbol: string;
@@ -89,7 +95,7 @@ export type LabScenario = {
   readonly basis: Basis;
   readonly horizons: readonly HorizonSpec[];
   readonly structures: readonly StructureSpec[];
-  readonly window: { readonly lowMultiple: number; readonly highMultiple: number };
+  readonly window: SpotWindow;
   readonly showStock: boolean;
   /** When true, the stock line joins the expiry ranking. The chart line stays on `showStock`. */
   readonly compareStock: boolean;
@@ -101,6 +107,7 @@ export type LabEdit =
   | { readonly kind: "setAssumptions"; readonly patch: Partial<Assumptions> }
   | { readonly kind: "setBasis"; readonly basis: Basis }
   | { readonly kind: "setHorizons"; readonly horizons: readonly HorizonSpec[] }
+  | { readonly kind: "setWindow"; readonly window: SpotWindow }
   | { readonly kind: "setShowStock"; readonly show: boolean }
   | { readonly kind: "setCompareStock"; readonly compare: boolean }
   | {
@@ -186,6 +193,14 @@ export type LabEvaluation = {
   readonly metric: string;
   readonly expiryBoards: readonly ExpiryBoard[];
   readonly modelCrossovers: readonly ModelCrossover[];
+  /** Spot axis shared by every panel. `source` is fit unless Chris typed a min and max. */
+  readonly spotWindow: {
+    readonly min: number;
+    readonly max: number;
+    readonly fittedMin: number;
+    readonly fittedMax: number;
+    readonly source: "fit" | "manual";
+  };
 };
 
 const LETTERS = ["A", "B", "C", "D"] as const;
@@ -195,12 +210,9 @@ export function createLab(chain: OptionChain): LabScenario {
     symbol: chain.symbol,
     assumptions: { rate: DEFAULT_RATE, dividendYield: 0, ivSource: "mid" },
     basis: { kind: "equalCapital", capital: 10_000, units: "whole" },
-    horizons: [
-      { kind: "fractionToAnchor", fraction: 0.5 },
-      { kind: "anchorExpiry" },
-    ],
+    horizons: [{ kind: "quartersToAnchor" }],
     structures: [],
-    window: { lowMultiple: 0.7, highMultiple: 2 },
+    window: { kind: "fit" },
     showStock: true,
     compareStock: false,
     seq: 1,
@@ -234,6 +246,11 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
       return { ...lab, basis: edit.basis };
     case "setHorizons":
       return { ...lab, horizons: edit.horizons.slice(0, LAB_LIMITS.horizons) };
+    case "setWindow": {
+      const next = edit.window;
+      if (next.kind === "manual" && !(next.max > next.min && Number.isFinite(next.min) && Number.isFinite(next.max))) return lab;
+      return { ...lab, window: next };
+    }
     case "setShowStock":
       return { ...lab, showStock: edit.show };
     case "setCompareStock":
@@ -368,6 +385,52 @@ function horizonViews(lab: LabScenario, chain: OptionChain): { horizons: Horizon
       });
       continue;
     }
+    if (spec.kind === "quartersToAnchor") {
+      if (!anchor) continue;
+      const steps: { months: number; date: IsoDate }[] = [];
+      for (let step = 0; step < 40; step++) {
+        const months = step * 3;
+        const date = months === 0 ? chain.tradeDate : addCalendarMonths(chain.tradeDate, months);
+        if (months > 0 && date >= anchor) break;
+        steps.push({ months, date });
+      }
+      for (const step of steps) {
+        const label =
+          step.months === 0
+            ? `Today · ${formatExpiryLabel(step.date)}`
+            : `+${step.months} mo · ${formatExpiryLabel(step.date)}`;
+        horizons.push({
+          id: `q:${step.months}:${step.date}`,
+          date: step.date,
+          label,
+          shared: true,
+          settlement: false,
+          structureId: null,
+        });
+      }
+      if (allSame) {
+        horizons.push({
+          id: `q:expiry:${anchor}`,
+          date: anchor,
+          label: `Expiry · ${formatExpiryLabel(anchor)}`,
+          shared: true,
+          settlement: true,
+          structureId: null,
+        });
+      } else {
+        for (const structure of lab.structures) {
+          horizons.push({
+            id: `q:expiry:${structure.id}:${structure.expiry}`,
+            date: structure.expiry,
+            label: `Expiry · ${structure.label} · ${formatExpiryLabel(structure.expiry)}`,
+            shared: false,
+            settlement: true,
+            structureId: structure.id,
+          });
+        }
+      }
+      continue;
+    }
     if (!anchor) continue;
     const pushOwn = (structure: StructureSpec, date: IsoDate, label: string) => {
       horizons.push({
@@ -412,15 +475,100 @@ function horizonViews(lab: LabScenario, chain: OptionChain): { horizons: Horizon
   return { horizons, anchor };
 }
 
-function buildAxis(chain: OptionChain, lab: LabScenario, extras: number[]): number[] {
-  const lo = chain.spot * lab.window.lowMultiple;
-  const hi = chain.spot * lab.window.highMultiple;
+const WINDOW_PAD = 0.08;
+
+/** Pad the extreme spots so a crossover sits inside the window, not on the frame. */
+export function fitSpotWindow(spots: readonly number[]): { min: number; max: number } {
+  const finite = spots.filter((n) => Number.isFinite(n) && n > 0);
+  if (finite.length === 0) return { min: 1, max: 2 };
+  const rawLo = Math.min(...finite);
+  const rawHi = Math.max(...finite);
+  const span = Math.max(rawHi - rawLo, rawHi * 0.05, 1);
+  const pad = span * WINDOW_PAD;
+  const min = Math.max(0.01, rawLo - pad);
+  const max = rawHi + pad;
+  return { min, max: max > min ? max : min + 1 };
+}
+
+function buildAxis(lo: number, hi: number, extras: number[]): number[] {
   const n = 241;
   const spots = new Set<number>();
   for (let i = 0; i < n; i++) spots.add(lo + ((hi - lo) * i) / (n - 1));
-  spots.add(chain.spot);
   for (const s of extras) if (s >= lo && s <= hi) spots.add(s);
   return [...spots].sort((a, b) => a - b);
+}
+
+function axisCovering(
+  fitted: { min: number; max: number },
+  window: SpotWindow,
+  extras: number[],
+): number[] {
+  const span = Math.max(fitted.max - fitted.min, 1);
+  let lo = fitted.min - span * 0.15;
+  let hi = fitted.max + span * 0.15;
+  if (window.kind === "manual" && window.max > window.min) {
+    lo = Math.min(lo, window.min);
+    hi = Math.max(hi, window.max);
+  }
+  if (!(hi > lo)) hi = lo + 1;
+  return buildAxis(Math.max(0.01, lo), hi, extras);
+}
+
+function attachCurves(
+  priced: readonly PricedStructure[],
+  horizons: readonly HorizonView[],
+  chain: OptionChain,
+  lab: LabScenario,
+  axis: readonly number[],
+  issues: LabIssue[],
+  warnMissingIv: boolean,
+): PricedStructure[] {
+  return priced.map((structure) => {
+    if (structure.sizing.status === "needsCapitalOverride") return structure;
+    const packages = structure.sizing.packages;
+    const curves = horizons
+      .filter((h) => h.structureId == null || h.structureId === structure.spec.id)
+      .map((h) => {
+        const settled = calendarDaysBetween(h.date, structure.spec.expiry) <= 0;
+        if (!settled && structure.legs.some((leg) => leg.iv == null)) return null;
+        const points = axis.map((spot) => {
+          const value = markAt(chain, structure.spec.expiry, structure.legs, lab.assumptions, spot, h.date);
+          const per = (value ?? 0) - structure.debit;
+          return { spot, pnl: per * packages };
+        });
+        return { horizonId: h.id, points };
+      })
+      .filter((c): c is { horizonId: string; points: CurvePoint[] } => c != null);
+    if (
+      warnMissingIv &&
+      structure.legs.some((leg) => leg.iv == null) &&
+      !structure.legs.every((leg) => leg.iv != null || horizons.every((h) => calendarDaysBetween(h.date, structure.spec.expiry) <= 0))
+    ) {
+      issues.push({
+        severity: "warn",
+        structureId: structure.spec.id,
+        code: "iv-missing",
+        message: "A leg has no IV, so dates before expiry have no curve.",
+      });
+    }
+    return { ...structure, curves };
+  });
+}
+
+function stockSeries(
+  lab: LabScenario,
+  horizons: readonly HorizonView[],
+  axis: readonly number[],
+  chain: OptionChain,
+): { horizonId: string; points: CurvePoint[] }[] {
+  if (!lab.showStock) return [];
+  const capital = lab.basis.kind === "equalCapital" ? lab.basis.capital : chain.spot * 100;
+  return horizons
+    .filter((h) => h.shared)
+    .map((h) => ({
+      horizonId: h.id,
+      points: axis.map((spot) => ({ spot, pnl: ((spot - chain.spot) / chain.spot) * capital })),
+    }));
 }
 
 function sizeOf(
@@ -555,54 +703,34 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
     }
   }
 
-  const axis = buildAxis(chain, lab, axisExtras);
-  const withCurves: PricedStructure[] = priced.map((structure) => {
-    if (structure.sizing.status === "needsCapitalOverride") return structure;
-    const packages = structure.sizing.packages;
-    const curves = horizons
-      .filter((h) => h.structureId == null || h.structureId === structure.spec.id)
-      .map((h) => {
-        const settled = calendarDaysBetween(h.date, structure.spec.expiry) <= 0;
-        if (!settled && structure.legs.some((leg) => leg.iv == null)) return null;
-        const points = axis.map((spot) => {
-          const value = markAt(chain, structure.spec.expiry, structure.legs, lab.assumptions, spot, h.date);
-          const per = (value ?? 0) - structure.debit;
-          return { spot, pnl: per * packages };
-        });
-        return { horizonId: h.id, points };
-      })
-      .filter((c): c is { horizonId: string; points: CurvePoint[] } => c != null);
-    if (!structure.legs.every((leg) => leg.iv != null || horizons.every((h) => calendarDaysBetween(h.date, structure.spec.expiry) <= 0))) {
-      if (structure.legs.some((leg) => leg.iv == null)) {
-        issues.push({
-          severity: "warn",
-          structureId: structure.spec.id,
-          code: "iv-missing",
-          message: "A leg has no IV, so dates before expiry have no curve.",
-        });
-      }
-    }
-    return { ...structure, curves };
-  });
-
-  const capital = lab.basis.kind === "equalCapital" ? lab.basis.capital : chain.spot * 100;
-  const stock = lab.showStock
-    ? horizons
-        .filter((h) => h.shared)
-        .map((h) => ({
-          horizonId: h.id,
-          points: axis.map((spot) => ({ spot, pnl: ((spot - chain.spot) / chain.spot) * capital })),
-        }))
-    : [];
-
-  const structures: StructureEval[] = [
-    ...withCurves,
-    ...blocked,
-  ].sort((a, b) => a.spec.slot - b.spec.slot);
-
   const metric = basisMetric(lab.basis);
-  const expiryBoards = expiryBoardsOf(structures, metric, lab.compareStock, chain.spot, capital);
-  const modelCrossovers = modelCrossoversOf(horizons, structures);
+  const capital = lab.basis.kind === "equalCapital" ? lab.basis.capital : chain.spot * 100;
+  const expiryBoards = expiryBoardsOf(priced, metric, lab.compareStock, chain.spot, capital);
+  const anchorSpots = [chain.spot, ...axisExtras, ...expiryBoards.flatMap((board) => board.crossovers.map((crossover) => crossover.spot))];
+  let fitted = fitSpotWindow(anchorSpots);
+  let axis = axisCovering(fitted, lab.window, [chain.spot, ...axisExtras]);
+  let withCurves = attachCurves(priced, horizons, chain, lab, axis, issues, true);
+  let modelCrossovers = modelCrossoversOf(horizons, withCurves);
+  fitted = fitSpotWindow([...anchorSpots, ...modelCrossovers.map((crossover) => crossover.spot)]);
+  const manual = lab.window.kind === "manual" && lab.window.max > lab.window.min ? lab.window : null;
+  let display = manual ?? fitted;
+  const covers = (lo: number, hi: number) => {
+    const first = axis[0] ?? lo;
+    const last = axis[axis.length - 1] ?? hi;
+    return lo >= first - 1e-6 && hi <= last + 1e-6;
+  };
+  if (!covers(display.min, display.max) || !covers(fitted.min, fitted.max)) {
+    const lo = Math.min(display.min, fitted.min, axis[0] ?? display.min);
+    const hi = Math.max(display.max, fitted.max, axis[axis.length - 1] ?? display.max);
+    axis = buildAxis(lo, hi, [chain.spot, ...axisExtras]);
+    withCurves = attachCurves(priced, horizons, chain, lab, axis, issues, false);
+    modelCrossovers = modelCrossoversOf(horizons, withCurves);
+    fitted = fitSpotWindow([...anchorSpots, ...modelCrossovers.map((crossover) => crossover.spot)]);
+    display = manual ?? fitted;
+  }
+
+  const stock = stockSeries(lab, horizons, axis, chain);
+  const structures: StructureEval[] = [...withCurves, ...blocked].sort((a, b) => a.spec.slot - b.spec.slot);
 
   return {
     entryDate: chain.tradeDate,
@@ -617,6 +745,13 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
     metric,
     expiryBoards,
     modelCrossovers,
+    spotWindow: {
+      min: display.min,
+      max: display.max,
+      fittedMin: fitted.min,
+      fittedMax: fitted.max,
+      source: manual ? "manual" : "fit",
+    },
   };
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
 import {
   CartesianGrid,
   ComposedChart,
@@ -16,17 +16,18 @@ import {
 } from "recharts";
 
 import { formatSignedUsd2 } from "@/lib/format";
-import { LAB_PALETTE } from "@/lib/strategyLab/palette";
 import {
   capitalExpiryPnl,
   crossoverText,
   type ExpiryBoard,
   type ExpiryCrossover,
   type ExpiryZone,
+  type LabEdit,
   type LabEvaluation,
   type ModelCrossover,
   type PricedStructure,
 } from "@/lib/strategyLab/lab";
+import { LAB_PALETTE, labControl, labLabel } from "@/lib/strategyLab/palette";
 
 type Row = { spot: number; stock?: number } & Record<string, number | undefined>;
 
@@ -211,31 +212,52 @@ function Marks({
   );
 }
 
+function shortHorizon(label: string): string {
+  return label.split(" · ")[0] ?? label;
+}
+
+function spotText(n: number): string {
+  return String(Math.round(n * 100) / 100);
+}
+
+function pnlAt(points: readonly { spot: number; pnl: number }[] | undefined, spot: number): number | undefined {
+  return points?.find((point) => point.spot === spot)?.pnl;
+}
+
 export function LabCharts({
   evaluation,
   masked,
   whatIfSpot,
+  onEdit,
 }: {
   evaluation: LabEvaluation;
   masked: boolean;
   whatIfSpot: number | null;
+  onEdit: (edit: LabEdit) => void;
 }) {
+  const [view, setView] = useState<"grid" | "overlay">("grid");
+  const [minDraft, setMinDraft] = useState<string | null>(null);
+  const [maxDraft, setMaxDraft] = useState<string | null>(null);
   const priced = evaluation.structures.filter((s): s is PricedStructure => s.status === "priced" && s.curves.length > 0);
+  const xLo = evaluation.spotWindow.min;
+  const xHi = evaluation.spotWindow.max;
+  const inside = (spot: number) => spot >= xLo - 1e-8 && spot <= xHi + 1e-8;
   const sharedValues: number[] = [];
   for (const structure of priced) {
     for (const curve of structure.curves) {
-      const horizon = evaluation.horizons.find((item) => item.id === curve.horizonId);
-      if (horizon?.settlement && boardFor(evaluation, horizon.id, priced.filter((row) => row.curves.some((item) => item.horizonId === horizon.id)))) {
-        continue;
-      }
-      for (const point of curve.points) sharedValues.push(point.pnl);
+      for (const point of curve.points) if (inside(point.spot)) sharedValues.push(point.pnl);
     }
   }
-  for (const series of evaluation.stock) sharedValues.push(...series.points.map((point) => point.pnl));
-  if (sharedValues.length === 0) {
+  for (const series of evaluation.stock) {
+    for (const point of series.points) if (inside(point.spot)) sharedValues.push(point.pnl);
+  }
+  for (const board of evaluation.expiryBoards) {
     for (const structure of priced) {
-      for (const curve of structure.curves) {
-        for (const point of curve.points) sharedValues.push(point.pnl);
+      if (!board.structureIds.includes(structure.spec.id)) continue;
+      for (const spot of [xLo, xHi, ...board.crossovers.map((crossover) => crossover.spot)]) {
+        if (!inside(spot)) continue;
+        const pnl = capitalExpiryPnl(structure, spot);
+        if (pnl != null) sharedValues.push(pnl);
       }
     }
   }
@@ -244,137 +266,332 @@ export function LabCharts({
     return <p className="text-sm text-zinc-500">Add a structure to draw P&amp;L by horizon.</p>;
   }
 
-  return (
-    <div className="space-y-6">
-      {evaluation.horizons.map((horizon) => {
-        const series = priced.filter((structure) => structure.curves.some((curve) => curve.horizonId === horizon.id));
-        if (series.length === 0) return null;
-        const board = boardFor(evaluation, horizon.id, series);
-        const stock = evaluation.stock.find((item) => item.horizonId === horizon.id);
-        const base = series[0]!.curves.find((curve) => curve.horizonId === horizon.id)!.points;
-        const windowLo = base[0]?.spot ?? evaluation.spot;
-        const windowHi = base[base.length - 1]?.spot ?? evaluation.spot;
-        const crossHi = board ? Math.max(0, ...board.crossovers.map((crossover) => crossover.spot)) : 0;
-        const xHi = board ? Math.max(windowHi, crossHi > windowHi ? crossHi * 1.08 : windowHi) : windowHi;
-        const xLo = windowLo;
-        const spots = board ? extendedSpots(xLo, xHi, board, evaluation.spot) : base.map((point) => point.spot);
-        const rows: Row[] = spots.map((spot, index) => {
-          const row: Row = { spot };
-          for (const structure of series) {
-            if (board) row[structure.spec.id] = capitalExpiryPnl(structure, spot) ?? undefined;
-            else row[structure.spec.id] = structure.curves.find((curve) => curve.horizonId === horizon.id)?.points[index]?.pnl;
-          }
-          if (stock) row.stock = board ? stockPnl(evaluation, spot) : stock.points[index]?.pnl;
-          return row;
-        });
-        const values = rows.flatMap((row) => series.map((structure) => row[structure.spec.id])).filter((n): n is number => typeof n === "number");
-        if (stock) {
-          for (const row of rows) if (typeof row.stock === "number") values.push(row.stock);
+  const panels = evaluation.horizons.flatMap((horizon) => {
+    const series = priced.filter((structure) => structure.curves.some((curve) => curve.horizonId === horizon.id));
+    if (series.length === 0) return [];
+    const board = boardFor(evaluation, horizon.id, series);
+    const stock = evaluation.stock.find((item) => item.horizonId === horizon.id);
+    const spots = board
+      ? extendedSpots(xLo, xHi, board, evaluation.spot)
+      : (series[0]!.curves.find((curve) => curve.horizonId === horizon.id)?.points.map((point) => point.spot).filter(inside) ?? []);
+    const rows: Row[] = spots.map((spot) => {
+      const row: Row = { spot };
+      for (const structure of series) {
+        if (board) row[structure.spec.id] = capitalExpiryPnl(structure, spot) ?? undefined;
+        else row[structure.spec.id] = pnlAt(structure.curves.find((curve) => curve.horizonId === horizon.id)?.points, spot);
+      }
+      if (stock) row.stock = board ? stockPnl(evaluation, spot) : pnlAt(stock.points, spot);
+      return row;
+    });
+    const modelMarks: ModelCrossover[] = board ? [] : evaluation.modelCrossovers.filter((item) => item.horizonId === horizon.id);
+    const dotY = (id: string, spot: number) => {
+      if (id === "stock") return stockPnl(evaluation, spot);
+      const row = series.find((structure) => structure.spec.id === id);
+      if (!row) return null;
+      if (board) return capitalExpiryPnl(row, spot);
+      const curve = row.curves.find((item) => item.horizonId === horizon.id);
+      return curve ? samplePnl(curve.points, spot) : null;
+    };
+    return [{ horizon, series, board, stock, rows, modelMarks, dotY }];
+  });
+
+  const commitWindow = (minText: string, maxText: string) => {
+    const min = Number(minText);
+    const max = Number(maxText);
+    if (Number.isFinite(min) && Number.isFinite(max) && max > min) {
+      onEdit({ kind: "setWindow", window: { kind: "manual", min, max } });
+    }
+    setMinDraft(null);
+    setMaxDraft(null);
+  };
+
+  const overlayRows = (() => {
+    const spots = priced[0]!.curves[0]?.points.map((point) => point.spot).filter(inside) ?? [];
+    return spots.map((spot) => {
+      const row: Row = { spot };
+      for (const panel of panels) {
+        for (const structure of panel.series) {
+          const key = `${structure.spec.id}@@${panel.horizon.id}`;
+          if (panel.board) row[key] = capitalExpiryPnl(structure, spot) ?? undefined;
+          else row[key] = pnlAt(structure.curves.find((curve) => curve.horizonId === panel.horizon.id)?.points, spot);
         }
-        const yAxis = board ? yExtent(values) ?? sharedAxis : sharedAxis;
-        const shorts = [...new Set(series.flatMap((structure) => structure.legs.filter((leg) => leg.ratio < 0).map((leg) => leg.strike)))];
-        const modelMarks: ModelCrossover[] = board ? [] : evaluation.modelCrossovers.filter((item) => item.horizonId === horizon.id);
-        const dotY = (id: string, spot: number) => {
-          if (id === "stock") return stockPnl(evaluation, spot);
-          const row = series.find((structure) => structure.spec.id === id);
-          if (!row) return null;
-          if (board) return capitalExpiryPnl(row, spot);
-          const curve = row.curves.find((item) => item.horizonId === horizon.id);
-          return curve ? samplePnl(curve.points, spot) : null;
-        };
-        return (
-          <section id={`h-${horizon.id.replace(/[^a-zA-Z0-9-]/g, "-")}`} key={horizon.id} className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
-            <h3 className="mb-1 text-sm font-semibold text-zinc-50">{horizon.label}</h3>
-            {board ? <p className="mb-2 text-xs text-zinc-300">{board.metric}. Shaded band is the leader. Crossovers are exact expiry math.</p> : null}
-            {modelMarks.length > 0 ? (
-              <p className="mb-2 text-xs text-zinc-300">Crossover marks on this date are interpolated from the model curve. They are not exact.</p>
-            ) : null}
-            <div className={board ? "h-[28rem] w-full" : "h-72 w-full"}>
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={rows} margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={LAB_PALETTE.grid} />
-                  <XAxis
-                    dataKey="spot"
-                    type="number"
-                    domain={[xLo, xHi]}
-                    tickFormatter={(v: number) => v.toFixed(0)}
-                    allowDataOverflow
-                    tick={{ fill: LAB_PALETTE.axis, fontSize: 12 }}
-                    axisLine={{ stroke: LAB_PALETTE.axisLine }}
-                    tickLine={{ stroke: LAB_PALETTE.axisLine }}
+      }
+      const expiry = panels.find((panel) => panel.board);
+      if (expiry?.stock) row.stock = stockPnl(evaluation, spot);
+      return row;
+    });
+  })();
+  const expiryPanel = panels.find((panel) => panel.board);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="flex rounded-full border border-zinc-400 p-0.5">
+          <button
+            type="button"
+            aria-pressed={view === "grid"}
+            onClick={() => setView("grid")}
+            className={`rounded-full px-3 py-1 text-xs font-semibold ${view === "grid" ? "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950" : "text-zinc-700 dark:text-zinc-200"}`}
+          >
+            Grid
+          </button>
+          <button
+            type="button"
+            aria-pressed={view === "overlay"}
+            onClick={() => setView("overlay")}
+            className={`rounded-full px-3 py-1 text-xs font-semibold ${view === "overlay" ? "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950" : "text-zinc-700 dark:text-zinc-200"}`}
+          >
+            Overlay
+          </button>
+        </div>
+        <label className={labLabel}>
+          Min spot
+          <input
+            aria-label="Spot window minimum"
+            type="number"
+            step="1"
+            value={minDraft ?? spotText(evaluation.spotWindow.min)}
+            onChange={(event) => setMinDraft(event.target.value)}
+            onBlur={() => {
+              if (minDraft == null) return;
+              commitWindow(minDraft, maxDraft ?? spotText(evaluation.spotWindow.max));
+            }}
+            className={`mt-1 block w-24 px-2 py-1 text-sm tabular-nums ${labControl}`}
+          />
+        </label>
+        <label className={labLabel}>
+          Max spot
+          <input
+            aria-label="Spot window maximum"
+            type="number"
+            step="1"
+            value={maxDraft ?? spotText(evaluation.spotWindow.max)}
+            onChange={(event) => setMaxDraft(event.target.value)}
+            onBlur={() => {
+              if (maxDraft == null) return;
+              commitWindow(minDraft ?? spotText(evaluation.spotWindow.min), maxDraft);
+            }}
+            className={`mt-1 block w-24 px-2 py-1 text-sm tabular-nums ${labControl}`}
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => {
+            setMinDraft(null);
+            setMaxDraft(null);
+            onEdit({ kind: "setWindow", window: { kind: "fit" } });
+          }}
+          className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
+        >
+          Fit all crossovers
+        </button>
+        <p className="pb-1 text-xs text-zinc-700 dark:text-zinc-300">
+          {evaluation.spotWindow.source === "fit" ? "Fitted to crossovers, breakevens, strikes, and spot." : "Typed spot window."} Panels share both axes.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-3">
+        {priced.map((structure) => (
+          <span key={structure.spec.id} className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+            <span
+              className="inline-block h-2.5 w-6 rounded-sm"
+              style={{ backgroundColor: LAB_PALETTE.series[structure.spec.slot] ?? LAB_PALETTE.series[0] }}
+            />
+            {structure.spec.label}
+          </span>
+        ))}
+        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+          <span className="inline-block h-0.5 w-6 border-t-2 border-dashed" style={{ borderColor: LAB_PALETTE.stock }} />
+          Stock
+        </span>
+      </div>
+
+      {view === "overlay" ? (
+        <section id="h-overlay" className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
+          <h3 className="mb-1 text-sm font-semibold text-zinc-50">Quarters overlaid</h3>
+          <p className="mb-2 text-xs text-zinc-300">
+            Each structure keeps its color. Earlier quarters are dashed. Expiry is solid. Expiry crossover labels are exact. Other dates stay on the grid, marked model-based.
+          </p>
+          <div className="h-[32rem] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={overlayRows} margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={LAB_PALETTE.grid} />
+                <XAxis
+                  dataKey="spot"
+                  type="number"
+                  domain={[xLo, xHi]}
+                  tickFormatter={(v: number) => v.toFixed(0)}
+                  allowDataOverflow
+                  tick={{ fill: LAB_PALETTE.axis, fontSize: 12 }}
+                  axisLine={{ stroke: LAB_PALETTE.axisLine }}
+                  tickLine={{ stroke: LAB_PALETTE.axisLine }}
+                />
+                <YAxis
+                  domain={sharedAxis.domain}
+                  ticks={sharedAxis.ticks}
+                  tickFormatter={(v: number) => (masked ? "XXXXX" : formatSignedUsd2(v))}
+                  width={88}
+                  allowDataOverflow
+                  tick={{ fill: LAB_PALETTE.axis, fontSize: 12 }}
+                  axisLine={{ stroke: LAB_PALETTE.axisLine }}
+                  tickLine={{ stroke: LAB_PALETTE.axisLine }}
+                />
+                <Tooltip content={<ChartTip mask={masked} />} />
+                <Legend wrapperStyle={{ color: LAB_PALETTE.axis, fontSize: 11 }} />
+                {expiryPanel?.board ? (
+                  <Marks
+                    evaluation={evaluation}
+                    crossovers={expiryPanel.board.crossovers}
+                    zones={expiryPanel.board.zones}
+                    xLo={xLo}
+                    xHi={xHi}
+                    model={false}
+                    whatIf={whatIfSpot}
+                    dotY={expiryPanel.dotY}
                   />
-                  <YAxis
-                    domain={yAxis.domain}
-                    ticks={yAxis.ticks}
-                    tickFormatter={(v: number) => (masked ? "XXXXX" : formatSignedUsd2(v))}
-                    width={88}
-                    allowDataOverflow
-                    tick={{ fill: LAB_PALETTE.axis, fontSize: 12 }}
-                    axisLine={{ stroke: LAB_PALETTE.axisLine }}
-                    tickLine={{ stroke: LAB_PALETTE.axisLine }}
-                  />
-                  <Tooltip content={<ChartTip mask={masked} />} />
-                  <Legend wrapperStyle={{ color: LAB_PALETTE.axis, fontSize: 13 }} />
-                  {board ? (
-                    <Marks
-                      evaluation={evaluation}
-                      crossovers={board.crossovers}
-                      zones={board.zones}
-                      xLo={xLo}
-                      xHi={xHi}
-                      model={false}
-                      whatIf={whatIfSpot}
-                      dotY={dotY}
-                    />
-                  ) : (
-                    <Marks
-                      evaluation={evaluation}
-                      crossovers={modelMarks}
-                      zones={[]}
-                      xLo={xLo}
-                      xHi={xHi}
-                      model
-                      whatIf={null}
-                      dotY={dotY}
-                    />
-                  )}
-                  <ReferenceLine y={0} stroke={LAB_PALETTE.zero} strokeWidth={1.5} />
-                  <ReferenceLine x={evaluation.spot} stroke={LAB_PALETTE.spot} strokeWidth={2} strokeDasharray="5 5" label={{ value: "Spot", fill: LAB_PALETTE.spot, fontSize: 12 }} />
-                  {shorts.map((strike) => (
-                    <ReferenceLine key={strike} x={strike} stroke={LAB_PALETTE.strike} strokeWidth={1.5} strokeDasharray="3 3" />
-                  ))}
-                  {series.map((structure) => (
+                ) : null}
+                <ReferenceLine y={0} stroke={LAB_PALETTE.zero} strokeWidth={1.5} />
+                <ReferenceLine x={evaluation.spot} stroke={LAB_PALETTE.spot} strokeWidth={2} strokeDasharray="5 5" />
+                {panels.map((panel, index) =>
+                  panel.series.map((structure) => (
                     <Line
-                      key={structure.spec.id}
+                      key={`${structure.spec.id}-${panel.horizon.id}`}
                       type="linear"
-                      dataKey={structure.spec.id}
-                      name={structure.spec.label}
+                      dataKey={`${structure.spec.id}@@${panel.horizon.id}`}
+                      name={`${structure.spec.label} ${shortHorizon(panel.horizon.label)}`}
                       stroke={LAB_PALETTE.series[structure.spec.slot] ?? LAB_PALETTE.series[0]}
+                      strokeDasharray={panel.board ? undefined : overlayDash(index)}
+                      strokeOpacity={panel.board ? 1 : 0.75}
                       dot={false}
-                      strokeWidth={LAB_PALETTE.line}
+                      strokeWidth={panel.board ? LAB_PALETTE.line : 2}
                       isAnimationActive={false}
                     />
-                  ))}
-                  {stock ? (
-                    <Line
-                      type="linear"
-                      dataKey="stock"
-                      name="Stock"
-                      stroke={LAB_PALETTE.stock}
-                      strokeDasharray="6 4"
-                      dot={false}
-                      strokeWidth={LAB_PALETTE.stockLine}
-                      isAnimationActive={false}
-                    />
-                  ) : null}
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
-          </section>
-        );
-      })}
+                  )),
+                )}
+                {expiryPanel?.stock ? (
+                  <Line
+                    type="linear"
+                    dataKey="stock"
+                    name="Stock"
+                    stroke={LAB_PALETTE.stock}
+                    strokeDasharray="6 4"
+                    dot={false}
+                    strokeWidth={LAB_PALETTE.stockLine}
+                    isAnimationActive={false}
+                  />
+                ) : null}
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {panels.map((panel) => {
+            const shorts = [...new Set(panel.series.flatMap((structure) => structure.legs.filter((leg) => leg.ratio < 0).map((leg) => leg.strike)))];
+            const tall = panel.board != null;
+            return (
+              <section
+                id={`h-${panel.horizon.id.replace(/[^a-zA-Z0-9-]/g, "-")}`}
+                key={panel.horizon.id}
+                className={`min-w-0 rounded-xl border border-zinc-600 bg-zinc-950 p-2 text-zinc-100 ${tall ? "md:col-span-2 xl:col-span-3" : ""}`}
+              >
+                <h3 className="mb-1 text-xs font-semibold text-zinc-50">{panel.horizon.label}</h3>
+                {panel.board ? (
+                  <p className="mb-1 text-[11px] text-zinc-300">{panel.board.metric}. Shaded band is the leader. Crossovers are exact expiry math.</p>
+                ) : panel.modelMarks.length > 0 ? (
+                  <p className="mb-1 text-[11px] text-zinc-300">Crossover marks are numerical and model-based. They are not exact.</p>
+                ) : null}
+                <div className={tall ? "h-[22rem] w-full" : "h-52 w-full"}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={panel.rows} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={LAB_PALETTE.grid} />
+                      <XAxis
+                        dataKey="spot"
+                        type="number"
+                        domain={[xLo, xHi]}
+                        tickFormatter={(v: number) => v.toFixed(0)}
+                        allowDataOverflow
+                        tick={{ fill: LAB_PALETTE.axis, fontSize: tall ? 12 : 10 }}
+                        axisLine={{ stroke: LAB_PALETTE.axisLine }}
+                        tickLine={{ stroke: LAB_PALETTE.axisLine }}
+                      />
+                      <YAxis
+                        domain={sharedAxis.domain}
+                        ticks={sharedAxis.ticks}
+                        tickFormatter={(v: number) => (masked ? "XXXXX" : formatSignedUsd2(v))}
+                        width={tall ? 80 : 64}
+                        allowDataOverflow
+                        tick={{ fill: LAB_PALETTE.axis, fontSize: tall ? 11 : 9 }}
+                        axisLine={{ stroke: LAB_PALETTE.axisLine }}
+                        tickLine={{ stroke: LAB_PALETTE.axisLine }}
+                      />
+                      <Tooltip content={<ChartTip mask={masked} />} />
+                      {panel.board ? (
+                        <Marks
+                          evaluation={evaluation}
+                          crossovers={panel.board.crossovers}
+                          zones={panel.board.zones}
+                          xLo={xLo}
+                          xHi={xHi}
+                          model={false}
+                          whatIf={whatIfSpot}
+                          dotY={panel.dotY}
+                        />
+                      ) : (
+                        <Marks
+                          evaluation={evaluation}
+                          crossovers={panel.modelMarks}
+                          zones={[]}
+                          xLo={xLo}
+                          xHi={xHi}
+                          model
+                          whatIf={null}
+                          dotY={panel.dotY}
+                        />
+                      )}
+                      <ReferenceLine y={0} stroke={LAB_PALETTE.zero} strokeWidth={1.5} />
+                      <ReferenceLine x={evaluation.spot} stroke={LAB_PALETTE.spot} strokeWidth={1.5} strokeDasharray="5 5" />
+                      {shorts.map((strike) => (
+                        <ReferenceLine key={strike} x={strike} stroke={LAB_PALETTE.strike} strokeWidth={1} strokeDasharray="3 3" />
+                      ))}
+                      {panel.series.map((structure) => (
+                        <Line
+                          key={structure.spec.id}
+                          type="linear"
+                          dataKey={structure.spec.id}
+                          name={structure.spec.label}
+                          stroke={LAB_PALETTE.series[structure.spec.slot] ?? LAB_PALETTE.series[0]}
+                          dot={false}
+                          strokeWidth={LAB_PALETTE.line}
+                          isAnimationActive={false}
+                        />
+                      ))}
+                      {panel.stock ? (
+                        <Line
+                          type="linear"
+                          dataKey="stock"
+                          name="Stock"
+                          stroke={LAB_PALETTE.stock}
+                          strokeDasharray="6 4"
+                          dot={false}
+                          strokeWidth={LAB_PALETTE.stockLine}
+                          isAnimationActive={false}
+                        />
+                      ) : null}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
+}
+
+function overlayDash(index: number): string {
+  const dashes = ["2 2", "6 3", "1 4", "8 3", "4 2", "3 3", "10 4", "5 2", "2 5", "7 2"];
+  return dashes[index % dashes.length] ?? "4 3";
 }
 
 function extendedSpots(lo: number, hi: number, board: ExpiryBoard, spot: number): number[] {

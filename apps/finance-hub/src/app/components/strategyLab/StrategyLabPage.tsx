@@ -7,11 +7,145 @@ import { LabCharts } from "@/app/components/strategyLab/LabCharts";
 import { ExpirySummary } from "@/app/components/strategyLab/ExpirySummary";
 import { StructureCard } from "@/app/components/strategyLab/StructureCard";
 import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate } from "@/lib/optionChain/chain";
-import { bestWhenFor, TEMPLATE_CATALOG, type TemplateRequest } from "@/lib/strategyLab/lab";
+import { bestWhenFor, TEMPLATE_CATALOG, type HorizonSpec, type TemplateRequest } from "@/lib/strategyLab/lab";
 import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
 import { useStrategyLab } from "@/lib/strategyLab/useStrategyLab";
 
 type TemplateChoice = "callDebitSpread" | "zebra" | "zebraDelta" | "longCall" | "custom";
+
+function HorizonBar({
+  horizons,
+  views,
+  customDate,
+  customMonths,
+  onCustomDate,
+  onCustomMonths,
+  onEdit,
+}: {
+  horizons: readonly HorizonSpec[];
+  views: readonly { id: string; label: string }[];
+  customDate: string;
+  customMonths: string;
+  onCustomDate: (value: string) => void;
+  onCustomMonths: (value: string) => void;
+  onEdit: (edit: { kind: "setHorizons"; horizons: readonly HorizonSpec[] }) => void;
+}) {
+  const quartersOn = horizons.some((horizon) => horizon.kind === "quartersToAnchor");
+  const halfwayOn = horizons.some((horizon) => horizon.kind === "fractionToAnchor" && horizon.fraction === 0.5);
+  const setHorizons = (next: readonly HorizonSpec[]) => onEdit({ kind: "setHorizons", horizons: next });
+  const chip = (on: boolean) =>
+    `rounded-full px-3 py-1 text-xs font-semibold ${labControl} ${on ? "ring-2 ring-zinc-950 dark:ring-zinc-100" : "opacity-60"}`;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-end gap-2">
+        <button
+          type="button"
+          aria-pressed={quartersOn}
+          className={chip(quartersOn)}
+          onClick={() =>
+            setHorizons(
+              quartersOn
+                ? horizons.filter((horizon) => horizon.kind !== "quartersToAnchor")
+                : [...horizons, { kind: "quartersToAnchor" }],
+            )
+          }
+        >
+          Quarters
+        </button>
+        <button
+          type="button"
+          aria-pressed={halfwayOn}
+          className={chip(halfwayOn)}
+          onClick={() =>
+            setHorizons(
+              halfwayOn
+                ? horizons.filter((horizon) => !(horizon.kind === "fractionToAnchor" && horizon.fraction === 0.5))
+                : [...horizons, { kind: "fractionToAnchor", fraction: 0.5 }],
+            )
+          }
+        >
+          Halfway
+        </button>
+        <label className={labLabel}>
+          Custom date
+          <input
+            aria-label="Custom horizon date"
+            type="date"
+            value={customDate}
+            onChange={(event) => onCustomDate(event.target.value)}
+            className={`mt-1 block px-2 py-1 text-sm ${labControl}`}
+          />
+        </label>
+        <button
+          type="button"
+          className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
+          onClick={() => {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(customDate)) return;
+            setHorizons([...horizons, { kind: "date", date: isoDate(customDate) }]);
+          }}
+        >
+          Add date
+        </button>
+        <label className={labLabel}>
+          Custom months
+          <input
+            aria-label="Custom horizon months"
+            type="number"
+            min={1}
+            step={1}
+            value={customMonths}
+            onChange={(event) => onCustomMonths(event.target.value)}
+            className={`mt-1 block w-20 px-2 py-1 text-sm tabular-nums ${labControl}`}
+          />
+        </label>
+        <button
+          type="button"
+          className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
+          onClick={() => {
+            const months = Number(customMonths);
+            if (!Number.isFinite(months) || months <= 0) return;
+            setHorizons([...horizons, { kind: "monthsFromEntry", months }]);
+          }}
+        >
+          Add months
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {views.map((horizon) => (
+          <a
+            key={horizon.id}
+            href={`#h-${horizon.id.replace(/[^a-zA-Z0-9-]/g, "-")}`}
+            className={`rounded-full px-3 py-1 text-xs font-medium ${labControl}`}
+          >
+            {horizon.label}
+          </a>
+        ))}
+        {horizons.map((horizon, index) =>
+          horizon.kind === "quartersToAnchor" ? null : (
+            <button
+              key={`${horizon.kind}-${index}`}
+              type="button"
+              className="text-xs font-medium text-zinc-600 underline dark:text-zinc-300"
+              onClick={() => setHorizons(horizons.filter((_, item) => item !== index))}
+            >
+              Remove {horizonChip(horizon)}
+            </button>
+          ),
+        )}
+      </div>
+    </div>
+  );
+}
+
+function horizonChip(horizon: HorizonSpec): string {
+  if (horizon.kind === "fractionToAnchor") return "halfway";
+  if (horizon.kind === "date") return horizon.date;
+  if (horizon.kind === "monthsFromEntry") return `+${horizon.months} mo`;
+  if (horizon.kind === "entry") return "today";
+  if (horizon.kind === "anchorExpiry") return "expiry";
+  return "horizon";
+}
 
 function ageOf(iso: string): string {
   const ms = Date.now() - Date.parse(iso);
@@ -38,6 +172,8 @@ export function StrategyLabPage() {
   const [limit, setLimit] = useState("");
   const [capitalDraft, setCapitalDraft] = useState("10000");
   const [whatIf, setWhatIf] = useState<{ symbol: string; spot: number } | null>(null);
+  const [customDate, setCustomDate] = useState("");
+  const [customMonths, setCustomMonths] = useState("9");
 
   const expiry = (expiryPick || chain?.expiries.at(-1)?.date || "") as IsoDate | "";
   const callStrikes = useMemo(() => {
@@ -249,17 +385,15 @@ export function StrategyLabPage() {
             </label>
           </section>
 
-          <div className="flex flex-wrap gap-2">
-            {evaluation.horizons.map((horizon) => (
-              <a
-                key={horizon.id}
-                href={`#h-${horizon.id.replace(/[^a-zA-Z0-9-]/g, "-")}`}
-                className={`rounded-full px-3 py-1 text-xs font-medium ${labControl}`}
-              >
-                {horizon.label}
-              </a>
-            ))}
-          </div>
+          <HorizonBar
+            horizons={lab.horizons}
+            views={evaluation.horizons}
+            customDate={customDate}
+            customMonths={customMonths}
+            onCustomDate={setCustomDate}
+            onCustomMonths={setCustomMonths}
+            onEdit={edit}
+          />
 
           {evaluation.issues.length > 0 ? (
             <ul className="space-y-1 text-sm text-amber-800 dark:text-amber-200">
@@ -391,6 +525,7 @@ export function StrategyLabPage() {
               evaluation={evaluation}
               masked={privacy.masked}
               whatIfSpot={whatIf && whatIf.symbol === chain.symbol ? whatIf.spot : chain.spot}
+              onEdit={edit}
             />
           </div>
         </>

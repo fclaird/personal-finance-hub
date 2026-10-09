@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
+  addCalendarMonths,
   calendarDaysBetween,
   formatExpiryLabel,
   isoDate,
@@ -136,20 +137,37 @@ describe("NOW Jan 19 2029 acceptance", () => {
   const b = priced(ev, "B");
   const c = priced(ev, "C");
 
-  it("counts 834 days and a shared Monday halfway", () => {
+  it("counts 834 days and a quarterly board from today through expiry", () => {
     assert.equal(calendarDaysBetween(isoDate("2026-10-08"), isoDate(JAN)), 834);
     assert.equal(a.days, 834);
     assert.equal(a.ownHalfway, isoDate("2027-11-29"));
     assert.equal(formatExpiryLabel(isoDate(JAN)), "Fri Jan 19, 2029");
     assert.equal(formatExpiryLabel(a.ownHalfway), "Mon Nov 29, 2027");
-    assert.deepEqual(
-      ev.horizons.map((h) => h.date),
-      [isoDate("2027-11-29"), isoDate(JAN)],
-    );
-    assert.match(ev.horizons[0]!.label, /Halfway to Fri Jan 19, 2029/);
-    assert.match(ev.horizons[0]!.label, /Mon Nov 29, 2027/);
-    assert.equal(ev.horizons[0]!.shared, true);
+    const dates = ev.horizons.map((h) => h.date);
+    assert.equal(dates[0], isoDate("2026-10-08"));
+    assert.equal(dates[dates.length - 1], isoDate(JAN));
+    assert.ok(dates.length >= 9 && dates.length <= 12, `quarter count ${dates.length}`);
+    for (let i = 1; i < dates.length - 1; i++) {
+      assert.equal(dates[i], addCalendarMonths(isoDate("2026-10-08"), i * 3));
+    }
+    assert.match(ev.horizons[0]!.label, /Today/);
+    assert.match(ev.horizons[1]!.label, /\+3 mo/);
+    assert.equal(ev.horizons.at(-1)!.settlement, true);
+    assert.ok(ev.horizons.every((h) => h.shared));
     assert.equal(ev.issues.some((issue) => issue.severity === "block"), false);
+  });
+
+  it("keeps the Monday halfway when that horizon is added", () => {
+    const withHalf = evaluateLab(
+      editLab(lab, { kind: "setHorizons", horizons: [...lab.horizons, { kind: "fractionToAnchor", fraction: 0.5 }] }, chain),
+      chain,
+    );
+    const half = withHalf.horizons.find((h) => /Halfway/.test(h.label));
+    assert.ok(half);
+    assert.equal(half.date, isoDate("2027-11-29"));
+    assert.match(half.label, /Halfway to Fri Jan 19, 2029/);
+    assert.match(half.label, /Mon Nov 29, 2027/);
+    assert.equal(half.shared, true);
   });
 
   it("reproduces ticket debits, breakevens, and $10k whole-contract sizing", () => {
@@ -389,12 +407,12 @@ describe("AVGO June 2027", () => {
     const withYield = editLab(lab, { kind: "setAssumptions", patch: { dividendYield: 0.007 } }, chain);
     const plain = priced(evaluateLab(lab, chain), "A");
     const yielded = priced(evaluateLab(withYield, chain), "A");
-    const halfwayId = (ev: LabEvaluation) => ev.horizons.find((h) => h.date === plain.ownHalfway)?.id;
+    const openId = (ev: LabEvaluation) => ev.horizons.find((h) => !h.settlement)?.id;
     const pnlAt = (row: PricedStructure, ev: LabEvaluation, spot: number) => {
-      const id = halfwayId(ev);
+      const id = openId(ev);
       return row.curves.find((curve) => curve.horizonId === id)?.points.find((p) => p.spot === spot)?.pnl;
     };
-    const moved = chain.spot * 2;
+    const moved = chain.spot;
     const evPlain = evaluateLab(lab, chain);
     const evYield = evaluateLab(withYield, chain);
     const left = pnlAt(plain, evPlain, moved);
