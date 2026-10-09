@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import type { OptionChain } from "@/lib/optionChain/chain";
 import { entryTableCsv, evaluationCubeCsv } from "@/lib/strategyLab/exportCsv";
 import type { LabEvaluation, LabScenario } from "@/lib/strategyLab/lab";
 import { labControl, labLabel } from "@/lib/strategyLab/palette";
@@ -12,6 +13,14 @@ import {
   writeLibrary,
   type NamedScenario,
 } from "@/lib/strategyLab/scenarioStore";
+import { compactQuotes, defaultSnapshotSummary, provenanceFromChain } from "@/lib/strategyLab/snapshots";
+
+type SnapshotListItem = {
+  id: string;
+  createdAt: string;
+  symbol: string;
+  summary: string;
+};
 
 function downloadCsv(filename: string, csv: string) {
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
@@ -25,11 +34,13 @@ function downloadCsv(filename: string, csv: string) {
 
 export function ScenarioBar({
   lab,
+  chain,
   symbol,
   evaluation,
   onRestore,
 }: {
   lab: LabScenario;
+  chain: OptionChain;
   symbol: string;
   evaluation: LabEvaluation;
   onRestore: (scenario: LabScenario) => void;
@@ -38,9 +49,13 @@ export function ScenarioBar({
   const [name, setName] = useState("");
   const [selected, setSelected] = useState("");
   const [note, setNote] = useState<string | null>(null);
+  const [snapshots, setSnapshots] = useState<SnapshotListItem[]>([]);
+  const [snapshotId, setSnapshotId] = useState("");
+  const [summary, setSummary] = useState("");
 
   useEffect(() => {
     setLibrary(readLibrary(window.localStorage));
+    void refreshSnapshots(symbol, setSnapshots);
   }, [symbol]);
 
   function persist(next: readonly NamedScenario[]) {
@@ -147,10 +162,137 @@ export function ScenarioBar({
       >
         Export entry table
       </button>
-      <p className="pb-1 text-[11px] text-zinc-300">
+      <p className="basis-full pb-1 text-[11px] text-zinc-300">
         Named scenarios stay in this browser. A bad save is ignored and is not applied.
         {note ? ` ${note}` : ""}
       </p>
+      <label className={labLabel}>
+        Snapshot summary
+        <input
+          aria-label="Snapshot summary"
+          value={summary}
+          maxLength={160}
+          placeholder={defaultSnapshotSummary(lab)}
+          onChange={(event) => setSummary(event.target.value)}
+          className={`mt-1 block w-64 px-2 py-1.5 text-sm ${labControl}`}
+        />
+      </label>
+      <button
+        type="button"
+        className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
+        onClick={() => {
+          void (async () => {
+            const parsed = parseScenario(JSON.parse(JSON.stringify(lab)) as unknown);
+            if (!parsed) {
+              setNote("This scenario could not be saved.");
+              return;
+            }
+            const resp = await fetch("/api/strategy-lab/snapshots", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                scenario: parsed,
+                quotes: compactQuotes(chain, parsed),
+                provenance: provenanceFromChain(chain),
+                summary: summary.trim() || defaultSnapshotSummary(parsed),
+              }),
+            });
+            const body = (await resp.json()) as { ok?: boolean; error?: string; snapshot?: { id: string } };
+            if (!resp.ok || !body.ok || !body.snapshot) {
+              setNote(body.error ?? "Snapshot was not saved.");
+              return;
+            }
+            setSnapshotId(body.snapshot.id);
+            setNote(`Saved snapshot ${body.snapshot.id}. A journal entry can cite that id.`);
+            await refreshSnapshots(symbol, setSnapshots);
+          })();
+        }}
+      >
+        Save snapshot
+      </button>
+      <label className={labLabel}>
+        Snapshots
+        <select
+          aria-label="Saved snapshots"
+          value={snapshotId}
+          onChange={(event) => setSnapshotId(event.target.value)}
+          className={`mt-1 block max-w-72 px-2 py-1.5 text-sm ${labControl}`}
+        >
+          <option value="">Choose</option>
+          {snapshots.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.summary}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        type="button"
+        className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
+        onClick={() => {
+          void (async () => {
+            if (!snapshotId) {
+              setNote("Choose a snapshot.");
+              return;
+            }
+            const resp = await fetch(`/api/strategy-lab/snapshots?id=${encodeURIComponent(snapshotId)}`, { cache: "no-store" });
+            const body = (await resp.json()) as { ok?: boolean; error?: string; snapshot?: { scenario: unknown; symbol: string } };
+            if (!resp.ok || !body.ok || !body.snapshot) {
+              setNote(body.error ?? "That snapshot could not be read.");
+              return;
+            }
+            if (body.snapshot.symbol !== symbol) {
+              setNote(`Load ${body.snapshot.symbol} before opening this snapshot.`);
+              return;
+            }
+            const parsed = parseScenario(body.snapshot.scenario);
+            if (!parsed) {
+              setNote("That snapshot could not be read.");
+              return;
+            }
+            onRestore(parsed);
+            setNote(`Loaded ${snapshotId}. Charts use the chain on screen. Cite this id from a journal entry.`);
+          })();
+        }}
+      >
+        Load snapshot
+      </button>
+      <button
+        type="button"
+        className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
+        onClick={() => {
+          void (async () => {
+            if (!snapshotId) return;
+            const resp = await fetch(`/api/strategy-lab/snapshots?id=${encodeURIComponent(snapshotId)}`, { method: "DELETE" });
+            const body = (await resp.json()) as { ok?: boolean; error?: string };
+            if (!resp.ok || !body.ok) {
+              setNote(body.error ?? "Snapshot was not deleted.");
+              return;
+            }
+            setNote(`Deleted ${snapshotId}.`);
+            setSnapshotId("");
+            await refreshSnapshots(symbol, setSnapshots);
+          })();
+        }}
+      >
+        Delete snapshot
+      </button>
+      {snapshotId ? (
+        <p className="basis-full font-mono text-[11px] text-zinc-200">
+          Snapshot id {snapshotId}
+        </p>
+      ) : null}
     </section>
   );
+}
+
+async function refreshSnapshots(symbol: string, setSnapshots: (rows: SnapshotListItem[]) => void) {
+  try {
+    const resp = await fetch(`/api/strategy-lab/snapshots?symbol=${encodeURIComponent(symbol)}`, { cache: "no-store" });
+    const body = (await resp.json()) as { ok?: boolean; snapshots?: SnapshotListItem[] };
+    if (!resp.ok || !body.ok) return;
+    setSnapshots(body.snapshots ?? []);
+  } catch {
+    setSnapshots([]);
+  }
 }

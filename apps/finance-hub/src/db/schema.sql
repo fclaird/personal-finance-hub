@@ -603,6 +603,21 @@ CREATE TABLE IF NOT EXISTS option_chain_cache (
   payload_json TEXT NOT NULL
 );
 
+-- Saved Strategy Lab scenarios. `id` is stable so a future journal entry can cite it.
+-- There is no journal table, and this row does not pretend to link to one.
+CREATE TABLE IF NOT EXISTS strategy_lab_snapshots (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  scenario_json TEXT NOT NULL,
+  quotes_json TEXT NOT NULL,
+  provenance_json TEXT NOT NULL,
+  summary TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_lab_snapshots_symbol
+  ON strategy_lab_snapshots(symbol, created_at DESC);
+
 -- Owned homes (Main flavor). These totals stay off the terminal day-return series.
 CREATE TABLE IF NOT EXISTS real_estate_properties (
   id TEXT PRIMARY KEY,

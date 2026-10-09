@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
 import { formatExpiryLabel, type OptionChain, type OptionRight } from "@/lib/optionChain/chain";
 import { formatNum, formatSignedUsd2, formatUsd2 } from "@/lib/format";
-import type { LabEdit, StructureEval } from "@/lib/strategyLab/lab";
+import { quotePackageValue, type LabEdit, type StructureEval } from "@/lib/strategyLab/lab";
 import { LAB_PALETTE, labControl, labLabel } from "@/lib/strategyLab/palette";
 import {
   formatModelDelta,
@@ -130,13 +130,23 @@ export function StructureCard({
             style={{ borderColor: color }}
           />
         </div>
-        <button
-          type="button"
-          onClick={() => onEdit({ kind: "removeStructure", id: spec.id })}
-          className="text-xs font-medium text-zinc-600 hover:text-rose-500 dark:text-zinc-300"
-        >
-          Remove
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            aria-label={`${spec.label} copy to compare`}
+            onClick={() => onEdit({ kind: "duplicateStructure", id: spec.id })}
+            className={`px-2 py-1 text-xs font-semibold ${labControl}`}
+          >
+            Copy to compare
+          </button>
+          <button
+            type="button"
+            onClick={() => onEdit({ kind: "removeStructure", id: spec.id })}
+            className="text-xs font-medium text-zinc-600 hover:text-rose-500 dark:text-zinc-300"
+          >
+            Remove
+          </button>
+        </div>
       </div>
       <p className="mb-3 border-l-4 pl-2 text-xs font-semibold text-zinc-800 dark:text-zinc-100" style={{ borderColor: color }}>
         {bestWhen}
@@ -279,6 +289,57 @@ export function StructureCard({
         </div>
       ) : null}
 
+      {spec.stock ? (
+        <div className="mb-3 flex flex-wrap items-end gap-2">
+          <label className={labLabel}>
+            Shares
+            <input
+              aria-label={`${spec.label} shares`}
+              type="number"
+              step="1"
+              value={String(spec.stock.shares)}
+              onChange={(event) => {
+                const shares = Number(event.target.value);
+                if (!spec.stock || !Number.isFinite(shares) || shares === 0) return;
+                onEdit({ kind: "setStock", id: spec.id, stock: { shares, averagePrice: spec.stock.averagePrice } });
+              }}
+              className={`mt-1 block w-24 px-2 py-1.5 text-sm tabular-nums ${labControl}`}
+            />
+          </label>
+          <label className={labLabel}>
+            Share average
+            <input
+              aria-label={`${spec.label} share average`}
+              type="number"
+              step="0.01"
+              value={String(spec.stock.averagePrice)}
+              onChange={(event) => {
+                const averagePrice = Number(event.target.value);
+                if (!spec.stock || !Number.isFinite(averagePrice) || !(averagePrice > 0)) return;
+                onEdit({ kind: "setStock", id: spec.id, stock: { shares: spec.stock.shares, averagePrice } });
+              }}
+              className={`mt-1 block w-28 px-2 py-1.5 text-sm tabular-nums ${labControl}`}
+            />
+          </label>
+          <button
+            type="button"
+            className={`px-2 py-1.5 text-xs font-semibold ${labControl}`}
+            onClick={() => onEdit({ kind: "setStock", id: spec.id, stock: null })}
+          >
+            Drop stock
+          </button>
+          <p className="w-full text-[11px] text-zinc-300">Share leg at average cost. A covered call needs these shares beside the short call.</p>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className={`mb-3 px-2 py-1.5 text-xs font-semibold ${labControl}`}
+          onClick={() => onEdit({ kind: "setStock", id: spec.id, stock: { shares: 100, averagePrice: chain.spot } })}
+        >
+          Add stock leg
+        </button>
+      )}
+
       <fieldset className={`mb-3 mt-3 ${labLabel}`}>
         <legend className="mb-1">Entry</legend>
         <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-900 dark:text-zinc-50">
@@ -331,7 +392,14 @@ export function StructureCard({
         <p className="text-sm text-rose-600">{row.reason}</p>
       ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          <Stat label="Debit" value={usd(row.debit, masked)} />
+          <Stat label={row.debit < 0 ? "Credit" : "Debit"} value={usd(Math.abs(row.debit), masked)} />
+          <Stat
+            label="P&L today"
+            value={(() => {
+              const mark = quotePackageValue(row.legs, chain.spot, spec.stock);
+              return mark == null ? "—" : signed(mark - row.debit, masked);
+            })()}
+          />
           <Stat label="Breakeven" value={row.risk.breakevens.map((b) => b.toFixed(2)).join(", ") || "—"} />
           <Stat label="Max loss" value={row.risk.maxLoss === "unbounded" ? "Unbounded" : usd(row.risk.maxLoss, masked)} />
           <Stat label="Max gain" value={row.risk.maxGain === "unbounded" ? "Uncapped" : usd(row.risk.maxGain, masked)} />
