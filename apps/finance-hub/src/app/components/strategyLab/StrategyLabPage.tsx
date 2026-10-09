@@ -4,9 +4,10 @@ import { useMemo, useState } from "react";
 
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { LabCharts } from "@/app/components/strategyLab/LabCharts";
+import { ExpirySummary } from "@/app/components/strategyLab/ExpirySummary";
 import { StructureCard } from "@/app/components/strategyLab/StructureCard";
 import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate } from "@/lib/optionChain/chain";
-import { TEMPLATE_CATALOG, type TemplateRequest } from "@/lib/strategyLab/lab";
+import { bestWhenFor, TEMPLATE_CATALOG, type TemplateRequest } from "@/lib/strategyLab/lab";
 import { useStrategyLab } from "@/lib/strategyLab/useStrategyLab";
 
 type TemplateChoice = "callDebitSpread" | "zebra" | "zebraDelta" | "longCall" | "custom";
@@ -35,6 +36,7 @@ export function StrategyLabPage() {
   const [shortStrike, setShortStrike] = useState("");
   const [limit, setLimit] = useState("");
   const [capitalDraft, setCapitalDraft] = useState("10000");
+  const [whatIf, setWhatIf] = useState<{ symbol: string; spot: number } | null>(null);
 
   const expiry = (expiryPick || chain?.expiries.at(-1)?.date || "") as IsoDate | "";
   const callStrikes = useMemo(() => {
@@ -80,10 +82,12 @@ export function StrategyLabPage() {
       };
     }
     const limitN = Number(limit);
+    const zebra = template === "zebra" || template === "zebraDelta";
     edit({
       kind: "addStructure",
       expiry: isoDate(expiry),
       request,
+      label: zebra ? "ZEBRA" : undefined,
       entry: limit.trim() !== "" && Number.isFinite(limitN) ? { kind: "limit", netPerShare: limitN } : { kind: "mid" },
     });
     setLimit("");
@@ -362,12 +366,31 @@ export function StrategyLabPage() {
 
           <div className="grid gap-4 lg:grid-cols-3">
             {evaluation.structures.map((row) => (
-              <StructureCard key={row.spec.id} chain={chain} row={row} masked={privacy.masked} onEdit={edit} />
+              <StructureCard
+                key={row.spec.id}
+                chain={chain}
+                row={row}
+                masked={privacy.masked}
+                bestWhen={bestWhenFor(evaluation.expiryBoards, row.spec.id)}
+                onEdit={edit}
+              />
             ))}
           </div>
 
-          <div id="charts">
-            <LabCharts evaluation={evaluation} masked={privacy.masked} />
+          <div id="charts" className="space-y-4">
+            <ExpirySummary
+              evaluation={evaluation}
+              masked={privacy.masked}
+              compareStock={lab.compareStock}
+              whatIfSpot={whatIf && whatIf.symbol === chain.symbol ? whatIf.spot : chain.spot}
+              onWhatIf={(spot) => setWhatIf({ symbol: chain.symbol, spot })}
+              onEdit={edit}
+            />
+            <LabCharts
+              evaluation={evaluation}
+              masked={privacy.masked}
+              whatIfSpot={whatIf && whatIf.symbol === chain.symbol ? whatIf.spot : chain.spot}
+            />
           </div>
         </>
       ) : null}

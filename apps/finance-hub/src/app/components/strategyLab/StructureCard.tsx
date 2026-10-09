@@ -25,11 +25,13 @@ export function StructureCard({
   chain,
   row,
   masked,
+  bestWhen,
   onEdit,
 }: {
   chain: OptionChain;
   row: StructureEval;
   masked: boolean;
+  bestWhen: string;
   onEdit: (edit: LabEdit) => void;
 }) {
   const spec = row.spec;
@@ -56,6 +58,7 @@ export function StructureCard({
           Remove
         </button>
       </div>
+      <p className="mb-3 text-xs text-zinc-600 dark:text-zinc-300">{bestWhen}</p>
 
       <label className="mb-3 block text-xs text-zinc-500">
         Expiry
@@ -106,6 +109,27 @@ export function StructureCard({
           >
             +
           </button>
+          <label className="text-xs text-zinc-500">
+            IV %
+            <input
+              aria-label={`${spec.label} leg ${index + 1} IV`}
+              type="number"
+              step="0.1"
+              placeholder="auto"
+              value={leg.ivOverride == null ? "" : String(Math.round(leg.ivOverride * 1000) / 10)}
+              onChange={(e) => {
+                const raw = e.target.value.trim();
+                const next = Number(raw);
+                onEdit({
+                  kind: "setIvOverride",
+                  id: spec.id,
+                  legIndex: index,
+                  iv: raw === "" || !Number.isFinite(next) ? null : next / 100,
+                });
+              }}
+              className="mt-1 block w-16 rounded border border-zinc-300 bg-transparent px-2 py-1.5 text-sm tabular-nums dark:border-white/20"
+            />
+          </label>
         </div>
       ))}
 

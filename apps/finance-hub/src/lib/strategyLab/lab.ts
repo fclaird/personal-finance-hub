@@ -23,6 +23,23 @@ import {
   type PricedLeg,
 } from "@/lib/strategyLab/internal/pricing";
 import { resolveTemplate, TEMPLATE_CATALOG, type TemplateRequest } from "@/lib/strategyLab/internal/templates";
+import {
+  basisMetric,
+  bestWhenLine,
+  crossoverText,
+  describeSpotCallout,
+  describeZone,
+  solveExpiryZones,
+  solveSampledCrossovers,
+  zoneContaining,
+  zoneOutcome,
+  type ExpiryCrossover,
+  type ExpiryZone,
+  type ZoneSeries,
+} from "@/lib/strategyLab/internal/zones";
+
+export { basisMetric, bestWhenLine, crossoverText, describeSpotCallout, describeZone, zoneContaining, zoneOutcome };
+export type { ExpiryCrossover, ExpiryZone };
 
 export { TEMPLATE_CATALOG };
 export type { TemplateRequest };
@@ -74,6 +91,8 @@ export type LabScenario = {
   readonly structures: readonly StructureSpec[];
   readonly window: { readonly lowMultiple: number; readonly highMultiple: number };
   readonly showStock: boolean;
+  /** When true, the stock line joins the expiry ranking. The chart line stays on `showStock`. */
+  readonly compareStock: boolean;
   readonly seq: number;
   readonly createdFrom: { readonly spot: number; readonly tradeDate: IsoDate };
 };
@@ -83,6 +102,7 @@ export type LabEdit =
   | { readonly kind: "setBasis"; readonly basis: Basis }
   | { readonly kind: "setHorizons"; readonly horizons: readonly HorizonSpec[] }
   | { readonly kind: "setShowStock"; readonly show: boolean }
+  | { readonly kind: "setCompareStock"; readonly compare: boolean }
   | {
       readonly kind: "addStructure";
       readonly expiry: IsoDate;
@@ -112,7 +132,20 @@ export type HorizonView = {
   readonly date: IsoDate;
   readonly label: string;
   readonly shared: boolean;
+  readonly settlement: boolean;
   readonly structureId: string | null;
+};
+
+export type ModelCrossover = ExpiryCrossover & { readonly horizonId: string; readonly approximate: true };
+
+export type ExpiryBoard = {
+  readonly expiry: IsoDate;
+  readonly metric: string;
+  readonly exact: boolean;
+  readonly note: string | null;
+  readonly structureIds: readonly string[];
+  readonly crossovers: readonly ExpiryCrossover[];
+  readonly zones: readonly ExpiryZone[];
 };
 
 export type LabIssue = {
@@ -150,6 +183,9 @@ export type LabEvaluation = {
   readonly stock: readonly { readonly horizonId: string; readonly points: readonly CurvePoint[] }[];
   readonly issues: readonly LabIssue[];
   readonly basis: Basis;
+  readonly metric: string;
+  readonly expiryBoards: readonly ExpiryBoard[];
+  readonly modelCrossovers: readonly ModelCrossover[];
 };
 
 const LETTERS = ["A", "B", "C", "D"] as const;
@@ -166,6 +202,7 @@ export function createLab(chain: OptionChain): LabScenario {
     structures: [],
     window: { lowMultiple: 0.7, highMultiple: 2 },
     showStock: true,
+    compareStock: false,
     seq: 1,
     createdFrom: { spot: chain.spot, tradeDate: chain.tradeDate },
   };
@@ -199,6 +236,8 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
       return { ...lab, horizons: edit.horizons.slice(0, LAB_LIMITS.horizons) };
     case "setShowStock":
       return { ...lab, showStock: edit.show };
+    case "setCompareStock":
+      return { ...lab, compareStock: edit.compare };
     case "addStructure": {
       if (lab.structures.length >= LAB_LIMITS.structures) return lab;
       const used = new Set(lab.structures.map((s) => s.slot));
@@ -301,6 +340,7 @@ function horizonViews(lab: LabScenario, chain: OptionChain): { horizons: Horizon
         date: chain.tradeDate,
         label: `Shared date · ${formatExpiryLabel(chain.tradeDate)}`,
         shared: true,
+        settlement: false,
         structureId: null,
       });
       continue;
@@ -311,6 +351,7 @@ function horizonViews(lab: LabScenario, chain: OptionChain): { horizons: Horizon
         date: spec.date,
         label: `Shared date · ${formatExpiryLabel(spec.date)}`,
         shared: true,
+        settlement: false,
         structureId: null,
       });
       continue;
@@ -322,6 +363,7 @@ function horizonViews(lab: LabScenario, chain: OptionChain): { horizons: Horizon
         date,
         label: `Shared date · +${spec.months} mo · ${formatExpiryLabel(date)}`,
         shared: true,
+        settlement: false,
         structureId: null,
       });
       continue;
@@ -333,6 +375,7 @@ function horizonViews(lab: LabScenario, chain: OptionChain): { horizons: Horizon
         date,
         label,
         shared: false,
+        settlement: spec.kind === "anchorExpiry",
         structureId: structure.id,
       });
     };
@@ -348,6 +391,7 @@ function horizonViews(lab: LabScenario, chain: OptionChain): { horizons: Horizon
         date,
         label,
         shared: true,
+        settlement: spec.kind === "anchorExpiry",
         structureId: null,
       });
     } else {
@@ -556,6 +600,10 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
     ...blocked,
   ].sort((a, b) => a.spec.slot - b.spec.slot);
 
+  const metric = basisMetric(lab.basis);
+  const expiryBoards = expiryBoardsOf(structures, metric, lab.compareStock, chain.spot, capital);
+  const modelCrossovers = modelCrossoversOf(horizons, structures);
+
   return {
     entryDate: chain.tradeDate,
     spot: chain.spot,
@@ -566,7 +614,107 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
     stock,
     issues,
     basis: lab.basis,
+    metric,
+    expiryBoards,
+    modelCrossovers,
   };
+}
+
+function zoneSeriesOf(row: PricedStructure): ZoneSeries | null {
+  if (row.sizing.status === "needsCapitalOverride" || !(row.sizing.packages > 0)) return null;
+  const packages = row.sizing.packages;
+  const strikes = [...new Set(row.legs.map((leg) => leg.strike))].sort((a, b) => a - b);
+  const last = strikes[strikes.length - 1] ?? 0;
+  const slope =
+    last > 0 ? (expiryPnl(row.legs, row.debit, last + 1) - expiryPnl(row.legs, row.debit, last)) * packages : 0;
+  return {
+    id: row.spec.id,
+    label: row.spec.label,
+    pnl: (spot) => expiryPnl(row.legs, row.debit, spot) * packages,
+    terminalSlope: slope,
+    knots: strikes,
+    plateauFrom: Math.abs(slope) < 1e-6 && last > 0 ? last : null,
+  };
+}
+
+function expiryBoardsOf(
+  structures: readonly StructureEval[],
+  metric: string,
+  compareStock: boolean,
+  spot: number,
+  capital: number,
+): ExpiryBoard[] {
+  const groups = new Map<IsoDate, ZoneSeries[]>();
+  for (const row of structures) {
+    if (row.status !== "priced") continue;
+    const series = zoneSeriesOf(row);
+    if (!series) continue;
+    const list = groups.get(row.spec.expiry) ?? [];
+    list.push(series);
+    groups.set(row.spec.expiry, list);
+  }
+  const expiries = [...groups.keys()];
+  const stock: ZoneSeries | null =
+    compareStock && spot > 0
+      ? {
+          id: "stock",
+          label: "Stock",
+          pnl: (price) => ((price - spot) / spot) * capital,
+          terminalSlope: capital / spot,
+          knots: [],
+          plateauFrom: null,
+        }
+      : null;
+  return expiries.sort().map((expiry) => {
+    const members = groups.get(expiry) ?? [];
+    const series = stock ? [...members, stock] : members;
+    const solved = solveExpiryZones(series);
+    const alone = members.length < 2;
+    const mixed = expiries.length > 1;
+    const exact = !alone || !mixed;
+    let note: string | null = null;
+    if (alone && mixed) note = "Approximate. Zones are exact only for structures that share an expiry.";
+    else if (alone) note = "Only structure on this expiry.";
+    else if (mixed) note = "Exact for structures that share this expiry. Other expiries are not in this ranking.";
+    return {
+      expiry,
+      metric,
+      exact,
+      note,
+      structureIds: series.map((item) => item.id),
+      crossovers: solved.crossovers,
+      zones: solved.zones,
+    };
+  });
+}
+
+function modelCrossoversOf(horizons: readonly HorizonView[], structures: readonly StructureEval[]): ModelCrossover[] {
+  const out: ModelCrossover[] = [];
+  for (const horizon of horizons) {
+    if (horizon.settlement) continue;
+    const sampled = structures.flatMap((row) => {
+      if (row.status !== "priced") return [];
+      const curve = row.curves.find((item) => item.horizonId === horizon.id);
+      if (!curve) return [];
+      return [{ id: row.spec.id, label: row.spec.label, points: curve.points }];
+    });
+    for (const hit of solveSampledCrossovers(sampled)) {
+      out.push({ ...hit, horizonId: horizon.id, approximate: true });
+    }
+  }
+  return out;
+}
+
+export function capitalExpiryPnl(row: PricedStructure, spot: number): number | null {
+  if (row.sizing.status === "needsCapitalOverride" || !(row.sizing.packages > 0)) return null;
+  return expiryPnl(row.legs, row.debit, spot) * row.sizing.packages;
+}
+
+export function bestWhenFor(boards: readonly ExpiryBoard[], id: string): string {
+  const board = boards.find((item) => item.structureIds.includes(id));
+  if (!board) return "never best";
+  const line = bestWhenLine(board.zones, id);
+  return board.exact ? line : `Approximate. ${line}`;
 }
 
 export function expiryPnlAtSpot(
