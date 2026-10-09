@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   CartesianGrid,
   ComposedChart,
@@ -16,52 +16,57 @@ import {
 
 import { formatSignedUsd2 } from "@/lib/format";
 import {
+  CHART_MODES,
+  crossoverCallouts,
+  initialChartSelection,
+  reconcileChartSelection,
+  samplePnl,
+  setChartMode,
+  setFocusHorizon,
+  setHorizons,
+  setStructures,
+  shortHorizon,
+  stockHorizonId,
+  toggleHorizon,
+  toggleStructure,
+  visibleCurves,
+  type ChartMode,
+  type ChartSelection,
+  type CurveView,
+} from "@/lib/strategyLab/chartDisplay";
+import {
   capitalExpiryPnl,
-  crossoverText,
   type ExpiryBoard,
-  type ExpiryCrossover,
   type ExpiryZone,
   type LabEdit,
   type LabEvaluation,
-  type ModelCrossover,
   type PricedStructure,
 } from "@/lib/strategyLab/lab";
 import { LAB_PALETTE, labControl, labLabel } from "@/lib/strategyLab/palette";
 
 type Row = { spot: number; stock?: number } & Record<string, number | undefined>;
 
-function money(n: number | undefined, mask: boolean): string {
+const MODE_HINT: Record<ChartMode, string> = {
+  waterfall: "Every quarter for the rainbow structure, today through a thick expiry line. Other structures are one dashed expiry line.",
+  quarters: "Only the dates you turn on.",
+  expiry: "Settlement P&L only.",
+  today: "Mark to market on the trade date.",
+  span: "Today, one date you pick, and expiry.",
+  dateOverlay: "Every selected structure on one date.",
+  custom: "Any dates and any structures. Changes apply on this chart only.",
+};
+
+function money(n: number | undefined | null, mask: boolean): string {
   if (n == null || !Number.isFinite(n)) return "—";
   return formatSignedUsd2(n, { mask });
 }
 
-function colorOf(evaluation: LabEvaluation, id: string): string {
-  if (id === "stock") return LAB_PALETTE.stock;
-  const row = evaluation.structures.find((item) => item.spec.id === id);
-  return LAB_PALETTE.series[row?.spec.slot ?? 0] ?? LAB_PALETTE.series[0];
+function seriesColor(slot: number): string {
+  return LAB_PALETTE.series[slot] ?? LAB_PALETTE.series[0];
 }
 
-function ChartTip({
-  active,
-  payload,
-  mask,
-}: {
-  active?: boolean;
-  payload?: Array<{ name?: string; value?: number; color?: string; payload?: Row }>;
-  mask: boolean;
-}) {
-  if (!active || !payload?.length) return null;
-  const row = payload[0]?.payload;
-  return (
-    <div className="rounded-md border border-zinc-500 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-100 shadow-lg">
-      <div className="tabular-nums text-zinc-100">Spot {row ? row.spot.toFixed(2) : ""}</div>
-      {payload.map((item) => (
-        <div key={String(item.name)} className="tabular-nums" style={{ color: item.color }}>
-          {item.name} {money(typeof item.value === "number" ? item.value : undefined, mask)}
-        </div>
-      ))}
-    </div>
-  );
+function spotText(n: number): string {
+  return String(Math.round(n * 100) / 100);
 }
 
 /** 1/2/5 × 10^n ticks that bracket the data. */
@@ -90,137 +95,51 @@ function yExtent(values: number[]): { domain: [number, number]; ticks: number[] 
   return niceAxis(lo - pad, hi + pad);
 }
 
-function stockPnl(evaluation: LabEvaluation, spot: number): number {
-  const capital = evaluation.basis.kind === "equalCapital" ? evaluation.basis.capital : evaluation.spot * 100;
-  return ((spot - evaluation.spot) / evaluation.spot) * capital;
+function pricedOf(evaluation: LabEvaluation): PricedStructure[] {
+  return evaluation.structures.filter((row): row is PricedStructure => row.status === "priced" && row.curves.length > 0);
 }
 
-function boardFor(evaluation: LabEvaluation, horizonId: string, series: readonly PricedStructure[]): ExpiryBoard | null {
-  const horizon = evaluation.horizons.find((item) => item.id === horizonId);
-  if (!horizon?.settlement) return null;
-  const ids = new Set(series.map((row) => row.spec.id));
-  return (
-    evaluation.expiryBoards.find((board) => {
-      const options = board.structureIds.filter((id) => id !== "stock");
-      return board.exact && options.length >= 2 && options.every((id) => ids.has(id)) && [...ids].every((id) => options.includes(id));
-    }) ?? null
-  );
-}
-
-function zoneLabel(zone: ExpiryZone): string {
-  if (zone.allLose) return "All lose";
-  if (zone.tied) return "Tie";
-  if (zone.plateau) return `${zone.bestLabel} max`;
-  return zone.bestLabel;
-}
-
-function labelRank(crossovers: readonly { spot: number }[], index: number): number {
-  let rank = 0;
-  for (let i = index - 1; i >= 0; i--) {
-    if (crossovers[index]!.spot - crossovers[i]!.spot > 30) break;
-    rank += 1;
-  }
-  return rank % 4;
-}
-
-function samplePnl(points: readonly { spot: number; pnl: number }[], spot: number): number | null {
-  if (points.length === 0) return null;
-  if (spot <= points[0]!.spot) return points[0]!.pnl;
-  const last = points[points.length - 1]!;
-  if (spot >= last.spot) return last.pnl;
-  for (let i = 0; i < points.length - 1; i++) {
-    const left = points[i]!;
-    const right = points[i + 1]!;
-    if (spot < left.spot || spot > right.spot) continue;
-    const span = right.spot - left.spot;
-    const t = span === 0 ? 0 : (spot - left.spot) / span;
-    return left.pnl + (right.pnl - left.pnl) * t;
-  }
-  return null;
-}
-
-function Marks({
-  evaluation,
-  crossovers,
-  zones,
-  xLo,
-  xHi,
-  model,
-  whatIf,
-  dotY,
+function ChartTip({
+  active,
+  payload,
+  mask,
+  structures,
 }: {
-  evaluation: LabEvaluation;
-  crossovers: readonly ExpiryCrossover[];
-  zones: readonly ExpiryZone[];
-  xLo: number;
-  xHi: number;
-  model: boolean;
-  whatIf: number | null;
-  dotY: (id: string, spot: number) => number | null;
+  active?: boolean;
+  payload?: Array<{ name?: string; value?: number; color?: string; payload?: Row }>;
+  mask: boolean;
+  structures: readonly PricedStructure[];
 }) {
-  const visible = crossovers.filter((crossover) => crossover.spot >= xLo && crossover.spot <= xHi);
+  if (!active || !payload?.length) return null;
+  const spot = payload[0]?.payload?.spot;
   return (
-    <>
-      {zones.map((zone) => {
-        const x1 = Math.max(zone.lo, xLo);
-        const x2 = Math.min(zone.hi ?? xHi, xHi);
-        if (!(x2 > x1)) return null;
-        return (
-          <ReferenceArea
-            key={`${zone.lo}-${zone.hi ?? "inf"}`}
-            x1={x1}
-            x2={x2}
-            fill={colorOf(evaluation, zone.bestId)}
-            fillOpacity={LAB_PALETTE.zoneOpacity}
-            strokeOpacity={0}
-            label={{ value: zoneLabel(zone), position: "center", fill: colorOf(evaluation, zone.bestId), fontSize: 13, fontWeight: 700 }}
-          />
-        );
-      })}
-      {visible.map((crossover, index) => {
-        const y = dotY(crossover.overtakesId, crossover.spot);
-        const text = model ? `${crossoverText(crossover)} (model)` : crossoverText(crossover);
-        const fill = colorOf(evaluation, crossover.overtakesId);
-        const rank = labelRank(visible, index);
-        return (
-          <Fragment key={`${crossover.overtakesId}-${crossover.overtakenId}-${crossover.spot}`}>
-            <ReferenceLine
-              x={crossover.spot}
-              stroke={fill}
-              strokeWidth={2}
-              strokeDasharray="4 3"
-              ifOverflow="visible"
-              label={(props: { viewBox?: { x?: number; y?: number } }) => {
-                const x = (props.viewBox?.x ?? 0) + 3;
-                const top = (props.viewBox?.y ?? 0) + 14 + rank * 12;
-                return (
-                  <text x={x} y={top} fill={fill} fontSize={12} fontWeight={600} transform={`rotate(90 ${x} ${top})`}>
-                    {text}
-                  </text>
-                );
-              }}
-            />
-            {y != null ? <ReferenceDot x={crossover.spot} y={y} r={5} fill={fill} stroke={LAB_PALETTE.dotStroke} strokeWidth={1.5} /> : null}
-          </Fragment>
-        );
-      })}
-      {whatIf != null && whatIf >= xLo && whatIf <= xHi ? (
-        <ReferenceLine x={whatIf} stroke={LAB_PALETTE.whatIf} strokeWidth={2} strokeDasharray="2 2" label={{ value: "What-if", fill: LAB_PALETTE.whatIf, fontSize: 12, position: "insideBottomRight" }} />
+    <div className="max-w-xs rounded-md border border-zinc-500 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-100 shadow-lg">
+      <div className="tabular-nums text-zinc-50">Spot {spot != null ? spot.toFixed(2) : ""}</div>
+      {payload.map((item) => (
+        <div key={String(item.name)} className="tabular-nums" style={{ color: item.color }}>
+          {item.name} {money(typeof item.value === "number" ? item.value : undefined, mask)}
+        </div>
+      ))}
+      {spot != null ? (
+        <div className="mt-1 border-t border-zinc-600 pt-1">
+          <div className="text-zinc-300">At expiry</div>
+          {structures.map((row) => (
+            <div key={row.spec.id} className="tabular-nums" style={{ color: seriesColor(row.spec.slot) }}>
+              {row.spec.label} {money(capitalExpiryPnl(row, spot), mask)}
+            </div>
+          ))}
+        </div>
       ) : null}
-    </>
+    </div>
   );
 }
 
-function shortHorizon(label: string): string {
-  return label.split(" · ")[0] ?? label;
-}
-
-function spotText(n: number): string {
-  return String(Math.round(n * 100) / 100);
-}
-
-function pnlAt(points: readonly { spot: number; pnl: number }[] | undefined, spot: number): number | undefined {
-  return points?.find((point) => point.spot === spot)?.pnl;
+function Swatch({ color, width, dash }: { color: string; width: number; dash?: string }) {
+  return (
+    <svg width="28" height="10" aria-hidden className="shrink-0">
+      <line x1="0" y1="5" x2="28" y2="5" stroke={color} strokeWidth={Math.min(width, 4)} strokeDasharray={dash} strokeLinecap="round" />
+    </svg>
+  );
 }
 
 export function LabCharts({
@@ -234,66 +153,80 @@ export function LabCharts({
   whatIfSpot: number | null;
   onEdit: (edit: LabEdit) => void;
 }) {
-  const [view, setView] = useState<"grid" | "overlay" | "structure">("grid");
-  const [scrub, setScrub] = useState(0);
+  const priced = pricedOf(evaluation);
+  const [selection, setSelection] = useState<ChartSelection>(() => initialChartSelection(evaluation));
+  const [showCrossovers, setShowCrossovers] = useState(true);
+  const [showZones, setShowZones] = useState(false);
+  const [showStrikes, setShowStrikes] = useState(false);
+  const [showBreakevens, setShowBreakevens] = useState(false);
   const [minDraft, setMinDraft] = useState<string | null>(null);
   const [maxDraft, setMaxDraft] = useState<string | null>(null);
-  const priced = evaluation.structures.filter((s): s is PricedStructure => s.status === "priced" && s.curves.length > 0);
+  const knownStructures = useRef<string[] | null>(null);
+  const knownHorizons = useRef<string[] | null>(null);
+  const liveStructures = priced.map((row) => row.spec.id);
+  const liveHorizons = evaluation.horizons.map((horizon) => horizon.id);
+  const structureKey = liveStructures.join("\n");
+  const horizonKey = liveHorizons.join("\n");
+
+  useEffect(() => {
+    const structures = structureKey ? structureKey.split("\n") : [];
+    const horizons = horizonKey ? horizonKey.split("\n") : [];
+    const prevStructures = knownStructures.current;
+    const prevHorizons = knownHorizons.current;
+    knownStructures.current = structures;
+    knownHorizons.current = horizons;
+    if (prevStructures == null || prevHorizons == null) return;
+    setSelection((prev) =>
+      reconcileChartSelection(prev, { structures, horizons }, { structures: prevStructures, horizons: prevHorizons }),
+    );
+  }, [structureKey, horizonKey]);
+
+  const curves = visibleCurves(evaluation, selection);
+  const selected = priced.filter((row) => selection.structureIds.includes(row.spec.id));
   const xLo = evaluation.spotWindow.min;
   const xHi = evaluation.spotWindow.max;
   const inside = (spot: number) => spot >= xLo - 1e-8 && spot <= xHi + 1e-8;
-  const sharedValues: number[] = [];
-  for (const structure of priced) {
-    for (const curve of structure.curves) {
-      for (const point of curve.points) if (inside(point.spot)) sharedValues.push(point.pnl);
-    }
-  }
-  for (const series of evaluation.stock) {
-    for (const point of series.points) if (inside(point.spot)) sharedValues.push(point.pnl);
-  }
-  for (const board of evaluation.expiryBoards) {
-    for (const structure of priced) {
-      if (!board.structureIds.includes(structure.spec.id)) continue;
-      for (const spot of [xLo, xHi, ...board.crossovers.map((crossover) => crossover.spot)]) {
-        if (!inside(spot)) continue;
-        const pnl = capitalExpiryPnl(structure, spot);
-        if (pnl != null) sharedValues.push(pnl);
-      }
-    }
-  }
-  const sharedAxis = yExtent(sharedValues);
-  if (!sharedAxis || priced.length === 0) {
-    return <p className="text-sm text-zinc-500">Add a structure to draw P&amp;L by horizon.</p>;
+  const stockId = stockHorizonId(evaluation, curves);
+  const stock = stockId ? evaluation.stock.find((series) => series.horizonId === stockId) : undefined;
+
+  if (priced.length === 0) {
+    return <p className="text-sm text-zinc-700 dark:text-zinc-300">Add a structure to draw P&amp;L by horizon.</p>;
   }
 
-  const panels = evaluation.horizons.flatMap((horizon) => {
-    const series = priced.filter((structure) => structure.curves.some((curve) => curve.horizonId === horizon.id));
-    if (series.length === 0) return [];
-    const board = boardFor(evaluation, horizon.id, series);
-    const stock = evaluation.stock.find((item) => item.horizonId === horizon.id);
-    const spots = board
-      ? extendedSpots(xLo, xHi, board, evaluation.spot)
-      : (series[0]!.curves.find((curve) => curve.horizonId === horizon.id)?.points.map((point) => point.spot).filter(inside) ?? []);
-    const rows: Row[] = spots.map((spot) => {
-      const row: Row = { spot };
-      for (const structure of series) {
-        if (board) row[structure.spec.id] = capitalExpiryPnl(structure, spot) ?? undefined;
-        else row[structure.spec.id] = pnlAt(structure.curves.find((curve) => curve.horizonId === horizon.id)?.points, spot);
-      }
-      if (stock) row.stock = board ? stockPnl(evaluation, spot) : pnlAt(stock.points, spot);
-      return row;
-    });
-    const modelMarks: ModelCrossover[] = board ? [] : evaluation.modelCrossovers.filter((item) => item.horizonId === horizon.id);
-    const dotY = (id: string, spot: number) => {
-      if (id === "stock") return stockPnl(evaluation, spot);
-      const row = series.find((structure) => structure.spec.id === id);
-      if (!row) return null;
-      if (board) return capitalExpiryPnl(row, spot);
-      const curve = row.curves.find((item) => item.horizonId === horizon.id);
-      return curve ? samplePnl(curve.points, spot) : null;
-    };
-    return [{ horizon, series, board, stock, rows, modelMarks, dotY }];
+  const spots = (evaluation.axis.length > 0 ? evaluation.axis : (priced[0]?.curves[0]?.points.map((point) => point.spot) ?? [])).filter(inside);
+  const rows: Row[] = spots.map((spot) => {
+    const row: Row = { spot };
+    for (const curve of curves) {
+      const structure = priced.find((item) => item.spec.id === curve.structureId);
+      const points = structure?.curves.find((item) => item.horizonId === curve.horizonId)?.points;
+      const pnl = points ? samplePnl(points, spot) : null;
+      if (pnl != null) row[curve.key] = pnl;
+    }
+    if (stock) {
+      const pnl = samplePnl(stock.points, spot);
+      if (pnl != null) row.stock = pnl;
+    }
+    return row;
   });
+
+  const yValues: number[] = [];
+  for (const row of rows) {
+    for (const curve of curves) {
+      const value = row[curve.key];
+      if (typeof value === "number") yValues.push(value);
+    }
+    if (typeof row.stock === "number") yValues.push(row.stock);
+  }
+  const yAxis = yExtent(yValues);
+  const callouts = showCrossovers ? crossoverCallouts(evaluation, curves, { min: xLo, max: xHi }) : [];
+  const zones = showZones ? zoneBands(evaluation, curves, xLo, xHi) : [];
+  const dateChoices = [...evaluation.horizons].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.settlement ? 1 : -1));
+  const multiDates = selection.mode === "quarters" || selection.mode === "custom";
+  const singleDate = selection.mode === "span" || selection.mode === "dateOverlay";
+  const singleChoices =
+    selection.mode === "span"
+      ? dateChoices.filter((horizon) => !horizon.settlement && horizon.date !== evaluation.entryDate)
+      : dateChoices;
 
   const commitWindow = (minText: string, maxText: string) => {
     const min = Number(minText);
@@ -305,69 +238,60 @@ export function LabCharts({
     setMaxDraft(null);
   };
 
-  const overlayRows = (() => {
-    const spots = priced[0]!.curves[0]?.points.map((point) => point.spot).filter(inside) ?? [];
-    return spots.map((spot) => {
-      const row: Row = { spot };
-      for (const panel of panels) {
-        for (const structure of panel.series) {
-          const key = `${structure.spec.id}@@${panel.horizon.id}`;
-          if (panel.board) row[key] = capitalExpiryPnl(structure, spot) ?? undefined;
-          else row[key] = pnlAt(structure.curves.find((curve) => curve.horizonId === panel.horizon.id)?.points, spot);
-        }
-      }
-      const expiry = panels.find((panel) => panel.board);
-      if (expiry?.stock) row.stock = stockPnl(evaluation, spot);
-      return row;
-    });
-  })();
-  const expiryPanel = panels.find((panel) => panel.board);
-  const scrubIndex = Math.min(scrub, Math.max(panels.length - 1, 0));
-  const scrubbed = panels[scrubIndex];
-  const structureBoards = priced.map((structure) => {
-    const series = LAB_PALETTE.series[structure.spec.slot] ?? LAB_PALETTE.series[0];
-    const rows = overlayRows.map((source) => {
-      const row: Row = { spot: source.spot };
-      for (const panel of panels) {
-        if (!panel.series.some((item) => item.spec.id === structure.spec.id)) continue;
-        row[panel.horizon.id] = panel.board
-          ? (capitalExpiryPnl(structure, source.spot) ?? undefined)
-          : pnlAt(structure.curves.find((curve) => curve.horizonId === panel.horizon.id)?.points, source.spot);
-      }
-      return row;
-    });
-    return { structure, series, rows };
-  });
+  const readoutSpot = whatIfSpot ?? evaluation.spot;
+  const strikeSpots = showStrikes
+    ? [...new Set(selected.flatMap((row) => row.legs.map((leg) => leg.strike)))].filter(inside).sort((a, b) => a - b)
+    : [];
+  const breakevens = showBreakevens
+    ? selected.flatMap((row) => row.risk.breakevens.filter(inside).map((spot) => ({ spot, id: row.spec.id, color: seriesColor(row.spec.slot) })))
+    : [];
 
   return (
-    <div className="space-y-3">
+    <div className="relative left-1/2 w-screen max-w-[100vw] -translate-x-1/2 space-y-3 px-4 sm:px-6" data-chart-mode={selection.mode}>
+      <div id="chart-display" role="group" aria-label="Chart display" className="flex flex-wrap gap-1.5">
+        {CHART_MODES.map((mode) => (
+          <button
+            key={mode.id}
+            type="button"
+            aria-pressed={selection.mode === mode.id}
+            onClick={() => setSelection((prev) => setChartMode(prev, mode.id))}
+            className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+              selection.mode === mode.id
+                ? "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950"
+                : "border border-zinc-500 text-zinc-800 hover:border-zinc-700 dark:border-zinc-400 dark:text-zinc-100 dark:hover:border-zinc-200"
+            }`}
+          >
+            {mode.label}
+          </button>
+        ))}
+      </div>
+      <p className="text-xs text-zinc-700 dark:text-zinc-300">{MODE_HINT[selection.mode]}</p>
+
+      <StructurePicker
+        mode={selection.mode}
+        priced={priced}
+        selection={selection}
+        onToggle={(id) => setSelection((prev) => toggleStructure(prev, id))}
+        onSet={(ids) => setSelection((prev) => setStructures(prev, ids))}
+      />
+
+      {multiDates || (singleDate && singleChoices.length > 0) ? (
+        <DatePicker
+          mode={selection.mode}
+          horizons={singleDate ? singleChoices : dateChoices}
+          selection={selection}
+          multi={multiDates}
+          onToggle={(id) => setSelection((prev) => toggleHorizon(prev, id))}
+          onSet={(ids) => setSelection((prev) => setHorizons(prev, ids))}
+          onFocus={(id) => setSelection((prev) => setFocusHorizon(prev, id))}
+        />
+      ) : null}
+
       <div className="flex flex-wrap items-end gap-2">
-        <div className="flex rounded-full border border-zinc-400 p-0.5">
-          <button
-            type="button"
-            aria-pressed={view === "grid"}
-            onClick={() => setView("grid")}
-            className={`rounded-full px-3 py-1 text-xs font-semibold ${view === "grid" ? "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950" : "text-zinc-700 dark:text-zinc-200"}`}
-          >
-            Grid
-          </button>
-          <button
-            type="button"
-            aria-pressed={view === "overlay"}
-            onClick={() => setView("overlay")}
-            className={`rounded-full px-3 py-1 text-xs font-semibold ${view === "overlay" ? "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950" : "text-zinc-700 dark:text-zinc-200"}`}
-          >
-            Overlay
-          </button>
-          <button
-            type="button"
-            aria-pressed={view === "structure"}
-            onClick={() => setView("structure")}
-            className={`rounded-full px-3 py-1 text-xs font-semibold ${view === "structure" ? "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950" : "text-zinc-700 dark:text-zinc-200"}`}
-          >
-            By structure
-          </button>
-        </div>
+        <Toggle on={showCrossovers} onClick={() => setShowCrossovers((value) => !value)} label="Crossovers" />
+        <Toggle on={showZones} onClick={() => setShowZones((value) => !value)} label="Zones" />
+        <Toggle on={showStrikes} onClick={() => setShowStrikes((value) => !value)} label="Strikes" />
+        <Toggle on={showBreakevens} onClick={() => setShowBreakevens((value) => !value)} label="Breakevens" />
         <label className={labLabel}>
           Min spot
           <input
@@ -410,103 +334,110 @@ export function LabCharts({
           Fit all crossovers
         </button>
         <p className="pb-1 text-xs text-zinc-700 dark:text-zinc-300">
-          {evaluation.spotWindow.source === "fit" ? "Fitted to crossovers, breakevens, strikes, and spot." : "Typed spot window."} Panels share both axes.
+          {evaluation.spotWindow.source === "fit" ? "Fitted to crossovers, breakevens, strikes, and spot." : "Typed spot window."} Spot stays on.
         </p>
       </div>
-      <div className="flex flex-wrap gap-3">
-        {priced.map((structure) => (
-          <span key={structure.spec.id} className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-            <span
-              className="inline-block h-2.5 w-6 rounded-sm"
-              style={{ backgroundColor: LAB_PALETTE.series[structure.spec.slot] ?? LAB_PALETTE.series[0] }}
-            />
-            {structure.spec.label}
-          </span>
-        ))}
-        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-          <span className="inline-block h-0.5 w-6 border-t-2 border-dashed" style={{ borderColor: LAB_PALETTE.stock }} />
-          Stock
-        </span>
-      </div>
 
-      {view === "overlay" ? (
-        <section id="h-overlay" className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
-          <h3 className="mb-1 text-sm font-semibold text-zinc-50">Quarters overlaid</h3>
-          <p className="mb-2 text-xs text-zinc-300">
-            Each structure keeps its chart color. Earlier quarters are dashed and expiry is the solid line. Expiry crossover labels are exact. Marks on the other dates stay on the grid and are labeled model-based.
-          </p>
-          <div className="mb-2 flex flex-wrap gap-3">
-            {priced.map((structure) => (
-              <span key={structure.spec.id} className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-100">
-                <span
-                  className="inline-block h-2.5 w-6 rounded-sm"
-                  style={{ backgroundColor: LAB_PALETTE.series[structure.spec.slot] ?? LAB_PALETTE.series[0] }}
-                />
-                {structure.spec.label}
-              </span>
-            ))}
-          </div>
-          <div className="h-[32rem] w-full">
+      {curves.length === 0 || !yAxis ? (
+        <p className="text-sm text-zinc-700 dark:text-zinc-300">Select a structure and a date to draw P&amp;L.</p>
+      ) : (
+        <section className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
+          <div className="h-[70vh] min-h-[36rem] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={overlayRows} margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
+              <ComposedChart data={rows} margin={{ top: 16, right: 16, left: 8, bottom: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={LAB_PALETTE.grid} />
                 <XAxis
                   dataKey="spot"
                   type="number"
                   domain={[xLo, xHi]}
-                  tickFormatter={(v: number) => v.toFixed(0)}
+                  tickFormatter={(value: number) => value.toFixed(0)}
                   allowDataOverflow
-                  tick={{ fill: LAB_PALETTE.axis, fontSize: 12 }}
+                  tick={{ fill: LAB_PALETTE.axis, fontSize: 13 }}
                   axisLine={{ stroke: LAB_PALETTE.axisLine }}
                   tickLine={{ stroke: LAB_PALETTE.axisLine }}
                 />
                 <YAxis
-                  domain={sharedAxis.domain}
-                  ticks={sharedAxis.ticks}
-                  tickFormatter={(v: number) => (masked ? "XXXXX" : formatSignedUsd2(v))}
-                  width={88}
+                  domain={yAxis.domain}
+                  ticks={yAxis.ticks}
+                  tickFormatter={(value: number) => (masked ? "XXXXX" : formatSignedUsd2(value))}
+                  width={96}
                   allowDataOverflow
-                  tick={{ fill: LAB_PALETTE.axis, fontSize: 12 }}
+                  tick={{ fill: LAB_PALETTE.axis, fontSize: 13 }}
                   axisLine={{ stroke: LAB_PALETTE.axisLine }}
                   tickLine={{ stroke: LAB_PALETTE.axisLine }}
                 />
-                <Tooltip content={<ChartTip mask={masked} />} />
-                {expiryPanel?.board ? (
-                  <Marks
-                    evaluation={evaluation}
-                    crossovers={expiryPanel.board.crossovers}
-                    zones={expiryPanel.board.zones}
-                    xLo={xLo}
-                    xHi={xHi}
-                    model={false}
-                    whatIf={whatIfSpot}
-                    dotY={expiryPanel.dotY}
+                <Tooltip
+                  content={<ChartTip mask={masked} structures={selected} />}
+                  cursor={{ stroke: LAB_PALETTE.spot, strokeWidth: 1.5 }}
+                />
+                {zones.map((zone) => (
+                  <ReferenceArea
+                    key={zone.key}
+                    x1={zone.x1}
+                    x2={zone.x2}
+                    fill={zone.color}
+                    fillOpacity={LAB_PALETTE.zoneOpacity}
+                    strokeOpacity={0}
+                  />
+                ))}
+                {strikeSpots.map((strike) => (
+                  <ReferenceLine key={strike} x={strike} stroke={LAB_PALETTE.strike} strokeWidth={1} strokeDasharray="3 3" />
+                ))}
+                {callouts.map((callout) => {
+                  const y = calloutY(priced, curves, callout.horizonId, callout.structureId, callout.spot);
+                  if (y == null) return null;
+                  const color = curves.find((curve) => curve.structureId === callout.structureId && curve.horizonId === callout.horizonId)?.color ?? LAB_PALETTE.axis;
+                  return (
+                    <ReferenceDot
+                      key={`${callout.horizonId}-${callout.n}`}
+                      x={callout.spot}
+                      y={y}
+                      r={10}
+                      fill={color}
+                      stroke={LAB_PALETTE.dotStroke}
+                      strokeWidth={1.5}
+                      label={{ value: String(callout.n), position: "center", fill: "#09090b", fontSize: 11, fontWeight: 700 }}
+                    />
+                  );
+                })}
+                {breakevens.map((mark) => (
+                  <ReferenceDot key={`${mark.id}-${mark.spot}`} x={mark.spot} y={0} r={4} fill={mark.color} stroke={LAB_PALETTE.dotStroke} strokeWidth={1} />
+                ))}
+                <ReferenceLine y={0} stroke={LAB_PALETTE.zero} strokeWidth={1.5} />
+                <ReferenceLine
+                  x={evaluation.spot}
+                  stroke={LAB_PALETTE.spot}
+                  strokeWidth={2}
+                  strokeDasharray="5 5"
+                  label={{ value: "Spot", fill: LAB_PALETTE.spot, fontSize: 12, position: "insideTopRight" }}
+                />
+                {whatIfSpot != null && whatIfSpot >= xLo && whatIfSpot <= xHi ? (
+                  <ReferenceLine
+                    x={whatIfSpot}
+                    stroke={LAB_PALETTE.whatIf}
+                    strokeWidth={2}
+                    strokeDasharray="2 2"
+                    label={{ value: "What-if", fill: LAB_PALETTE.whatIf, fontSize: 12, position: "insideBottomRight" }}
                   />
                 ) : null}
-                <ReferenceLine y={0} stroke={LAB_PALETTE.zero} strokeWidth={1.5} />
-                <ReferenceLine x={evaluation.spot} stroke={LAB_PALETTE.spot} strokeWidth={2} strokeDasharray="5 5" />
-                {panels.map((panel, index) =>
-                  panel.series.map((structure) => (
-                    <Line
-                      key={`${structure.spec.id}-${panel.horizon.id}`}
-                      type="linear"
-                      dataKey={`${structure.spec.id}@@${panel.horizon.id}`}
-                      name={`${structure.spec.label} ${shortHorizon(panel.horizon.label)}`}
-                      stroke={LAB_PALETTE.series[structure.spec.slot] ?? LAB_PALETTE.series[0]}
-                      strokeDasharray={panel.board ? undefined : overlayDash(index)}
-                      strokeOpacity={panel.board ? 1 : 0.85}
-                      legendType="none"
-                      dot={false}
-                      strokeWidth={panel.board ? LAB_PALETTE.line : 2}
-                      isAnimationActive={false}
-                    />
-                  )),
-                )}
-                {expiryPanel?.stock ? (
+                {curves.map((curve) => (
+                  <Line
+                    key={curve.key}
+                    type="linear"
+                    dataKey={curve.key}
+                    name={curve.name}
+                    stroke={curve.color}
+                    strokeDasharray={curve.dash}
+                    dot={false}
+                    strokeWidth={curve.width}
+                    isAnimationActive={false}
+                  />
+                ))}
+                {stock ? (
                   <Line
                     type="linear"
                     dataKey="stock"
-                    name="Stock"
+                    name={`Stock · ${shortHorizon(evaluation.horizons.find((horizon) => horizon.id === stockId)?.label ?? "Stock")}`}
                     stroke={LAB_PALETTE.stock}
                     strokeDasharray="6 4"
                     dot={false}
@@ -517,275 +448,128 @@ export function LabCharts({
               </ComposedChart>
             </ResponsiveContainer>
           </div>
-        </section>
-      ) : view === "structure" && scrubbed ? (
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <label className={`min-w-48 flex-1 ${labLabel}`}>
-              Horizon
-              <input
-                aria-label="Horizon scrubber"
-                type="range"
-                min={0}
-                max={Math.max(panels.length - 1, 0)}
-                step={1}
-                value={scrubIndex}
-                onChange={(event) => setScrub(Number(event.target.value))}
-                className="mt-1 block w-full accent-zinc-100"
-              />
-            </label>
-            <p className="text-xs font-semibold text-zinc-100">{scrubbed.horizon.label}</p>
-          </div>
-          <section className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
-            <h3 className="mb-1 text-sm font-semibold text-zinc-50">All structures on this date</h3>
-            <div className="h-[22rem] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={scrubbed.rows} margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={LAB_PALETTE.grid} />
-                  <XAxis
-                    dataKey="spot"
-                    type="number"
-                    domain={[xLo, xHi]}
-                    tickFormatter={(v: number) => v.toFixed(0)}
-                    allowDataOverflow
-                    tick={{ fill: LAB_PALETTE.axis, fontSize: 12 }}
-                    axisLine={{ stroke: LAB_PALETTE.axisLine }}
-                    tickLine={{ stroke: LAB_PALETTE.axisLine }}
-                  />
-                  <YAxis
-                    domain={sharedAxis.domain}
-                    ticks={sharedAxis.ticks}
-                    tickFormatter={(v: number) => (masked ? "XXXXX" : formatSignedUsd2(v))}
-                    width={88}
-                    allowDataOverflow
-                    tick={{ fill: LAB_PALETTE.axis, fontSize: 12 }}
-                    axisLine={{ stroke: LAB_PALETTE.axisLine }}
-                    tickLine={{ stroke: LAB_PALETTE.axisLine }}
-                  />
-                  <Tooltip content={<ChartTip mask={masked} />} />
-                  {scrubbed.board ? (
-                    <Marks
-                      evaluation={evaluation}
-                      crossovers={scrubbed.board.crossovers}
-                      zones={scrubbed.board.zones}
-                      xLo={xLo}
-                      xHi={xHi}
-                      model={false}
-                      whatIf={whatIfSpot}
-                      dotY={scrubbed.dotY}
-                    />
-                  ) : (
-                    <Marks
-                      evaluation={evaluation}
-                      crossovers={scrubbed.modelMarks}
-                      zones={[]}
-                      xLo={xLo}
-                      xHi={xHi}
-                      model
-                      whatIf={null}
-                      dotY={scrubbed.dotY}
-                    />
-                  )}
-                  <ReferenceLine y={0} stroke={LAB_PALETTE.zero} strokeWidth={1.5} />
-                  <ReferenceLine x={evaluation.spot} stroke={LAB_PALETTE.spot} strokeWidth={2} strokeDasharray="5 5" />
-                  {scrubbed.series.map((structure) => (
-                    <Line
-                      key={structure.spec.id}
-                      type="linear"
-                      dataKey={structure.spec.id}
-                      name={structure.spec.label}
-                      stroke={LAB_PALETTE.series[structure.spec.slot] ?? LAB_PALETTE.series[0]}
-                      dot={false}
-                      strokeWidth={LAB_PALETTE.line}
-                      isAnimationActive={false}
-                    />
-                  ))}
-                  {scrubbed.stock ? (
-                    <Line
-                      type="linear"
-                      dataKey="stock"
-                      name="Stock"
-                      stroke={LAB_PALETTE.stock}
-                      strokeDasharray="6 4"
-                      dot={false}
-                      strokeWidth={LAB_PALETTE.stockLine}
-                      isAnimationActive={false}
-                    />
-                  ) : null}
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
-          </section>
-          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-            {structureBoards.map((board) => (
-              <section key={board.structure.spec.id} className="min-w-0 rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
-                <h3 className="mb-1 text-sm font-semibold" style={{ color: board.series }}>
-                  {board.structure.spec.label}
-                </h3>
-                <p className="mb-2 text-[11px] text-zinc-300">Dates run from pale to the structure color. Expiry is the full color. The scrubbed date is thicker.</p>
-                <div className="mb-2 flex flex-wrap gap-2">
-                  {panels.map((panel, index) => {
-                    const t = panels.length <= 1 ? 1 : index / (panels.length - 1);
-                    const color = panel.horizon.settlement ? board.series : horizonTint(board.series, t);
-                    return (
-                      <span key={panel.horizon.id} className="inline-flex items-center gap-1 text-[10px] text-zinc-200">
-                        <span className="inline-block h-1.5 w-4 rounded-sm" style={{ backgroundColor: color }} />
-                        {shortHorizon(panel.horizon.label)}
-                      </span>
-                    );
-                  })}
-                </div>
-                <div className="h-64 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={board.rows} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={LAB_PALETTE.grid} />
-                      <XAxis
-                        dataKey="spot"
-                        type="number"
-                        domain={[xLo, xHi]}
-                        tickFormatter={(v: number) => v.toFixed(0)}
-                        allowDataOverflow
-                        tick={{ fill: LAB_PALETTE.axis, fontSize: 11 }}
-                        axisLine={{ stroke: LAB_PALETTE.axisLine }}
-                        tickLine={{ stroke: LAB_PALETTE.axisLine }}
-                      />
-                      <YAxis
-                        domain={sharedAxis.domain}
-                        ticks={sharedAxis.ticks}
-                        tickFormatter={(v: number) => (masked ? "XXXXX" : formatSignedUsd2(v))}
-                        width={72}
-                        allowDataOverflow
-                        tick={{ fill: LAB_PALETTE.axis, fontSize: 10 }}
-                        axisLine={{ stroke: LAB_PALETTE.axisLine }}
-                        tickLine={{ stroke: LAB_PALETTE.axisLine }}
-                      />
-                      <Tooltip content={<ChartTip mask={masked} />} />
-                      <ReferenceLine y={0} stroke={LAB_PALETTE.zero} strokeWidth={1.5} />
-                      <ReferenceLine x={evaluation.spot} stroke={LAB_PALETTE.spot} strokeWidth={1.5} strokeDasharray="5 5" />
-                      {panels.map((panel, index) => {
-                        const t = panels.length <= 1 ? 1 : index / (panels.length - 1);
-                        const expiry = panel.horizon.settlement;
-                        const color = expiry ? board.series : horizonTint(board.series, t);
-                        const width = (expiry ? LAB_PALETTE.line : 1.75 + t * 1.25) + (index === scrubIndex ? 1.25 : 0);
-                        return (
-                          <Line
-                            key={panel.horizon.id}
-                            type="linear"
-                            dataKey={panel.horizon.id}
-                            name={shortHorizon(panel.horizon.label)}
-                            stroke={color}
-                            dot={false}
-                            strokeWidth={width}
-                            legendType="none"
-                            isAnimationActive={false}
-                          />
-                        );
-                      })}
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              </section>
+
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
+            {curves.map((curve) => (
+              <span key={curve.key} className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-100">
+                <Swatch color={curve.color} width={curve.width} dash={curve.dash} />
+                {curve.name}
+              </span>
             ))}
+            {stock ? (
+              <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-300">
+                <Swatch color={LAB_PALETTE.stock} width={LAB_PALETTE.stockLine} dash="6 4" />
+                Stock
+              </span>
+            ) : null}
           </div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {panels.map((panel) => {
-            const shorts = [...new Set(panel.series.flatMap((structure) => structure.legs.filter((leg) => leg.ratio < 0).map((leg) => leg.strike)))];
-            const tall = panel.board != null;
+
+          {showCrossovers ? (
+            <ol className="mt-3 grid list-none gap-1.5 sm:grid-cols-2">
+              {callouts.length === 0 ? (
+                <li className="text-xs text-zinc-300">No crossovers on the curves in view.</li>
+              ) : (
+                callouts.map((callout) => {
+                  const color =
+                    curves.find((curve) => curve.structureId === callout.structureId && curve.horizonId === callout.horizonId)?.color ??
+                    LAB_PALETTE.axis;
+                  return (
+                    <li key={`${callout.horizonId}-${callout.n}`} className="flex items-start gap-2 text-sm text-zinc-100">
+                      <span
+                        className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-zinc-950"
+                        style={{ backgroundColor: color }}
+                      >
+                        {callout.n}
+                      </span>
+                      <span>{callout.text}</span>
+                    </li>
+                  );
+                })
+              )}
+            </ol>
+          ) : null}
+
+          <div className="mt-3 border-t border-zinc-700 pt-2">
+            <p className="text-xs font-semibold text-zinc-300">At expiry if spot is {readoutSpot.toFixed(2)}</p>
+            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+              {selected.map((row) => (
+                <span key={row.spec.id} className="text-sm font-semibold tabular-nums" style={{ color: seriesColor(row.spec.slot) }}>
+                  {row.spec.label} {money(capitalExpiryPnl(row, readoutSpot), masked)}
+                </span>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function StructurePicker({
+  mode,
+  priced,
+  selection,
+  onToggle,
+  onSet,
+}: {
+  mode: ChartMode;
+  priced: readonly PricedStructure[];
+  selection: ChartSelection;
+  onToggle: (id: string) => void;
+  onSet: (ids: string[]) => void;
+}) {
+  const ids = priced.map((row) => row.spec.id);
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Structures</span>
+        <TextButton onClick={() => onSet(ids)}>Select all</TextButton>
+        <TextButton onClick={() => onSet([])}>Clear</TextButton>
+      </div>
+      {mode === "custom" ? (
+        <ul className="flex flex-wrap gap-x-4 gap-y-1">
+          {priced.map((row) => {
+            const color = seriesColor(row.spec.slot);
+            const on = selection.structureIds.includes(row.spec.id);
             return (
-              <section
-                id={`h-${panel.horizon.id.replace(/[^a-zA-Z0-9-]/g, "-")}`}
-                key={panel.horizon.id}
-                className={`min-w-0 rounded-xl border border-zinc-600 bg-zinc-950 p-2 text-zinc-100 ${tall ? "md:col-span-2 xl:col-span-3" : ""}`}
+              <li key={row.spec.id}>
+                <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={() => onToggle(row.spec.id)}
+                    className="accent-zinc-100"
+                    style={{ accentColor: color }}
+                  />
+                  <span style={{ color }}>{row.spec.label}</span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {priced.map((row) => {
+            const color = seriesColor(row.spec.slot);
+            const on = selection.structureIds.includes(row.spec.id);
+            const focus = mode === "waterfall" && on && row.spec.id === selection.focusStructureId;
+            return (
+              <button
+                key={row.spec.id}
+                type="button"
+                aria-pressed={on}
+                onClick={() => onToggle(row.spec.id)}
+                className="rounded-full px-3 py-1 text-xs font-semibold text-zinc-950"
+                style={{
+                  backgroundColor: on ? color : "transparent",
+                  color: on ? "#09090b" : color,
+                  border: `1px solid ${color}`,
+                  boxShadow: focus ? `0 0 0 2px #09090b, 0 0 0 4px ${color}` : undefined,
+                }}
               >
-                <h3 className="mb-1 text-xs font-semibold text-zinc-50">{panel.horizon.label}</h3>
-                {panel.board ? (
-                  <p className="mb-1 text-[11px] text-zinc-300">{panel.board.metric}. Shaded band is the leader. Crossovers are exact expiry math.</p>
-                ) : panel.modelMarks.length > 0 ? (
-                  <p className="mb-1 text-[11px] text-zinc-300">Crossover marks are numerical and model-based. They are not exact.</p>
-                ) : null}
-                <div className={tall ? "h-[22rem] w-full" : "h-52 w-full"}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={panel.rows} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={LAB_PALETTE.grid} />
-                      <XAxis
-                        dataKey="spot"
-                        type="number"
-                        domain={[xLo, xHi]}
-                        tickFormatter={(v: number) => v.toFixed(0)}
-                        allowDataOverflow
-                        tick={{ fill: LAB_PALETTE.axis, fontSize: tall ? 12 : 10 }}
-                        axisLine={{ stroke: LAB_PALETTE.axisLine }}
-                        tickLine={{ stroke: LAB_PALETTE.axisLine }}
-                      />
-                      <YAxis
-                        domain={sharedAxis.domain}
-                        ticks={sharedAxis.ticks}
-                        tickFormatter={(v: number) => (masked ? "XXXXX" : formatSignedUsd2(v))}
-                        width={tall ? 80 : 64}
-                        allowDataOverflow
-                        tick={{ fill: LAB_PALETTE.axis, fontSize: tall ? 11 : 9 }}
-                        axisLine={{ stroke: LAB_PALETTE.axisLine }}
-                        tickLine={{ stroke: LAB_PALETTE.axisLine }}
-                      />
-                      <Tooltip content={<ChartTip mask={masked} />} />
-                      {panel.board ? (
-                        <Marks
-                          evaluation={evaluation}
-                          crossovers={panel.board.crossovers}
-                          zones={panel.board.zones}
-                          xLo={xLo}
-                          xHi={xHi}
-                          model={false}
-                          whatIf={whatIfSpot}
-                          dotY={panel.dotY}
-                        />
-                      ) : (
-                        <Marks
-                          evaluation={evaluation}
-                          crossovers={panel.modelMarks}
-                          zones={[]}
-                          xLo={xLo}
-                          xHi={xHi}
-                          model
-                          whatIf={null}
-                          dotY={panel.dotY}
-                        />
-                      )}
-                      <ReferenceLine y={0} stroke={LAB_PALETTE.zero} strokeWidth={1.5} />
-                      <ReferenceLine x={evaluation.spot} stroke={LAB_PALETTE.spot} strokeWidth={1.5} strokeDasharray="5 5" />
-                      {shorts.map((strike) => (
-                        <ReferenceLine key={strike} x={strike} stroke={LAB_PALETTE.strike} strokeWidth={1} strokeDasharray="3 3" />
-                      ))}
-                      {panel.series.map((structure) => (
-                        <Line
-                          key={structure.spec.id}
-                          type="linear"
-                          dataKey={structure.spec.id}
-                          name={structure.spec.label}
-                          stroke={LAB_PALETTE.series[structure.spec.slot] ?? LAB_PALETTE.series[0]}
-                          dot={false}
-                          strokeWidth={LAB_PALETTE.line}
-                          isAnimationActive={false}
-                        />
-                      ))}
-                      {panel.stock ? (
-                        <Line
-                          type="linear"
-                          dataKey="stock"
-                          name="Stock"
-                          stroke={LAB_PALETTE.stock}
-                          strokeDasharray="6 4"
-                          dot={false}
-                          strokeWidth={LAB_PALETTE.stockLine}
-                          isAnimationActive={false}
-                        />
-                      ) : null}
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              </section>
+                {row.spec.label}
+                {focus ? " · rainbow" : ""}
+              </button>
             );
           })}
         </div>
@@ -794,33 +578,154 @@ export function LabCharts({
   );
 }
 
-function mixHex(from: string, toward: string, towardAmt: number): string {
-  const channels = (hex: string) => [0, 2, 4].map((start) => Number.parseInt(hex.slice(1 + start, 3 + start), 16));
-  const left = channels(from);
-  const right = channels(toward);
-  const mixed = left.map((channel, index) => Math.round(channel * (1 - towardAmt) + right[index]! * towardAmt));
-  return `#${mixed.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+function DatePicker({
+  mode,
+  horizons,
+  selection,
+  multi,
+  onToggle,
+  onSet,
+  onFocus,
+}: {
+  mode: ChartMode;
+  horizons: LabEvaluation["horizons"];
+  selection: ChartSelection;
+  multi: boolean;
+  onToggle: (id: string) => void;
+  onSet: (ids: string[]) => void;
+  onFocus: (id: string) => void;
+}) {
+  const ids = horizons.map((horizon) => horizon.id);
+  const label = mode === "span" ? "Middle date" : mode === "dateOverlay" ? "Date" : "Dates";
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">{label}</span>
+        {multi ? (
+          <>
+            <TextButton onClick={() => onSet(ids)}>Select all</TextButton>
+            <TextButton onClick={() => onSet([])}>Clear</TextButton>
+          </>
+        ) : null}
+      </div>
+      {mode === "custom" ? (
+        <ul className="flex flex-wrap gap-x-4 gap-y-1">
+          {horizons.map((horizon) => (
+            <li key={horizon.id}>
+              <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                <input
+                  type="checkbox"
+                  checked={selection.horizonIds.includes(horizon.id)}
+                  onChange={() => onToggle(horizon.id)}
+                  className="accent-zinc-100"
+                />
+                {shortHorizon(horizon.label)}
+              </label>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {horizons.map((horizon) => {
+            const on = multi ? selection.horizonIds.includes(horizon.id) : selection.focusHorizonId === horizon.id;
+            return (
+              <button
+                key={horizon.id}
+                type="button"
+                aria-pressed={on}
+                onClick={() => (multi ? onToggle(horizon.id) : onFocus(horizon.id))}
+                className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  on
+                    ? "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950"
+                    : "border border-zinc-500 text-zinc-800 dark:border-zinc-400 dark:text-zinc-100"
+                }`}
+              >
+                {shortHorizon(horizon.label)}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
-/** t = 0 is mostly zinc-200; t = 1 is the structure color. */
-function horizonTint(series: string, t: number): string {
-  return mixHex(series, LAB_PALETTE.zero, 0.7 * (1 - t));
+function Toggle({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={onClick}
+      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+        on
+          ? "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950"
+          : "border border-zinc-500 text-zinc-800 dark:border-zinc-400 dark:text-zinc-100"
+      }`}
+    >
+      {label}
+    </button>
+  );
 }
 
-function overlayDash(index: number): string {
-  const dashes = ["2 2", "6 3", "1 4", "8 3", "4 2", "3 3", "10 4", "5 2", "2 5", "7 2"];
-  return dashes[index % dashes.length] ?? "4 3";
+function TextButton({ onClick, children }: { onClick: () => void; children: string }) {
+  return (
+    <button type="button" onClick={onClick} className="text-xs font-semibold text-zinc-800 underline decoration-zinc-500 underline-offset-2 dark:text-zinc-100">
+      {children}
+    </button>
+  );
 }
 
-function extendedSpots(lo: number, hi: number, board: ExpiryBoard, spot: number): number[] {
-  const extras = [
-    spot,
-    ...board.crossovers.map((crossover) => crossover.spot),
-    ...board.zones.flatMap((zone) => [zone.lo, zone.hi ?? hi]),
-  ];
-  const n = 181;
-  const spots = new Set<number>();
-  for (let i = 0; i < n; i++) spots.add(lo + ((hi - lo) * i) / (n - 1));
-  for (const extra of extras) if (extra >= lo && extra <= hi) spots.add(extra);
-  return [...spots].sort((a, b) => a - b);
+function calloutY(
+  priced: readonly PricedStructure[],
+  curves: readonly CurveView[],
+  horizonId: string,
+  structureId: string,
+  spot: number,
+): number | null {
+  if (!curves.some((curve) => curve.structureId === structureId && curve.horizonId === horizonId)) return null;
+  const points = priced.find((row) => row.spec.id === structureId)?.curves.find((curve) => curve.horizonId === horizonId)?.points;
+  return points ? samplePnl(points, spot) : null;
+}
+
+function zoneBands(
+  evaluation: LabEvaluation,
+  curves: readonly CurveView[],
+  xLo: number,
+  xHi: number,
+): { key: string; x1: number; x2: number; color: string }[] {
+  const byHorizon = new Map<string, Set<string>>();
+  for (const curve of curves) {
+    const ids = byHorizon.get(curve.horizonId) ?? new Set<string>();
+    ids.add(curve.structureId);
+    byHorizon.set(curve.horizonId, ids);
+  }
+  const bands: { key: string; x1: number; x2: number; color: string }[] = [];
+  for (const [horizonId, ids] of byHorizon) {
+    const horizon = evaluation.horizons.find((item) => item.id === horizonId);
+    if (!horizon?.settlement || ids.size < 2) continue;
+    const board = boardForVisible(evaluation, ids);
+    if (!board) continue;
+    board.zones.forEach((zone, index) => {
+      const x1 = Math.max(zone.lo, xLo);
+      const x2 = Math.min(zone.hi ?? xHi, xHi);
+      if (!(x2 > x1)) return;
+      bands.push({ key: `${horizonId}-${index}`, x1, x2, color: zoneColor(evaluation, zone) });
+    });
+  }
+  return bands;
+}
+
+function boardForVisible(evaluation: LabEvaluation, ids: ReadonlySet<string>): ExpiryBoard | null {
+  return (
+    evaluation.expiryBoards.find((board) => {
+      const options = board.structureIds.filter((id) => id !== "stock");
+      return board.exact && options.length >= 2 && options.every((id) => ids.has(id));
+    }) ?? null
+  );
+}
+
+function zoneColor(evaluation: LabEvaluation, zone: ExpiryZone): string {
+  if (zone.bestId === "stock") return LAB_PALETTE.stock;
+  const row = evaluation.structures.find((item) => item.spec.id === zone.bestId);
+  return seriesColor(row?.spec.slot ?? 0);
 }
