@@ -42,6 +42,16 @@ export { basisMetric, bestWhenLine, crossoverText, describeSpotCallout, describe
 export type { ExpiryCrossover, ExpiryZone };
 
 export { TEMPLATE_CATALOG };
+export {
+  deltaHighlights,
+  formatModelDelta,
+  highlightFor,
+  modelStrikeDelta,
+  nearestDeltaStrike,
+  strikeChoiceLabel,
+  strikeDeltas,
+  structureDeltaSummary,
+} from "@/lib/strategyLab/strikeDelta";
 export type { TemplateRequest };
 
 export const LAB_LIMITS = { structures: 4, horizons: 24, legs: 6 } as const;

@@ -1,13 +1,11 @@
-import { bsmGreeks, impliedVol } from "@/lib/options/blackScholes";
 import {
-  calendarDaysBetween,
-  findQuote,
   listedStrikes,
   nearestStrike,
   type IsoDate,
   type OptionChain,
   type OptionRight,
 } from "@/lib/optionChain/chain";
+import { nearestDeltaStrike, strikeDeltas } from "@/lib/strategyLab/strikeDelta";
 
 export type StrikeTarget = { readonly by: "strike"; readonly strike: number } | { readonly by: "delta"; readonly delta: number };
 
@@ -30,39 +28,6 @@ type Assumptions = { readonly rate: number; readonly dividendYield: number };
 
 export type ResolvedLeg = { readonly right: OptionRight; readonly strike: number; readonly ratio: number };
 
-function deltaOf(
-  chain: OptionChain,
-  expiry: IsoDate,
-  right: OptionRight,
-  strike: number,
-  assumptions: Assumptions,
-): number | null {
-  const quote = findQuote(chain, expiry, right, strike);
-  if (!quote || quote.mid == null) return null;
-  const days = calendarDaysBetween(chain.tradeDate, expiry);
-  const years = days / 365;
-  if (!(years > 1e-8)) return null;
-  const solved = impliedVol({
-    right,
-    spot: chain.spot,
-    strike,
-    years,
-    rate: assumptions.rate,
-    dividendYield: assumptions.dividendYield,
-    price: quote.mid,
-  });
-  if (!solved.ok) return null;
-  return bsmGreeks({
-    right,
-    spot: chain.spot,
-    strike,
-    years,
-    rate: assumptions.rate,
-    dividendYield: assumptions.dividendYield,
-    vol: solved.vol,
-  }).delta;
-}
-
 function resolveTarget(
   chain: OptionChain,
   expiry: IsoDate,
@@ -77,17 +42,7 @@ function resolveTarget(
     const snapped = nearestStrike(strikes, target.strike);
     return snapped ?? "No listed strike.";
   }
-  let best: number | null = null;
-  let bestDist = Infinity;
-  for (const strike of strikes) {
-    const delta = deltaOf(chain, expiry, right, strike, assumptions);
-    if (delta == null) continue;
-    const dist = Math.abs(Math.abs(delta) - target.delta);
-    if (best == null || dist < bestDist - 1e-6 || (Math.abs(dist - bestDist) <= 1e-6 && (tie === "lower" ? strike < best : strike > best))) {
-      best = strike;
-      bestDist = dist;
-    }
-  }
+  const best = nearestDeltaStrike(strikeDeltas(chain, expiry, right, assumptions), target.delta, tie);
   return best ?? "Could not solve a delta on that expiry.";
 }
 

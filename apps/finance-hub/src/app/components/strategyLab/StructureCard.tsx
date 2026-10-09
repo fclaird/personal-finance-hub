@@ -1,9 +1,20 @@
 "use client";
 
-import { formatExpiryLabel, listedStrikes, type OptionChain } from "@/lib/optionChain/chain";
+import { useMemo, useState } from "react";
+
+import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
+import { formatExpiryLabel, type OptionChain, type OptionRight } from "@/lib/optionChain/chain";
 import { formatNum, formatSignedUsd2, formatUsd2 } from "@/lib/format";
 import type { LabEdit, StructureEval } from "@/lib/strategyLab/lab";
 import { LAB_PALETTE, labControl, labLabel } from "@/lib/strategyLab/palette";
+import {
+  formatModelDelta,
+  nearestDeltaStrike,
+  strikeDeltas,
+  structureDeltaSummary,
+  type DeltaAssumptions,
+  type StrikeDelta,
+} from "@/lib/strategyLab/strikeDelta";
 
 function usd(n: number | null | undefined, mask: boolean): string {
   return formatUsd2(n, { mask });
@@ -22,26 +33,49 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
+function isZebra(row: StructureEval): boolean {
+  const spec = row.spec;
+  if (spec.origin?.request.template === "zebra") return true;
+  return (
+    spec.legs.length === 2 &&
+    spec.legs[0]?.right === "C" &&
+    spec.legs[0]?.ratio === 2 &&
+    spec.legs[1]?.right === "C" &&
+    spec.legs[1]?.ratio === -1
+  );
+}
+
 export function StructureCard({
   chain,
+  assumptions,
   row,
   masked,
   bestWhen,
   onEdit,
 }: {
   chain: OptionChain;
+  assumptions: DeltaAssumptions;
   row: StructureEval;
   masked: boolean;
   bestWhen: string;
-  onEdit: (edit: LabEdit) => void;
+  onEdit: (edit: LabEdit | readonly LabEdit[]) => void;
 }) {
   const spec = row.spec;
   const color = LAB_PALETTE.series[spec.slot] ?? LAB_PALETTE.series[0];
-  const strikesFor = (index: number) => {
-    const leg = spec.legs[index];
-    if (!leg) return [];
-    return listedStrikes(chain, spec.expiry, leg.right);
-  };
+  const [longTarget, setLongTarget] = useState("75");
+  const [shortTarget, setShortTarget] = useState("50");
+  const boards = useMemo(() => {
+    const byRight = new Map<OptionRight, readonly StrikeDelta[]>();
+    for (const leg of spec.legs) {
+      if (!byRight.has(leg.right)) byRight.set(leg.right, strikeDeltas(chain, spec.expiry, leg.right, assumptions));
+    }
+    return byRight;
+  }, [chain, spec.expiry, spec.legs, assumptions]);
+  const summary = structureDeltaSummary(spec.legs, (right, strike) => {
+    const rowDelta = boards.get(right)?.find((item) => item.strike === strike)?.delta;
+    return rowDelta ?? null;
+  });
+  const zebra = isZebra(row);
 
   return (
     <article className="rounded-xl border-2 bg-white p-4 dark:bg-zinc-950" style={{ borderColor: color }}>
@@ -90,21 +124,13 @@ export function StructureCard({
 
       {spec.legs.map((leg, index) => (
         <div key={`${spec.id}-${index}`} className="mb-2 flex items-end gap-2">
-          <label className={`min-w-0 flex-1 ${labLabel}`}>
-            {leg.ratio > 0 ? "Long" : "Short"} {Math.abs(leg.ratio)}× {leg.right === "C" ? "call" : "put"}
-            <select
-              aria-label={`${spec.label} leg ${index + 1} strike`}
-              value={String(leg.strike)}
-              onChange={(e) => onEdit({ kind: "setStrike", id: spec.id, legIndex: index, strike: Number(e.target.value) })}
-              className={`mt-1 block w-full px-2 py-1.5 text-sm tabular-nums ${labControl}`}
-            >
-              {strikesFor(index).map((strike) => (
-                <option key={strike} value={strike}>
-                  {strike}
-                </option>
-              ))}
-            </select>
-          </label>
+          <StrikeSelect
+            label={`${leg.ratio > 0 ? "Long" : "Short"} ${Math.abs(leg.ratio)}× ${leg.right === "C" ? "call" : "put"}`}
+            ariaLabel={`${spec.label} leg ${index + 1} strike`}
+            rows={boards.get(leg.right) ?? []}
+            value={String(leg.strike)}
+            onChange={(strike) => onEdit({ kind: "setStrike", id: spec.id, legIndex: index, strike })}
+          />
           <button
             type="button"
             aria-label={`${spec.label} leg ${index + 1} down`}
@@ -144,6 +170,68 @@ export function StructureCard({
           </label>
         </div>
       ))}
+
+      {[...boards.entries()].map(([right, rows]) => (
+        <DeltaMarkChips key={right} rows={rows} />
+      ))}
+      <p className="mb-1 mt-2 text-sm font-semibold tabular-nums text-zinc-950 dark:text-zinc-50">
+        Approx net Δ {summary.net == null ? "—" : summary.net.toFixed(1)}
+        {summary.ratio == null ? "" : ` · ratio ${summary.ratio.toFixed(2)}`}
+        {summary.legs.length > 0
+          ? ` · ${summary.legs.map((leg) => `${leg.strike} Δ ${leg.delta == null ? "—" : formatModelDelta(leg.delta)}`).join(" / ")}`
+          : ""}
+      </p>
+      <p className="mb-3 text-[11px] text-zinc-600 dark:text-zinc-300">
+        Model delta from the mid, rate, dividend yield, and spot. Approximate. Amber is nearest .75, cyan is nearest .50.
+      </p>
+      {zebra ? (
+        <div className="mb-3 flex flex-wrap items-end gap-2">
+          <label className={labLabel}>
+            Long Δ target
+            <input
+              aria-label={`${spec.label} long delta target`}
+              type="number"
+              min={1}
+              max={99}
+              step={1}
+              value={longTarget}
+              onChange={(event) => setLongTarget(event.target.value)}
+              className={`mt-1 block w-20 px-2 py-1 text-sm tabular-nums ${labControl}`}
+            />
+          </label>
+          <label className={labLabel}>
+            Short Δ target
+            <input
+              aria-label={`${spec.label} short delta target`}
+              type="number"
+              min={1}
+              max={99}
+              step={1}
+              value={shortTarget}
+              onChange={(event) => setShortTarget(event.target.value)}
+              className={`mt-1 block w-20 px-2 py-1 text-sm tabular-nums ${labControl}`}
+            />
+          </label>
+          <button
+            type="button"
+            className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
+            onClick={() => {
+              const calls = boards.get("C") ?? [];
+              const long = nearestDeltaStrike(calls, Number(longTarget) / 100, "lower");
+              const short = nearestDeltaStrike(calls, Number(shortTarget) / 100, "higher");
+              const longIndex = spec.legs.findIndex((leg) => leg.ratio > 0);
+              const shortIndex = spec.legs.findIndex((leg) => leg.ratio < 0);
+              if (long == null || short == null || longIndex < 0 || shortIndex < 0 || long === short) return;
+              onEdit([
+                { kind: "setStrike", id: spec.id, legIndex: longIndex, strike: long },
+                { kind: "setStrike", id: spec.id, legIndex: shortIndex, strike: short },
+              ]);
+            }}
+          >
+            Snap to nearest strike
+          </button>
+        </div>
+      ) : null}
 
       <fieldset className={`mb-3 mt-3 ${labLabel}`}>
         <legend className="mb-1">Entry</legend>
