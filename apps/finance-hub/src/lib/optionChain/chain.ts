@@ -66,6 +66,9 @@ export type ContractQuote = {
   readonly mid: number | null;
   /** Feed IV as a decimal, when the feed printed one. The lab solves its own by default. */
   readonly feedIv: number | null;
+  /** Null when the feed did not send a count. Zero is a real print. */
+  readonly openInterest: number | null;
+  readonly volume: number | null;
 };
 
 export type StrikeRow = {
@@ -106,6 +109,9 @@ export type DraftContract = {
   readonly bid: number | null;
   readonly ask: number | null;
   readonly feedIv: number | null;
+  /** Optional. Absent on older drafts and on feeds that omit the count. */
+  readonly openInterest?: number | null;
+  readonly volume?: number | null;
   /** Null when the feed does not say. Anything other than 100 is dropped. */
   readonly multiplier: number | null;
   /** OSI root. Dropped when it differs from the underlying. */
@@ -132,7 +138,18 @@ function finiteOrNull(n: number | null): number | null {
   return n != null && Number.isFinite(n) ? n : null;
 }
 
-function quoteOf(bid: number | null, ask: number | null, feedIv: number | null): ContractQuote | null {
+function countOrNull(n: number | null | undefined): number | null {
+  if (n == null || !Number.isFinite(n) || n < 0) return null;
+  return Math.round(n);
+}
+
+function quoteOf(
+  bid: number | null,
+  ask: number | null,
+  feedIv: number | null,
+  openInterest: number | null | undefined,
+  volume: number | null | undefined,
+): ContractQuote | null {
   const b = finiteOrNull(bid);
   const a = finiteOrNull(ask);
   const bidOk = b != null && b >= 0 ? b : null;
@@ -140,7 +157,7 @@ function quoteOf(bid: number | null, ask: number | null, feedIv: number | null):
   if (bidOk == null && askOk == null) return null;
   const mid = bidOk != null && askOk != null ? (bidOk + askOk) / 2 : null;
   const iv = feedIv != null && Number.isFinite(feedIv) && feedIv > 0 ? feedIv : null;
-  return { bid: bidOk, ask: askOk, mid, feedIv: iv };
+  return { bid: bidOk, ask: askOk, mid, feedIv: iv, openInterest: countOrNull(openInterest), volume: countOrNull(volume) };
 }
 
 function tighter(a: ContractQuote, b: ContractQuote): ContractQuote {
@@ -183,7 +200,7 @@ export function makeOptionChain(draft: ChainDraft): MakeChainResult {
       excluded += 1;
       continue;
     }
-    const q = quoteOf(c.bid, c.ask, c.feedIv);
+    const q = quoteOf(c.bid, c.ask, c.feedIv, c.openInterest, c.volume);
     if (!q) {
       excluded += 1;
       continue;

@@ -8,6 +8,11 @@ function num(raw: unknown): number | null {
   return raw;
 }
 
+function countField(raw: unknown): number | null {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) return null;
+  return Math.round(raw);
+}
+
 function feedIv(raw: unknown): number | null {
   const n = num(raw);
   if (n == null || n <= 0) return null;
@@ -78,6 +83,8 @@ export function parseSchwabChain(symbol: string, body: unknown, fetchedAt: strin
             bid: num(c.bid),
             ask: num(c.ask),
             feedIv: feedIv(c.volatility),
+            openInterest: countField(c.openInterest),
+            volume: countField(c.totalVolume),
             multiplier,
             root: optionRoot,
           });

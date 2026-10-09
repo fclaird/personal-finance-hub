@@ -61,10 +61,17 @@ export function useStrategyLab() {
     [chain],
   );
 
+  const replace = useCallback((next: LabScenario) => {
+    setLab((prev) => {
+      if (!chain || next.symbol !== chain.symbol) return prev;
+      return next;
+    });
+  }, [chain]);
+
   const evaluation: LabEvaluation | null = useMemo(
     () => (lab && chain ? evaluateLab(lab, chain) : null),
     [lab, chain],
   );
 
-  return { chain, lab, evaluation, loading, error, hint, load, edit };
+  return { chain, lab, evaluation, loading, error, hint, load, edit, replace };
 }

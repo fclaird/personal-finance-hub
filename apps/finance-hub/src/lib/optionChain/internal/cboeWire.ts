@@ -7,6 +7,11 @@ function num(raw: unknown): number | null {
   return raw;
 }
 
+function countField(raw: unknown): number | null {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) return null;
+  return Math.round(raw);
+}
+
 function feedIv(raw: unknown): number | null {
   const n = num(raw);
   if (n == null || n <= 0) return null;
@@ -53,6 +58,8 @@ export function parseCboeChain(symbol: string, body: unknown, fetchedAt: string)
       bid: num(row.bid),
       ask: num(row.ask),
       feedIv: feedIv(row.iv),
+      openInterest: countField(row.open_interest ?? row.openInterest),
+      volume: countField(row.volume),
       multiplier: null,
       root: parsed.underlying,
     });

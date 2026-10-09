@@ -3,17 +3,19 @@
 import { useMemo, useState } from "react";
 
 import { usePrivacy } from "@/app/components/PrivacyProvider";
+import { ChainGrid } from "@/app/components/strategyLab/ChainGrid";
 import { LabCharts } from "@/app/components/strategyLab/LabCharts";
 import { ExpirySummary } from "@/app/components/strategyLab/ExpirySummary";
+import { ScenarioBar } from "@/app/components/strategyLab/ScenarioBar";
 import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
 import { StructureCard } from "@/app/components/strategyLab/StructureCard";
-import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate } from "@/lib/optionChain/chain";
+import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
 import { bestWhenFor, TEMPLATE_CATALOG, type HorizonSpec, type TemplateRequest } from "@/lib/strategyLab/lab";
 import { formatModelDelta, nearestDeltaStrike, strikeDeltas } from "@/lib/strategyLab/strikeDelta";
 import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
 import { useStrategyLab } from "@/lib/strategyLab/useStrategyLab";
 
-type TemplateChoice = "callDebitSpread" | "zebra" | "zebraDelta" | "longCall" | "custom";
+type TemplateChoice = "callDebitSpread" | "zebra" | "zebraDelta" | "longCall" | "syntheticLong" | "shortStrangle" | "custom";
 
 function HorizonBar({
   horizons,
@@ -165,7 +167,7 @@ function yieldText(hint: number): string {
 
 export function StrategyLabPage() {
   const privacy = usePrivacy();
-  const { chain, lab, evaluation, loading, error, hint, load, edit } = useStrategyLab();
+  const { chain, lab, evaluation, loading, error, hint, load, edit, replace } = useStrategyLab();
   const [symbol, setSymbol] = useState("NOW");
   const [template, setTemplate] = useState<TemplateChoice>("callDebitSpread");
   const [expiryPick, setExpiryPick] = useState<string>("");
@@ -184,18 +186,29 @@ export function StrategyLabPage() {
     if (!chain || !expiry) return [];
     return listedStrikes(chain, expiry as IsoDate, "C");
   }, [chain, expiry]);
+  const putStrikes = useMemo(() => {
+    if (!chain || !expiry) return [];
+    return listedStrikes(chain, expiry as IsoDate, "P");
+  }, [chain, expiry]);
   const addBoard = useMemo(() => {
     if (!chain || !expiry || !lab) return [];
     return strikeDeltas(chain, expiry as IsoDate, "C", lab.assumptions);
   }, [chain, expiry, lab]);
+  const putBoard = useMemo(() => {
+    if (!chain || !expiry || !lab) return [];
+    return strikeDeltas(chain, expiry as IsoDate, "P", lab.assumptions);
+  }, [chain, expiry, lab]);
 
   const zebraTargets = template === "zebra" || template === "zebraDelta";
+  const strangle = template === "shortStrangle";
   const zebraAuto = template === "zebraDelta" && longStrike === "" && shortStrike === "";
   const autoLong = zebraAuto ? nearestDeltaStrike(addBoard, 0.75, "lower") : null;
   const autoShort = zebraAuto ? nearestDeltaStrike(addBoard, 0.5, "higher") : null;
-  const longValue =
-    longStrike ||
-    (autoLong != null ? String(autoLong) : (nearestStrike(callStrikes, chain?.spot ?? 0)?.toString() ?? ""));
+  const longBoard = strangle ? putBoard : addBoard;
+  const longFallback = strangle
+    ? nearestStrike(putStrikes, (chain?.spot ?? 0) * 0.85)
+    : (autoLong ?? nearestStrike(callStrikes, chain?.spot ?? 0));
+  const longValue = longStrike || (longFallback != null ? String(longFallback) : "");
   const shortValue =
     shortStrike ||
     (autoShort != null ? String(autoShort) : (nearestStrike(callStrikes, (chain?.spot ?? 0) * 1.2)?.toString() ?? ""));
@@ -214,6 +227,14 @@ export function StrategyLabPage() {
     let request: TemplateRequest;
     if (template === "longCall") {
       request = { template: "longCall", strike: { by: "strike", strike: longN } };
+    } else if (template === "syntheticLong") {
+      request = { template: "syntheticLong", strike: { by: "strike", strike: longN } };
+    } else if (template === "shortStrangle") {
+      request = {
+        template: "shortStrangle",
+        put: { by: "strike", strike: longN },
+        call: { by: "strike", strike: shortN },
+      };
     } else if (template === "custom") {
       request = {
         template: "custom",
@@ -241,7 +262,7 @@ export function StrategyLabPage() {
       kind: "addStructure",
       expiry: isoDate(expiry),
       request,
-      label: zebra ? "ZEBRA" : undefined,
+      label: zebra ? "ZEBRA" : template === "syntheticLong" ? "Synthetic" : template === "shortStrangle" ? "Strangle" : undefined,
       entry: limit.trim() !== "" && Number.isFinite(limitN) ? { kind: "limit", netPerShare: limitN } : { kind: "mid" },
     });
     setLimit("");
@@ -249,9 +270,27 @@ export function StrategyLabPage() {
 
   const capital = lab?.basis.kind === "equalCapital" ? lab.basis.capital : Number(capitalDraft) || 10_000;
   const needsStrikes = true;
-  const needsShort = template !== "longCall";
-  const pickedLong = addBoard.find((row) => String(row.strike) === longValue);
+  const needsShort = template !== "longCall" && template !== "syntheticLong";
+  const pickedLong = longBoard.find((row) => String(row.strike) === longValue);
   const pickedShort = addBoard.find((row) => String(row.strike) === shortValue);
+
+  function addChainLeg(expiryDate: IsoDate, right: OptionRight, strike: number, ratio: number) {
+    if (!lab) return;
+    const open = lab.structures.find(
+      (spec) => spec.expiry === expiryDate && spec.origin?.request.template === "custom" && spec.legs.length < 6,
+    );
+    if (open) {
+      edit({ kind: "addLeg", id: open.id, right, strike, ratio });
+      return;
+    }
+    if (lab.structures.length >= 4) return;
+    edit({
+      kind: "addStructure",
+      expiry: expiryDate,
+      label: "Custom",
+      request: { template: "custom", legs: [{ right, strike, ratio }] },
+    });
+  }
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6">
@@ -414,6 +453,8 @@ export function StrategyLabPage() {
             onEdit={edit}
           />
 
+          <ScenarioBar lab={lab} symbol={chain.symbol} evaluation={evaluation} onRestore={replace} />
+
           {evaluation.issues.length > 0 ? (
             <ul className="space-y-1 text-sm text-amber-800 dark:text-amber-200">
               {evaluation.issues.map((issue, index) => (
@@ -472,17 +513,17 @@ export function StrategyLabPage() {
               </label>
               {needsStrikes ? (
                 <StrikeSelect
-                  label={needsShort ? "Long strike" : "Strike"}
-                  ariaLabel="Long strike"
-                  rows={addBoard}
+                  label={strangle ? "Put strike" : needsShort ? "Long strike" : "Strike"}
+                  ariaLabel={strangle ? "Put strike" : "Long strike"}
+                  rows={longBoard}
                   value={longValue}
                   onChange={(strike) => setLongStrike(String(strike))}
                 />
               ) : null}
               {needsShort ? (
                 <StrikeSelect
-                  label="Short strike"
-                  ariaLabel="Short strike"
+                  label={strangle ? "Call strike" : "Short strike"}
+                  ariaLabel={strangle ? "Call strike" : "Short strike"}
                   rows={addBoard}
                   value={shortValue}
                   onChange={(strike) => setShortStrike(String(strike))}
@@ -509,11 +550,11 @@ export function StrategyLabPage() {
                 Add
               </button>
             </div>
-            <DeltaMarkChips rows={addBoard} />
+            <DeltaMarkChips rows={longBoard} />
             <p className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-300">
               Model delta from the mid, rate, dividend yield, and spot. Approximate.
-              {pickedLong?.delta != null ? ` Long actual Δ ${formatModelDelta(pickedLong.delta)}.` : ""}
-              {needsShort && pickedShort?.delta != null ? ` Short actual Δ ${formatModelDelta(pickedShort.delta)}.` : ""}
+              {pickedLong?.delta != null ? ` ${strangle ? "Put" : "Long"} actual Δ ${formatModelDelta(pickedLong.delta)}.` : ""}
+              {needsShort && pickedShort?.delta != null ? ` ${strangle ? "Call" : "Short"} actual Δ ${formatModelDelta(pickedShort.delta)}.` : ""}
             </p>
             {zebraTargets ? (
               <div className="mt-2 flex flex-wrap items-end gap-2">
@@ -553,6 +594,8 @@ export function StrategyLabPage() {
               </div>
             ) : null}
           </section>
+
+          <ChainGrid chain={chain} assumptions={lab.assumptions} onAddLeg={addChainLeg} />
 
           <div className="grid gap-4 lg:grid-cols-3">
             {evaluation.structures.map((row) => (

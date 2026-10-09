@@ -234,7 +234,8 @@ export function LabCharts({
   whatIfSpot: number | null;
   onEdit: (edit: LabEdit) => void;
 }) {
-  const [view, setView] = useState<"grid" | "overlay">("grid");
+  const [view, setView] = useState<"grid" | "overlay" | "structure">("grid");
+  const [scrub, setScrub] = useState(0);
   const [minDraft, setMinDraft] = useState<string | null>(null);
   const [maxDraft, setMaxDraft] = useState<string | null>(null);
   const priced = evaluation.structures.filter((s): s is PricedStructure => s.status === "priced" && s.curves.length > 0);
@@ -321,6 +322,22 @@ export function LabCharts({
     });
   })();
   const expiryPanel = panels.find((panel) => panel.board);
+  const scrubIndex = Math.min(scrub, Math.max(panels.length - 1, 0));
+  const scrubbed = panels[scrubIndex];
+  const structureBoards = priced.map((structure) => {
+    const series = LAB_PALETTE.series[structure.spec.slot] ?? LAB_PALETTE.series[0];
+    const rows = overlayRows.map((source) => {
+      const row: Row = { spot: source.spot };
+      for (const panel of panels) {
+        if (!panel.series.some((item) => item.spec.id === structure.spec.id)) continue;
+        row[panel.horizon.id] = panel.board
+          ? (capitalExpiryPnl(structure, source.spot) ?? undefined)
+          : pnlAt(structure.curves.find((curve) => curve.horizonId === panel.horizon.id)?.points, source.spot);
+      }
+      return row;
+    });
+    return { structure, series, rows };
+  });
 
   return (
     <div className="space-y-3">
@@ -341,6 +358,14 @@ export function LabCharts({
             className={`rounded-full px-3 py-1 text-xs font-semibold ${view === "overlay" ? "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950" : "text-zinc-700 dark:text-zinc-200"}`}
           >
             Overlay
+          </button>
+          <button
+            type="button"
+            aria-pressed={view === "structure"}
+            onClick={() => setView("structure")}
+            className={`rounded-full px-3 py-1 text-xs font-semibold ${view === "structure" ? "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950" : "text-zinc-700 dark:text-zinc-200"}`}
+          >
+            By structure
           </button>
         </div>
         <label className={labLabel}>
@@ -493,6 +518,176 @@ export function LabCharts({
             </ResponsiveContainer>
           </div>
         </section>
+      ) : view === "structure" && scrubbed ? (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className={`min-w-48 flex-1 ${labLabel}`}>
+              Horizon
+              <input
+                aria-label="Horizon scrubber"
+                type="range"
+                min={0}
+                max={Math.max(panels.length - 1, 0)}
+                step={1}
+                value={scrubIndex}
+                onChange={(event) => setScrub(Number(event.target.value))}
+                className="mt-1 block w-full accent-zinc-100"
+              />
+            </label>
+            <p className="text-xs font-semibold text-zinc-100">{scrubbed.horizon.label}</p>
+          </div>
+          <section className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
+            <h3 className="mb-1 text-sm font-semibold text-zinc-50">All structures on this date</h3>
+            <div className="h-[22rem] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={scrubbed.rows} margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={LAB_PALETTE.grid} />
+                  <XAxis
+                    dataKey="spot"
+                    type="number"
+                    domain={[xLo, xHi]}
+                    tickFormatter={(v: number) => v.toFixed(0)}
+                    allowDataOverflow
+                    tick={{ fill: LAB_PALETTE.axis, fontSize: 12 }}
+                    axisLine={{ stroke: LAB_PALETTE.axisLine }}
+                    tickLine={{ stroke: LAB_PALETTE.axisLine }}
+                  />
+                  <YAxis
+                    domain={sharedAxis.domain}
+                    ticks={sharedAxis.ticks}
+                    tickFormatter={(v: number) => (masked ? "XXXXX" : formatSignedUsd2(v))}
+                    width={88}
+                    allowDataOverflow
+                    tick={{ fill: LAB_PALETTE.axis, fontSize: 12 }}
+                    axisLine={{ stroke: LAB_PALETTE.axisLine }}
+                    tickLine={{ stroke: LAB_PALETTE.axisLine }}
+                  />
+                  <Tooltip content={<ChartTip mask={masked} />} />
+                  {scrubbed.board ? (
+                    <Marks
+                      evaluation={evaluation}
+                      crossovers={scrubbed.board.crossovers}
+                      zones={scrubbed.board.zones}
+                      xLo={xLo}
+                      xHi={xHi}
+                      model={false}
+                      whatIf={whatIfSpot}
+                      dotY={scrubbed.dotY}
+                    />
+                  ) : (
+                    <Marks
+                      evaluation={evaluation}
+                      crossovers={scrubbed.modelMarks}
+                      zones={[]}
+                      xLo={xLo}
+                      xHi={xHi}
+                      model
+                      whatIf={null}
+                      dotY={scrubbed.dotY}
+                    />
+                  )}
+                  <ReferenceLine y={0} stroke={LAB_PALETTE.zero} strokeWidth={1.5} />
+                  <ReferenceLine x={evaluation.spot} stroke={LAB_PALETTE.spot} strokeWidth={2} strokeDasharray="5 5" />
+                  {scrubbed.series.map((structure) => (
+                    <Line
+                      key={structure.spec.id}
+                      type="linear"
+                      dataKey={structure.spec.id}
+                      name={structure.spec.label}
+                      stroke={LAB_PALETTE.series[structure.spec.slot] ?? LAB_PALETTE.series[0]}
+                      dot={false}
+                      strokeWidth={LAB_PALETTE.line}
+                      isAnimationActive={false}
+                    />
+                  ))}
+                  {scrubbed.stock ? (
+                    <Line
+                      type="linear"
+                      dataKey="stock"
+                      name="Stock"
+                      stroke={LAB_PALETTE.stock}
+                      strokeDasharray="6 4"
+                      dot={false}
+                      strokeWidth={LAB_PALETTE.stockLine}
+                      isAnimationActive={false}
+                    />
+                  ) : null}
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+            {structureBoards.map((board) => (
+              <section key={board.structure.spec.id} className="min-w-0 rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
+                <h3 className="mb-1 text-sm font-semibold" style={{ color: board.series }}>
+                  {board.structure.spec.label}
+                </h3>
+                <p className="mb-2 text-[11px] text-zinc-300">Dates run from pale to the structure color. Expiry is the full color. The scrubbed date is thicker.</p>
+                <div className="mb-2 flex flex-wrap gap-2">
+                  {panels.map((panel, index) => {
+                    const t = panels.length <= 1 ? 1 : index / (panels.length - 1);
+                    const color = panel.horizon.settlement ? board.series : horizonTint(board.series, t);
+                    return (
+                      <span key={panel.horizon.id} className="inline-flex items-center gap-1 text-[10px] text-zinc-200">
+                        <span className="inline-block h-1.5 w-4 rounded-sm" style={{ backgroundColor: color }} />
+                        {shortHorizon(panel.horizon.label)}
+                      </span>
+                    );
+                  })}
+                </div>
+                <div className="h-64 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={board.rows} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={LAB_PALETTE.grid} />
+                      <XAxis
+                        dataKey="spot"
+                        type="number"
+                        domain={[xLo, xHi]}
+                        tickFormatter={(v: number) => v.toFixed(0)}
+                        allowDataOverflow
+                        tick={{ fill: LAB_PALETTE.axis, fontSize: 11 }}
+                        axisLine={{ stroke: LAB_PALETTE.axisLine }}
+                        tickLine={{ stroke: LAB_PALETTE.axisLine }}
+                      />
+                      <YAxis
+                        domain={sharedAxis.domain}
+                        ticks={sharedAxis.ticks}
+                        tickFormatter={(v: number) => (masked ? "XXXXX" : formatSignedUsd2(v))}
+                        width={72}
+                        allowDataOverflow
+                        tick={{ fill: LAB_PALETTE.axis, fontSize: 10 }}
+                        axisLine={{ stroke: LAB_PALETTE.axisLine }}
+                        tickLine={{ stroke: LAB_PALETTE.axisLine }}
+                      />
+                      <Tooltip content={<ChartTip mask={masked} />} />
+                      <ReferenceLine y={0} stroke={LAB_PALETTE.zero} strokeWidth={1.5} />
+                      <ReferenceLine x={evaluation.spot} stroke={LAB_PALETTE.spot} strokeWidth={1.5} strokeDasharray="5 5" />
+                      {panels.map((panel, index) => {
+                        const t = panels.length <= 1 ? 1 : index / (panels.length - 1);
+                        const expiry = panel.horizon.settlement;
+                        const color = expiry ? board.series : horizonTint(board.series, t);
+                        const width = (expiry ? LAB_PALETTE.line : 1.75 + t * 1.25) + (index === scrubIndex ? 1.25 : 0);
+                        return (
+                          <Line
+                            key={panel.horizon.id}
+                            type="linear"
+                            dataKey={panel.horizon.id}
+                            name={shortHorizon(panel.horizon.label)}
+                            stroke={color}
+                            dot={false}
+                            strokeWidth={width}
+                            legendType="none"
+                            isAnimationActive={false}
+                          />
+                        );
+                      })}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </section>
+            ))}
+          </div>
+        </div>
       ) : (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {panels.map((panel) => {
@@ -597,6 +792,19 @@ export function LabCharts({
       )}
     </div>
   );
+}
+
+function mixHex(from: string, toward: string, towardAmt: number): string {
+  const channels = (hex: string) => [0, 2, 4].map((start) => Number.parseInt(hex.slice(1 + start, 3 + start), 16));
+  const left = channels(from);
+  const right = channels(toward);
+  const mixed = left.map((channel, index) => Math.round(channel * (1 - towardAmt) + right[index]! * towardAmt));
+  return `#${mixed.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** t = 0 is mostly zinc-200; t = 1 is the structure color. */
+function horizonTint(series: string, t: number): string {
+  return mixHex(series, LAB_PALETTE.zero, 0.7 * (1 - t));
 }
 
 function overlayDash(index: number): string {

@@ -33,6 +33,42 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
+function DollarsAtRisk({ row, onEdit }: { row: StructureEval; onEdit: (edit: LabEdit) => void }) {
+  const spec = row.spec;
+  const templateName = spec.origin?.request.template;
+  const unbounded = row.status === "priced" && row.risk.maxLoss === "unbounded";
+  const synthetic = templateName === "syntheticLong";
+  const strangle = templateName === "shortStrangle";
+  if (!unbounded && !synthetic && !strangle) return null;
+  const required = unbounded || strangle;
+  return (
+    <label className={`mb-3 block ${labLabel}`}>
+      Dollars at risk
+      <input
+        aria-label={`${spec.label} dollars at risk`}
+        type="number"
+        min={1}
+        step="1"
+        placeholder={required ? "Required" : "Optional"}
+        value={spec.capitalOverride ?? ""}
+        onChange={(event) => {
+          const raw = event.target.value.trim();
+          if (raw === "") {
+            onEdit({ kind: "setCapitalOverride", id: spec.id, dollars: null });
+            return;
+          }
+          const dollars = Number(raw);
+          if (Number.isFinite(dollars) && dollars > 0) onEdit({ kind: "setCapitalOverride", id: spec.id, dollars });
+        }}
+        className={`mt-1 block w-32 px-2 py-1.5 text-sm tabular-nums ${labControl}`}
+      />
+      <span className="mt-1 block text-[11px]">
+        {required ? "Required. Undefined risk. No margin formula." : "Blank uses the loss at spot 0."}
+      </span>
+    </label>
+  );
+}
+
 function isZebra(row: StructureEval): boolean {
   const spec = row.spec;
   if (spec.origin?.request.template === "zebra") return true;
@@ -147,6 +183,16 @@ export function StructureCard({
           >
             +
           </button>
+          {spec.origin?.request.template === "custom" ? (
+            <button
+              type="button"
+              aria-label={`${spec.label} drop leg ${index + 1}`}
+              className={`px-2 py-1.5 text-xs font-semibold ${labControl}`}
+              onClick={() => onEdit({ kind: "removeLeg", id: spec.id, legIndex: index })}
+            >
+              Drop
+            </button>
+          ) : null}
           <label className={labLabel}>
             IV %
             <input
@@ -278,6 +324,8 @@ export function StructureCard({
           </label>
         </div>
       </fieldset>
+
+      <DollarsAtRisk row={row} onEdit={onEdit} />
 
       {row.status === "blocked" ? (
         <p className="text-sm text-rose-600">{row.reason}</p>

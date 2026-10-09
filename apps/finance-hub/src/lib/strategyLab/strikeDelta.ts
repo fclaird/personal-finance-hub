@@ -16,13 +16,16 @@ export type StrikeDelta = { readonly strike: number; readonly delta: number | nu
  * Model delta at this expiry. IV is solved from the mid. Call delta is positive;
  * put delta is negative. Null when the mid will not solve. Approximate.
  */
-export function modelStrikeDelta(
+export type ModelStrike = { readonly iv: number; readonly delta: number };
+
+/** IV solved from the mid, and the matching model delta. Null when the mid will not solve. */
+export function modelStrike(
   chain: OptionChain,
   expiry: IsoDate,
   right: OptionRight,
   strike: number,
   assumptions: DeltaAssumptions,
-): number | null {
+): ModelStrike | null {
   const quote = findQuote(chain, expiry, right, strike);
   if (!quote || quote.mid == null) return null;
   const years = calendarDaysBetween(chain.tradeDate, expiry) / 365;
@@ -37,15 +40,28 @@ export function modelStrikeDelta(
     price: quote.mid,
   });
   if (!solved.ok) return null;
-  return bsmGreeks({
-    right,
-    spot: chain.spot,
-    strike,
-    years,
-    rate: assumptions.rate,
-    dividendYield: assumptions.dividendYield,
-    vol: solved.vol,
-  }).delta;
+  return {
+    iv: solved.vol,
+    delta: bsmGreeks({
+      right,
+      spot: chain.spot,
+      strike,
+      years,
+      rate: assumptions.rate,
+      dividendYield: assumptions.dividendYield,
+      vol: solved.vol,
+    }).delta,
+  };
+}
+
+export function modelStrikeDelta(
+  chain: OptionChain,
+  expiry: IsoDate,
+  right: OptionRight,
+  strike: number,
+  assumptions: DeltaAssumptions,
+): number | null {
+  return modelStrike(chain, expiry, right, strike, assumptions)?.delta ?? null;
 }
 
 export function strikeDeltas(

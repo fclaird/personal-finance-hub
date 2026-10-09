@@ -46,6 +46,7 @@ export {
   deltaHighlights,
   formatModelDelta,
   highlightFor,
+  modelStrike,
   modelStrikeDelta,
   nearestDeltaStrike,
   strikeChoiceLabel,
@@ -134,6 +135,8 @@ export type LabEdit =
   | { readonly kind: "setEntry"; readonly id: string; readonly entry: EntryBasis }
   | { readonly kind: "setIvOverride"; readonly id: string; readonly legIndex: number; readonly iv: number | null }
   | { readonly kind: "setCapitalOverride"; readonly id: string; readonly dollars: number | null }
+  | { readonly kind: "addLeg"; readonly id: string; readonly right: OptionRight; readonly strike: number; readonly ratio: number }
+  | { readonly kind: "removeLeg"; readonly id: string; readonly legIndex: number }
   | { readonly kind: "setLabel"; readonly id: string; readonly label: string }
   | { readonly kind: "retarget"; readonly id: string };
 
@@ -336,8 +339,35 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
         ...spec,
         legs: spec.legs.map((leg, i) => (i === edit.legIndex ? { ...leg, ivOverride: edit.iv } : leg)),
       }));
-    case "setCapitalOverride":
-      return mapStructure(lab, edit.id, (spec) => ({ ...spec, capitalOverride: edit.dollars }));
+    case "setCapitalOverride": {
+      const dollars = edit.dollars;
+      if (dollars != null && !(Number.isFinite(dollars) && dollars > 0)) return lab;
+      return mapStructure(lab, edit.id, (spec) => ({ ...spec, capitalOverride: dollars }));
+    }
+    case "addLeg": {
+      if (!Number.isInteger(edit.ratio) || edit.ratio === 0) return lab;
+      return mapStructure(lab, edit.id, (spec) => {
+        if (spec.legs.length >= LAB_LIMITS.legs) return spec;
+        const snapped = nearestStrike(listedStrikes(chain, spec.expiry, edit.right), edit.strike);
+        if (snapped == null) return spec;
+        return {
+          ...spec,
+          origin: spec.origin ? { ...spec.origin, tracking: false } : null,
+          resolveError: null,
+          legs: [...spec.legs, { right: edit.right, strike: snapped, ratio: edit.ratio, ivOverride: null }],
+        };
+      });
+    }
+    case "removeLeg": {
+      const spec = lab.structures.find((item) => item.id === edit.id);
+      if (!spec || edit.legIndex < 0 || edit.legIndex >= spec.legs.length) return lab;
+      if (spec.legs.length <= 1) return { ...lab, structures: lab.structures.filter((item) => item.id !== edit.id) };
+      return mapStructure(lab, edit.id, (current) => ({
+        ...current,
+        origin: current.origin ? { ...current.origin, tracking: false } : null,
+        legs: current.legs.filter((_, index) => index !== edit.legIndex),
+      }));
+    }
     case "setLabel":
       return mapStructure(lab, edit.id, (spec) => ({ ...spec, label: edit.label }));
     case "retarget":

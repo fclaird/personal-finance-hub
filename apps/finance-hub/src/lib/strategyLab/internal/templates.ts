@@ -13,12 +13,16 @@ export type TemplateRequest =
   | { readonly template: "callDebitSpread"; readonly long: StrikeTarget; readonly short: StrikeTarget }
   | { readonly template: "zebra"; readonly long: StrikeTarget; readonly short: StrikeTarget }
   | { readonly template: "longCall"; readonly strike: StrikeTarget }
+  | { readonly template: "syntheticLong"; readonly strike: StrikeTarget }
+  | { readonly template: "shortStrangle"; readonly put: StrikeTarget; readonly call: StrikeTarget }
   | { readonly template: "custom"; readonly legs: readonly { readonly right: OptionRight; readonly strike: number; readonly ratio: number }[] };
 
 export const TEMPLATE_CATALOG = [
   { id: "callDebitSpread", label: "Call debit spread" },
   { id: "zebra", label: "ZEBRA" },
   { id: "longCall", label: "Long call" },
+  { id: "syntheticLong", label: "Synthetic long" },
+  { id: "shortStrangle", label: "Short strangle" },
   { id: "custom", label: "Custom" },
 ] as const;
 
@@ -69,6 +73,34 @@ export function resolveTemplate(
     const strike = resolveTarget(chain, expiry, "C", request.strike, assumptions, "lower");
     if (typeof strike === "string") return { error: strike };
     return { legs: [{ right: "C", strike, ratio: 1 }] };
+  }
+
+  if (request.template === "syntheticLong") {
+    const call = resolveTarget(chain, expiry, "C", request.strike, assumptions, "lower");
+    const put = resolveTarget(chain, expiry, "P", request.strike, assumptions, "lower");
+    if (typeof call === "string") return { error: call };
+    if (typeof put === "string") return { error: put };
+    if (call !== put) return { error: "The call and put did not land on the same strike." };
+    return {
+      legs: [
+        { right: "C", strike: call, ratio: 1 },
+        { right: "P", strike: put, ratio: -1 },
+      ],
+    };
+  }
+
+  if (request.template === "shortStrangle") {
+    const put = resolveTarget(chain, expiry, "P", request.put, assumptions, "lower");
+    const call = resolveTarget(chain, expiry, "C", request.call, assumptions, "higher");
+    if (typeof put === "string") return { error: put };
+    if (typeof call === "string") return { error: call };
+    if (put >= call) return { error: "The put strike has to sit below the call strike." };
+    return {
+      legs: [
+        { right: "P", strike: put, ratio: -1 },
+        { right: "C", strike: call, ratio: -1 },
+      ],
+    };
   }
 
   const long = resolveTarget(chain, expiry, "C", request.long, assumptions, "lower");
