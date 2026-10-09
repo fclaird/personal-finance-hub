@@ -1,0 +1,28 @@
+---
+description: Financial Bridge UI is designed and checked on a dark background first
+alwaysApply: true
+---
+
+# Dark mode first
+
+Financial Bridge follows the system dark theme (`prefers-color-scheme: dark`). The page background is near-black (`#0a0a0a`). Chris uses that theme. Design and verify every UI change against that dark background before treating light mode as done.
+
+## Check it dark
+
+- Screenshots and browser checks for UI work use a dark color scheme, not only a light window.
+- A control that looks fine on white can still fail here. Judge contrast against the surface it actually sits on (`#0a0a0a`, `zinc-950`, or the chart canvas).
+- Body text and form labels need WCAG AA (4.5:1, or 3:1 for large text) on that surface. Borders and icons that mark a control need about 3:1 against the adjacent fill.
+
+## Charts
+
+- Draw chart lines bright and about 2.5–3px. A high-contrast set that stays legible on near-black: bright green, cyan, amber, magenta.
+- Stock or other baselines are a light gray dashed line, not zinc-500/600.
+- Axis text, tick labels, legends, the zero line, spot and strike markers, and crossover labels are bright (`zinc-200` or lighter). Grid lines are visible, not `#000` or a 10% white hairline.
+- Zone fills use the series color at enough opacity to read on the dark canvas.
+- Strategy Lab keeps these in `src/lib/strategyLab/palette.ts`. New lab series use that palette instead of a one-off hex.
+
+## Controls
+
+- Do not leave inputs, selects, or cards on a transparent fill with a `white/10` border. Dark mode needs a solid field fill and a zinc-400-or-lighter border.
+- Native selects should use `color-scheme: dark` so the popup is not a light widget on a black page.
+- Muted labels are zinc-300 on zinc-950, not zinc-500.

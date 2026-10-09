@@ -3,6 +3,7 @@
 import { formatExpiryLabel, listedStrikes, type OptionChain } from "@/lib/optionChain/chain";
 import { formatNum, formatSignedUsd2, formatUsd2 } from "@/lib/format";
 import type { LabEdit, StructureEval } from "@/lib/strategyLab/lab";
+import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
 
 function usd(n: number | null | undefined, mask: boolean): string {
   return formatUsd2(n, { mask });
@@ -15,7 +16,7 @@ function signed(n: number | null | undefined, mask: boolean): string {
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{label}</div>
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">{label}</div>
       <div className="truncate text-sm tabular-nums font-medium">{value}</div>
     </div>
   );
@@ -42,31 +43,31 @@ export function StructureCard({
   };
 
   return (
-    <article className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-zinc-950">
+    <article className={`${labCard} p-4`}>
       <div className="mb-3 flex items-center justify-between gap-2">
         <input
           aria-label={`${spec.label} name`}
           value={spec.label}
           onChange={(e) => onEdit({ kind: "setLabel", id: spec.id, label: e.target.value })}
-          className="w-40 rounded border border-zinc-300 bg-transparent px-2 py-1 text-sm font-semibold dark:border-white/20"
+          className={`w-40 px-2 py-1 text-sm font-semibold ${labControl}`}
         />
         <button
           type="button"
           onClick={() => onEdit({ kind: "removeStructure", id: spec.id })}
-          className="text-xs font-medium text-zinc-500 hover:text-rose-600"
+          className="text-xs font-medium text-zinc-600 hover:text-rose-500 dark:text-zinc-300"
         >
           Remove
         </button>
       </div>
-      <p className="mb-3 text-xs text-zinc-600 dark:text-zinc-300">{bestWhen}</p>
+      <p className="mb-3 text-xs font-medium text-zinc-700 dark:text-zinc-200">{bestWhen}</p>
 
-      <label className="mb-3 block text-xs text-zinc-500">
+      <label className={`mb-3 block ${labLabel}`}>
         Expiry
         <select
           aria-label={`${spec.label} expiry`}
           value={spec.expiry}
           onChange={(e) => onEdit({ kind: "setExpiry", id: spec.id, expiry: e.target.value as typeof spec.expiry })}
-          className="mt-1 block w-full rounded border border-zinc-300 bg-transparent px-2 py-1.5 text-sm dark:border-white/20"
+          className={`mt-1 block w-full px-2 py-1.5 text-sm ${labControl}`}
         >
           {chain.expiries.map((expiry) => (
             <option key={expiry.date} value={expiry.date}>
@@ -78,13 +79,13 @@ export function StructureCard({
 
       {spec.legs.map((leg, index) => (
         <div key={`${spec.id}-${index}`} className="mb-2 flex items-end gap-2">
-          <label className="min-w-0 flex-1 text-xs text-zinc-500">
+          <label className={`min-w-0 flex-1 ${labLabel}`}>
             {leg.ratio > 0 ? "Long" : "Short"} {Math.abs(leg.ratio)}× {leg.right === "C" ? "call" : "put"}
             <select
               aria-label={`${spec.label} leg ${index + 1} strike`}
               value={String(leg.strike)}
               onChange={(e) => onEdit({ kind: "setStrike", id: spec.id, legIndex: index, strike: Number(e.target.value) })}
-              className="mt-1 block w-full rounded border border-zinc-300 bg-transparent px-2 py-1.5 text-sm tabular-nums dark:border-white/20"
+              className={`mt-1 block w-full px-2 py-1.5 text-sm tabular-nums ${labControl}`}
             >
               {strikesFor(index).map((strike) => (
                 <option key={strike} value={strike}>
@@ -96,7 +97,7 @@ export function StructureCard({
           <button
             type="button"
             aria-label={`${spec.label} leg ${index + 1} down`}
-            className="rounded border border-zinc-300 px-2 py-1.5 text-sm dark:border-white/20"
+            className={`px-2 py-1.5 text-sm ${labControl}`}
             onClick={() => onEdit({ kind: "stepStrike", id: spec.id, legIndex: index, steps: -1 })}
           >
             −
@@ -104,12 +105,12 @@ export function StructureCard({
           <button
             type="button"
             aria-label={`${spec.label} leg ${index + 1} up`}
-            className="rounded border border-zinc-300 px-2 py-1.5 text-sm dark:border-white/20"
+            className={`px-2 py-1.5 text-sm ${labControl}`}
             onClick={() => onEdit({ kind: "stepStrike", id: spec.id, legIndex: index, steps: 1 })}
           >
             +
           </button>
-          <label className="text-xs text-zinc-500">
+          <label className={labLabel}>
             IV %
             <input
               aria-label={`${spec.label} leg ${index + 1} IV`}
@@ -127,15 +128,15 @@ export function StructureCard({
                   iv: raw === "" || !Number.isFinite(next) ? null : next / 100,
                 });
               }}
-              className="mt-1 block w-16 rounded border border-zinc-300 bg-transparent px-2 py-1.5 text-sm tabular-nums dark:border-white/20"
+              className={`mt-1 block w-16 px-2 py-1.5 text-sm tabular-nums ${labControl}`}
             />
           </label>
         </div>
       ))}
 
-      <fieldset className="mb-3 mt-3 text-xs text-zinc-500">
+      <fieldset className={`mb-3 mt-3 ${labLabel}`}>
         <legend className="mb-1">Entry</legend>
-        <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-800 dark:text-zinc-100">
+        <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-900 dark:text-zinc-50">
           {(["mid", "natural"] as const).map((kind) => (
             <label key={kind} className="inline-flex items-center gap-1">
               <input
@@ -173,7 +174,7 @@ export function StructureCard({
                   entry: { kind: "limit", netPerShare: Number(e.target.value) },
                 })
               }
-              className="w-24 rounded border border-zinc-300 bg-transparent px-2 py-1 tabular-nums dark:border-white/20"
+              className={`w-24 px-2 py-1 tabular-nums ${labControl}`}
             />
           </label>
         </div>

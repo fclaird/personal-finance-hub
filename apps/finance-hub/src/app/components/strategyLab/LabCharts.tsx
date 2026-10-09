@@ -16,6 +16,7 @@ import {
 } from "recharts";
 
 import { formatSignedUsd2 } from "@/lib/format";
+import { LAB_PALETTE } from "@/lib/strategyLab/palette";
 import {
   capitalExpiryPnl,
   crossoverText,
@@ -27,12 +28,6 @@ import {
   type PricedStructure,
 } from "@/lib/strategyLab/lab";
 
-const SERIES = ["#059669", "#0891b2", "#d97706", "#7c3aed"];
-const STOCK = "#71717a";
-const SPOT = "#16a34a";
-const SHORT = "#7c3aed";
-const WHAT_IF = "#e11d48";
-
 type Row = { spot: number; stock?: number } & Record<string, number | undefined>;
 
 function money(n: number | undefined, mask: boolean): string {
@@ -41,9 +36,9 @@ function money(n: number | undefined, mask: boolean): string {
 }
 
 function colorOf(evaluation: LabEvaluation, id: string): string {
-  if (id === "stock") return STOCK;
+  if (id === "stock") return LAB_PALETTE.stock;
   const row = evaluation.structures.find((item) => item.spec.id === id);
-  return SERIES[row?.spec.slot ?? 0] ?? SERIES[0]!;
+  return LAB_PALETTE.series[row?.spec.slot ?? 0] ?? LAB_PALETTE.series[0];
 }
 
 function ChartTip({
@@ -58,8 +53,8 @@ function ChartTip({
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload;
   return (
-    <div className="rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-xs shadow-lg dark:border-white/15 dark:bg-zinc-950">
-      <div className="tabular-nums text-zinc-700 dark:text-zinc-200">Spot {row ? row.spot.toFixed(2) : ""}</div>
+    <div className="rounded-md border border-zinc-500 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-100 shadow-lg">
+      <div className="tabular-nums text-zinc-100">Spot {row ? row.spot.toFixed(2) : ""}</div>
       {payload.map((item) => (
         <div key={String(item.name)} className="tabular-nums" style={{ color: item.color }}>
           {item.name} {money(typeof item.value === "number" ? item.value : undefined, mask)}
@@ -176,9 +171,9 @@ function Marks({
             x1={x1}
             x2={x2}
             fill={colorOf(evaluation, zone.bestId)}
-            fillOpacity={0.12}
+            fillOpacity={LAB_PALETTE.zoneOpacity}
             strokeOpacity={0}
-            label={{ value: zoneLabel(zone), position: "center", fill: colorOf(evaluation, zone.bestId), fontSize: 12 }}
+            label={{ value: zoneLabel(zone), position: "center", fill: colorOf(evaluation, zone.bestId), fontSize: 13, fontWeight: 700 }}
           />
         );
       })}
@@ -192,24 +187,25 @@ function Marks({
             <ReferenceLine
               x={crossover.spot}
               stroke={fill}
-              strokeDasharray="3 3"
+              strokeWidth={2}
+              strokeDasharray="4 3"
               ifOverflow="visible"
               label={(props: { viewBox?: { x?: number; y?: number } }) => {
                 const x = (props.viewBox?.x ?? 0) + 3;
                 const top = (props.viewBox?.y ?? 0) + 14 + rank * 12;
                 return (
-                  <text x={x} y={top} fill={fill} fontSize={10} transform={`rotate(90 ${x} ${top})`}>
+                  <text x={x} y={top} fill={fill} fontSize={12} fontWeight={600} transform={`rotate(90 ${x} ${top})`}>
                     {text}
                   </text>
                 );
               }}
             />
-            {y != null ? <ReferenceDot x={crossover.spot} y={y} r={4} fill={fill} stroke="#fff" /> : null}
+            {y != null ? <ReferenceDot x={crossover.spot} y={y} r={5} fill={fill} stroke={LAB_PALETTE.dotStroke} strokeWidth={1.5} /> : null}
           </Fragment>
         );
       })}
       {whatIf != null && whatIf >= xLo && whatIf <= xHi ? (
-        <ReferenceLine x={whatIf} stroke={WHAT_IF} strokeDasharray="2 2" label={{ value: "What-if", fill: WHAT_IF, fontSize: 10, position: "insideBottomRight" }} />
+        <ReferenceLine x={whatIf} stroke={LAB_PALETTE.whatIf} strokeWidth={2} strokeDasharray="2 2" label={{ value: "What-if", fill: LAB_PALETTE.whatIf, fontSize: 12, position: "insideBottomRight" }} />
       ) : null}
     </>
   );
@@ -287,26 +283,38 @@ export function LabCharts({
           return curve ? samplePnl(curve.points, spot) : null;
         };
         return (
-          <section id={`h-${horizon.id.replace(/[^a-zA-Z0-9-]/g, "-")}`} key={horizon.id} className="rounded-xl border border-zinc-200 bg-white p-3 dark:border-white/10 dark:bg-zinc-950">
-            <h3 className="mb-1 text-sm font-semibold text-zinc-800 dark:text-zinc-100">{horizon.label}</h3>
-            {board ? <p className="mb-2 text-xs text-zinc-500">{board.metric}. Shaded band is the leader. Crossovers are exact expiry math.</p> : null}
+          <section id={`h-${horizon.id.replace(/[^a-zA-Z0-9-]/g, "-")}`} key={horizon.id} className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
+            <h3 className="mb-1 text-sm font-semibold text-zinc-50">{horizon.label}</h3>
+            {board ? <p className="mb-2 text-xs text-zinc-300">{board.metric}. Shaded band is the leader. Crossovers are exact expiry math.</p> : null}
             {modelMarks.length > 0 ? (
-              <p className="mb-2 text-xs text-zinc-500">Crossover marks on this date are interpolated from the model curve. They are not exact.</p>
+              <p className="mb-2 text-xs text-zinc-300">Crossover marks on this date are interpolated from the model curve. They are not exact.</p>
             ) : null}
             <div className={board ? "h-[28rem] w-full" : "h-72 w-full"}>
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={rows} margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#d4d4d8" />
-                  <XAxis dataKey="spot" type="number" domain={[xLo, xHi]} tickFormatter={(v: number) => v.toFixed(0)} allowDataOverflow />
+                  <CartesianGrid strokeDasharray="3 3" stroke={LAB_PALETTE.grid} />
+                  <XAxis
+                    dataKey="spot"
+                    type="number"
+                    domain={[xLo, xHi]}
+                    tickFormatter={(v: number) => v.toFixed(0)}
+                    allowDataOverflow
+                    tick={{ fill: LAB_PALETTE.axis, fontSize: 12 }}
+                    axisLine={{ stroke: LAB_PALETTE.axisLine }}
+                    tickLine={{ stroke: LAB_PALETTE.axisLine }}
+                  />
                   <YAxis
                     domain={yAxis.domain}
                     ticks={yAxis.ticks}
                     tickFormatter={(v: number) => (masked ? "XXXXX" : formatSignedUsd2(v))}
-                    width={84}
+                    width={88}
                     allowDataOverflow
+                    tick={{ fill: LAB_PALETTE.axis, fontSize: 12 }}
+                    axisLine={{ stroke: LAB_PALETTE.axisLine }}
+                    tickLine={{ stroke: LAB_PALETTE.axisLine }}
                   />
                   <Tooltip content={<ChartTip mask={masked} />} />
-                  <Legend />
+                  <Legend wrapperStyle={{ color: LAB_PALETTE.axis, fontSize: 13 }} />
                   {board ? (
                     <Marks
                       evaluation={evaluation}
@@ -330,10 +338,10 @@ export function LabCharts({
                       dotY={dotY}
                     />
                   )}
-                  <ReferenceLine y={0} stroke="#a1a1aa" />
-                  <ReferenceLine x={evaluation.spot} stroke={SPOT} strokeDasharray="5 5" label={{ value: "Spot", fill: SPOT, fontSize: 11 }} />
+                  <ReferenceLine y={0} stroke={LAB_PALETTE.zero} strokeWidth={1.5} />
+                  <ReferenceLine x={evaluation.spot} stroke={LAB_PALETTE.spot} strokeWidth={2} strokeDasharray="5 5" label={{ value: "Spot", fill: LAB_PALETTE.spot, fontSize: 12 }} />
                   {shorts.map((strike) => (
-                    <ReferenceLine key={strike} x={strike} stroke={SHORT} strokeDasharray="3 3" />
+                    <ReferenceLine key={strike} x={strike} stroke={LAB_PALETTE.strike} strokeWidth={1.5} strokeDasharray="3 3" />
                   ))}
                   {series.map((structure) => (
                     <Line
@@ -341,9 +349,9 @@ export function LabCharts({
                       type="linear"
                       dataKey={structure.spec.id}
                       name={structure.spec.label}
-                      stroke={SERIES[structure.spec.slot] ?? SERIES[0]}
+                      stroke={LAB_PALETTE.series[structure.spec.slot] ?? LAB_PALETTE.series[0]}
                       dot={false}
-                      strokeWidth={2}
+                      strokeWidth={LAB_PALETTE.line}
                       isAnimationActive={false}
                     />
                   ))}
@@ -352,10 +360,10 @@ export function LabCharts({
                       type="linear"
                       dataKey="stock"
                       name="Stock"
-                      stroke={STOCK}
-                      strokeDasharray="4 4"
+                      stroke={LAB_PALETTE.stock}
+                      strokeDasharray="6 4"
                       dot={false}
-                      strokeWidth={1.5}
+                      strokeWidth={LAB_PALETTE.stockLine}
                       isAnimationActive={false}
                     />
                   ) : null}

@@ -8,6 +8,7 @@ import { ExpirySummary } from "@/app/components/strategyLab/ExpirySummary";
 import { StructureCard } from "@/app/components/strategyLab/StructureCard";
 import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate } from "@/lib/optionChain/chain";
 import { bestWhenFor, TEMPLATE_CATALOG, type TemplateRequest } from "@/lib/strategyLab/lab";
+import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
 import { useStrategyLab } from "@/lib/strategyLab/useStrategyLab";
 
 type TemplateChoice = "callDebitSpread" | "zebra" | "zebraDelta" | "longCall" | "custom";
@@ -102,13 +103,13 @@ export function StrategyLabPage() {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Strategy Lab</h1>
-          <p className="mt-1 max-w-2xl text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="mt-1 max-w-2xl text-sm text-zinc-700 dark:text-zinc-300">
             Analysis only. Compare option structures on a typed underlying. Nothing here places an order.
           </p>
         </div>
         {chain ? (
           <div className="flex items-center gap-2">
-            <span className="rounded-full border border-zinc-300 px-3 py-1 text-xs font-medium tabular-nums dark:border-white/20">
+            <span className={`rounded-full px-3 py-1 text-xs font-medium tabular-nums ${labControl}`}>
               {chain.provenance.source === "schwab" ? "Schwab" : "Cboe"}
               {" · "}
               {chain.provenance.delayed ? "delayed" : "live"}
@@ -121,7 +122,7 @@ export function StrategyLabPage() {
               type="button"
               onClick={() => void load(chain.symbol, true)}
               disabled={loading}
-              className="rounded-full border border-zinc-300 px-3 py-1 text-xs font-semibold dark:border-white/20"
+              className={`rounded-full px-3 py-1 text-xs font-semibold ${labControl}`}
             >
               {loading ? "Refreshing" : "Refresh"}
             </button>
@@ -136,12 +137,12 @@ export function StrategyLabPage() {
           void load(symbol, false);
         }}
       >
-        <label className="text-xs text-zinc-500">
+        <label className={labLabel}>
           Underlying
           <input
             value={symbol}
             onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-            className="mt-1 block w-32 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm font-semibold tracking-wide dark:border-white/20 dark:bg-zinc-950"
+            className={`mt-1 block w-32 px-2 py-1.5 text-sm font-semibold tracking-wide ${labControl}`}
             aria-label="Underlying symbol"
           />
         </label>
@@ -153,7 +154,7 @@ export function StrategyLabPage() {
           {loading ? "Loading" : "Load chain"}
         </button>
         {chain ? (
-          <span className="pb-1 text-sm tabular-nums text-zinc-600 dark:text-zinc-300">
+          <span className="pb-1 text-sm tabular-nums text-zinc-700 dark:text-zinc-200">
             {chain.symbol} spot {chain.spot.toFixed(2)} · {formatExpiryLabel(chain.tradeDate)}
           </span>
         ) : null}
@@ -168,18 +169,18 @@ export function StrategyLabPage() {
 
       {lab && chain && evaluation ? (
         <>
-          <section className="grid gap-3 rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-zinc-950 sm:grid-cols-2 lg:grid-cols-4">
-            <label className="text-xs text-zinc-500">
+          <section className={`${labCard} grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4`}>
+            <label className={labLabel}>
               Rate %
               <input
                 type="number"
                 step="0.01"
                 value={String(Math.round(lab.assumptions.rate * 10000) / 100)}
                 onChange={(e) => edit({ kind: "setAssumptions", patch: { rate: Number(e.target.value) / 100 } })}
-                className="mt-1 block w-full rounded border border-zinc-300 bg-transparent px-2 py-1.5 text-sm tabular-nums dark:border-white/20"
+                className="mt-1 block w-full rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm tabular-nums"
               />
             </label>
-            <label className="text-xs text-zinc-500">
+            <label className={labLabel}>
               Dividend yield %
               <input
                 aria-label="Dividend yield percent"
@@ -189,7 +190,7 @@ export function StrategyLabPage() {
                 onChange={(e) =>
                   edit({ kind: "setAssumptions", patch: { dividendYield: Number(e.target.value) / 100 || 0 } })
                 }
-                className="mt-1 block w-full rounded border border-zinc-300 bg-transparent px-2 py-1.5 text-sm tabular-nums dark:border-white/20"
+                className="mt-1 block w-full rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm tabular-nums"
               />
               <span className="mt-1 block text-[11px]">
                 {chain.dividendYieldHint == null
@@ -197,20 +198,20 @@ export function StrategyLabPage() {
                   : `Schwab yield ${yieldText(chain.dividendYieldHint)}. Not applied until you type it.`}
               </span>
             </label>
-            <label className="text-xs text-zinc-500">
+            <label className={labLabel}>
               IV source
               <select
                 value={lab.assumptions.ivSource}
                 onChange={(e) =>
                   edit({ kind: "setAssumptions", patch: { ivSource: e.target.value === "feed" ? "feed" : "mid" } })
                 }
-                className="mt-1 block w-full rounded border border-zinc-300 bg-transparent px-2 py-1.5 text-sm dark:border-white/20"
+                className="mt-1 block w-full rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm"
               >
                 <option value="mid">Solve from mid</option>
                 <option value="feed">Feed IV</option>
               </select>
             </label>
-            <label className="text-xs text-zinc-500">
+            <label className={labLabel}>
               Capital basis
               <span className="mt-1 flex gap-2">
                 <select
@@ -225,7 +226,7 @@ export function StrategyLabPage() {
                         basis: { kind: "equalCapital", capital, units: value === "fractional" ? "fractional" : "whole" },
                       });
                   }}
-                  className="w-full rounded border border-zinc-300 bg-transparent px-2 py-1.5 text-sm dark:border-white/20"
+                  className="w-full rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm"
                 >
                   <option value="whole">Whole contracts</option>
                   <option value="fractional">Fractional</option>
@@ -242,7 +243,7 @@ export function StrategyLabPage() {
                       edit({ kind: "setBasis", basis: { kind: "equalCapital", capital: next, units: lab.basis.units } });
                     }
                   }}
-                  className="w-28 rounded border border-zinc-300 bg-transparent px-2 py-1.5 text-sm tabular-nums dark:border-white/20"
+                  className="w-28 rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm tabular-nums"
                 />
               </span>
             </label>
@@ -253,7 +254,7 @@ export function StrategyLabPage() {
               <a
                 key={horizon.id}
                 href={`#h-${horizon.id.replace(/[^a-zA-Z0-9-]/g, "-")}`}
-                className="rounded-full border border-zinc-300 px-3 py-1 text-xs font-medium dark:border-white/20"
+                className={`rounded-full px-3 py-1 text-xs font-medium ${labControl}`}
               >
                 {horizon.label}
               </a>
@@ -268,16 +269,16 @@ export function StrategyLabPage() {
             </ul>
           ) : null}
 
-          <section className="rounded-xl border border-dashed border-zinc-300 p-4 dark:border-white/20">
+          <section className="rounded-xl border border-dashed border-zinc-400 p-4 dark:border-zinc-500">
             <h2 className="mb-3 text-sm font-semibold">Add a structure</h2>
             <div className="flex flex-wrap items-end gap-2">
-              <label className="text-xs text-zinc-500">
+              <label className={labLabel}>
                 Template
                 <select
                   aria-label="Template"
                   value={template}
                   onChange={(e) => setTemplate(e.target.value as TemplateChoice)}
-                  className="mt-1 block rounded border border-zinc-300 bg-transparent px-2 py-1.5 text-sm dark:border-white/20"
+                  className="mt-1 block rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm"
                 >
                   {TEMPLATE_CATALOG.filter((item) => item.id !== "zebra").map((item) => (
                     <option key={item.id} value={item.id}>
@@ -288,7 +289,7 @@ export function StrategyLabPage() {
                   <option value="zebraDelta">ZEBRA 75/50</option>
                 </select>
               </label>
-              <label className="text-xs text-zinc-500">
+              <label className={labLabel}>
                 Expiry
                 <select
                   aria-label="New structure expiry"
@@ -298,7 +299,7 @@ export function StrategyLabPage() {
                     setLongStrike("");
                     setShortStrike("");
                   }}
-                  className="mt-1 block max-w-56 rounded border border-zinc-300 bg-transparent px-2 py-1.5 text-sm dark:border-white/20"
+                  className="mt-1 block max-w-56 rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm"
                 >
                   {chain.expiries.map((item) => (
                     <option key={item.date} value={item.date}>
@@ -308,13 +309,13 @@ export function StrategyLabPage() {
                 </select>
               </label>
               {needsStrikes ? (
-                <label className="text-xs text-zinc-500">
+                <label className={labLabel}>
                   {needsShort ? "Long strike" : "Strike"}
                   <select
                     aria-label="Long strike"
                     value={longValue}
                     onChange={(e) => setLongStrike(e.target.value)}
-                    className="mt-1 block rounded border border-zinc-300 bg-transparent px-2 py-1.5 text-sm tabular-nums dark:border-white/20"
+                    className="mt-1 block rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm tabular-nums"
                   >
                     {callStrikes.map((strike) => (
                       <option key={strike} value={strike}>
@@ -325,13 +326,13 @@ export function StrategyLabPage() {
                 </label>
               ) : null}
               {needsShort ? (
-                <label className="text-xs text-zinc-500">
+                <label className={labLabel}>
                   Short strike
                   <select
                     aria-label="Short strike"
                     value={shortValue}
                     onChange={(e) => setShortStrike(e.target.value)}
-                    className="mt-1 block rounded border border-zinc-300 bg-transparent px-2 py-1.5 text-sm tabular-nums dark:border-white/20"
+                    className="mt-1 block rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm tabular-nums"
                   >
                     {callStrikes.map((strike) => (
                       <option key={strike} value={strike}>
@@ -341,7 +342,7 @@ export function StrategyLabPage() {
                   </select>
                 </label>
               ) : null}
-              <label className="text-xs text-zinc-500">
+              <label className={labLabel}>
                 Limit debit
                 <input
                   aria-label="Limit debit"
@@ -350,7 +351,7 @@ export function StrategyLabPage() {
                   placeholder="mid"
                   value={limit}
                   onChange={(e) => setLimit(e.target.value)}
-                  className="mt-1 block w-24 rounded border border-zinc-300 bg-transparent px-2 py-1.5 text-sm tabular-nums dark:border-white/20"
+                  className="mt-1 block w-24 rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm tabular-nums"
                 />
               </label>
               <button
