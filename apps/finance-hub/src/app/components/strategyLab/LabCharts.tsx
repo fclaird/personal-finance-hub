@@ -4,7 +4,6 @@ import { Fragment, useState } from "react";
 import {
   CartesianGrid,
   ComposedChart,
-  Legend,
   Line,
   ReferenceArea,
   ReferenceDot,
@@ -409,8 +408,19 @@ export function LabCharts({
         <section id="h-overlay" className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
           <h3 className="mb-1 text-sm font-semibold text-zinc-50">Quarters overlaid</h3>
           <p className="mb-2 text-xs text-zinc-300">
-            Each structure keeps its color. Earlier quarters are dashed. Expiry is solid. Expiry crossover labels are exact. Other dates stay on the grid, marked model-based.
+            Each structure keeps its chart color. Earlier quarters are dashed and expiry is the solid line. Expiry crossover labels are exact. Marks on the other dates stay on the grid and are labeled model-based.
           </p>
+          <div className="mb-2 flex flex-wrap gap-3">
+            {priced.map((structure) => (
+              <span key={structure.spec.id} className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-100">
+                <span
+                  className="inline-block h-2.5 w-6 rounded-sm"
+                  style={{ backgroundColor: LAB_PALETTE.series[structure.spec.slot] ?? LAB_PALETTE.series[0] }}
+                />
+                {structure.spec.label}
+              </span>
+            ))}
+          </div>
           <div className="h-[32rem] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={overlayRows} margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
@@ -436,7 +446,6 @@ export function LabCharts({
                   tickLine={{ stroke: LAB_PALETTE.axisLine }}
                 />
                 <Tooltip content={<ChartTip mask={masked} />} />
-                <Legend wrapperStyle={{ color: LAB_PALETTE.axis, fontSize: 11 }} />
                 {expiryPanel?.board ? (
                   <Marks
                     evaluation={evaluation}
@@ -460,7 +469,8 @@ export function LabCharts({
                       name={`${structure.spec.label} ${shortHorizon(panel.horizon.label)}`}
                       stroke={LAB_PALETTE.series[structure.spec.slot] ?? LAB_PALETTE.series[0]}
                       strokeDasharray={panel.board ? undefined : overlayDash(index)}
-                      strokeOpacity={panel.board ? 1 : 0.75}
+                      strokeOpacity={panel.board ? 1 : 0.85}
+                      legendType="none"
                       dot={false}
                       strokeWidth={panel.board ? LAB_PALETTE.line : 2}
                       isAnimationActive={false}
