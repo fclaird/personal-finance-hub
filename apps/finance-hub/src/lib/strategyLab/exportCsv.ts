@@ -30,12 +30,16 @@ export function evaluationCubeCsv(evaluation: LabEvaluation): string {
 }
 
 function legsText(structure: PricedStructure): string {
-  return structure.legs.map((leg) => `${leg.ratio}${leg.right} ${leg.strike}`).join(" / ");
+  const options = structure.legs.map((leg) => `${leg.ratio}${leg.right} ${leg.strike}`).join(" / ");
+  const stock = structure.spec.stock;
+  if (!stock) return options;
+  return `${options} / ${stock.shares} shares @ ${stock.averagePrice}`;
 }
 
 function entryText(structure: PricedStructure): string {
   const entry = structure.spec.entry;
-  return entry.kind === "limit" ? `limit ${entry.netPerShare}` : entry.kind;
+  const base = entry.kind === "limit" ? `limit ${entry.netPerShare}` : entry.kind;
+  return structure.spec.stock ? `${base} + stock` : base;
 }
 
 function dollarsAtRisk(structure: PricedStructure): number | "" {

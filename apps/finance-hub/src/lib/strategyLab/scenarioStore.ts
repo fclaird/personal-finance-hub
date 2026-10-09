@@ -9,7 +9,7 @@ import type {
   StructureSpec,
   StructureSlot,
 } from "@/lib/strategyLab/lab";
-import type { Assumptions } from "@/lib/strategyLab/internal/pricing";
+import type { Assumptions, StockLeg, VolShift } from "@/lib/strategyLab/internal/pricing";
 import type { StrikeTarget, TemplateRequest } from "@/lib/strategyLab/internal/templates";
 
 export const SCENARIO_STORAGE_KEY = "fh.strategyLab.scenarios.v1";
@@ -114,6 +114,25 @@ function parseHorizon(raw: unknown): HorizonSpec | null {
   return null;
 }
 
+function parseVolShift(raw: unknown): VolShift | null {
+  if (raw == null) return { mode: "points", amount: 0 };
+  if (!isRecord(raw)) return null;
+  if (raw.mode !== "points" && raw.mode !== "pct") return null;
+  const amount = finite(raw.amount);
+  if (amount == null || Math.abs(amount) > 500) return null;
+  return { mode: raw.mode, amount };
+}
+
+function parseStock(raw: unknown): { ok: true; stock: StockLeg | null } | { ok: false } {
+  if (raw == null) return { ok: true, stock: null };
+  if (!isRecord(raw)) return { ok: false };
+  const shares = finite(raw.shares);
+  const averagePrice = finite(raw.averagePrice);
+  if (shares == null || shares === 0 || Math.abs(shares) > 1_000_000) return { ok: false };
+  if (averagePrice == null || !(averagePrice > 0)) return { ok: false };
+  return { ok: true, stock: { shares, averagePrice } };
+}
+
 function parseEntry(raw: unknown): EntryBasis | null {
   if (!isRecord(raw)) return null;
   if (raw.kind === "mid" || raw.kind === "natural") return { kind: raw.kind };
@@ -161,6 +180,8 @@ function parseStructure(raw: unknown, seenSlots: Set<number>, seenIds: Set<strin
   }
   const entry = parseEntry(raw.entry);
   if (!entry) return null;
+  const stock = parseStock(raw.stock);
+  if (!stock.ok) return null;
   let capitalOverride: number | null = null;
   if (raw.capitalOverride != null) {
     const dollars = finite(raw.capitalOverride);
@@ -188,6 +209,7 @@ function parseStructure(raw: unknown, seenSlots: Set<number>, seenIds: Set<strin
     snappedFrom,
     legs,
     entry,
+    stock: stock.stock,
     capitalOverride,
     slot: slot as StructureSlot,
     origin,
@@ -201,7 +223,9 @@ function parseAssumptions(raw: unknown): Assumptions | null {
   const dividendYield = finite(raw.dividendYield);
   if (rate == null || dividendYield == null || dividendYield < 0) return null;
   if (raw.ivSource !== "mid" && raw.ivSource !== "feed") return null;
-  return { rate, dividendYield, ivSource: raw.ivSource };
+  const volShift = parseVolShift(raw.volShift);
+  if (!volShift) return null;
+  return { rate, dividendYield, ivSource: raw.ivSource, volShift };
 }
 
 function parseBasis(raw: unknown): Basis | null {

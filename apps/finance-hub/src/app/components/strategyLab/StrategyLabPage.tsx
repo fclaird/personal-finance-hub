@@ -4,13 +4,14 @@ import { useMemo, useState } from "react";
 
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { ChainGrid } from "@/app/components/strategyLab/ChainGrid";
+import { HeldPositions } from "@/app/components/strategyLab/HeldPositions";
 import { LabCharts } from "@/app/components/strategyLab/LabCharts";
 import { ExpirySummary } from "@/app/components/strategyLab/ExpirySummary";
 import { ScenarioBar } from "@/app/components/strategyLab/ScenarioBar";
 import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
 import { StructureCard } from "@/app/components/strategyLab/StructureCard";
 import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
-import { bestWhenFor, TEMPLATE_CATALOG, type HorizonSpec, type TemplateRequest } from "@/lib/strategyLab/lab";
+import { bestWhenFor, describeVolShift, TEMPLATE_CATALOG, type HorizonSpec, type TemplateRequest } from "@/lib/strategyLab/lab";
 import { formatModelDelta, nearestDeltaStrike, strikeDeltas } from "@/lib/strategyLab/strikeDelta";
 import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
 import { useStrategyLab } from "@/lib/strategyLab/useStrategyLab";
@@ -405,6 +406,75 @@ export function StrategyLabPage() {
                 <option value="feed">Feed IV</option>
               </select>
             </label>
+            <div className="sm:col-span-2 lg:col-span-4 flex flex-wrap items-end gap-3 border-t border-zinc-600 pt-3">
+              <label className={labLabel}>
+                IV shift
+                <select
+                  aria-label="IV shift mode"
+                  value={lab.assumptions.volShift.mode}
+                  onChange={(e) =>
+                    edit({
+                      kind: "setAssumptions",
+                      patch: {
+                        volShift: {
+                          mode: e.target.value === "pct" ? "pct" : "points",
+                          amount: lab.assumptions.volShift.amount,
+                        },
+                      },
+                    })
+                  }
+                  className={`mt-1 block px-2 py-1.5 text-sm ${labControl}`}
+                >
+                  <option value="points">Vol points</option>
+                  <option value="pct">% of IV</option>
+                </select>
+              </label>
+              <label className={labLabel}>
+                {lab.assumptions.volShift.mode === "pct" ? "Percent of IV" : "Vol points"}
+                <input
+                  aria-label="IV shift amount"
+                  type="number"
+                  step="1"
+                  value={String(lab.assumptions.volShift.amount)}
+                  onChange={(e) => {
+                    const amount = Number(e.target.value);
+                    edit({
+                      kind: "setAssumptions",
+                      patch: {
+                        volShift: {
+                          mode: lab.assumptions.volShift.mode,
+                          amount: Number.isFinite(amount) ? amount : 0,
+                        },
+                      },
+                    });
+                  }}
+                  className={`mt-1 block w-28 px-2 py-1.5 text-sm tabular-nums ${labControl}`}
+                />
+              </label>
+              <button
+                type="button"
+                className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
+                onClick={() =>
+                  edit({
+                    kind: "setAssumptions",
+                    patch: { volShift: { mode: lab.assumptions.volShift.mode, amount: 0 } },
+                  })
+                }
+              >
+                Reset
+              </button>
+              <p className="max-w-xl pb-1 text-[11px] text-zinc-300">
+                Future dates only. The entry debit stays on the unshifted IV. Earnings gaps and early exercise are not modeled.
+              </p>
+              {describeVolShift(lab.assumptions.volShift) ? (
+                <p
+                  role="status"
+                  className="inline-flex items-center gap-2 rounded-full border border-amber-300 bg-amber-950 px-3 py-1 text-sm font-semibold text-amber-50"
+                >
+                  {describeVolShift(lab.assumptions.volShift)}
+                </p>
+              ) : null}
+            </div>
             <label className={labLabel}>
               Capital basis
               <span className="mt-1 flex gap-2">
@@ -453,7 +523,14 @@ export function StrategyLabPage() {
             onEdit={edit}
           />
 
-          <ScenarioBar lab={lab} symbol={chain.symbol} evaluation={evaluation} onRestore={replace} />
+          <ScenarioBar lab={lab} chain={chain} symbol={chain.symbol} evaluation={evaluation} onRestore={replace} />
+
+          <HeldPositions
+            symbol={chain.symbol}
+            masked={privacy.masked}
+            full={lab.structures.length >= 4}
+            onImport={edit}
+          />
 
           {evaluation.issues.length > 0 ? (
             <ul className="space-y-1 text-sm text-amber-800 dark:text-amber-200">
@@ -612,6 +689,26 @@ export function StrategyLabPage() {
           </div>
 
           <div id="charts" className="space-y-4">
+            {describeVolShift(lab.assumptions.volShift) ? (
+              <p
+                role="status"
+                className="inline-flex items-center gap-2 rounded-full border border-amber-300 bg-amber-950 px-3 py-1 text-sm font-semibold text-amber-50"
+              >
+                {describeVolShift(lab.assumptions.volShift)}
+                <button
+                  type="button"
+                  className="rounded border border-amber-200 px-2 py-0.5 text-xs text-amber-50"
+                  onClick={() =>
+                    edit({
+                      kind: "setAssumptions",
+                      patch: { volShift: { mode: lab.assumptions.volShift.mode, amount: 0 } },
+                    })
+                  }
+                >
+                  Reset
+                </button>
+              </p>
+            ) : null}
             <ExpirySummary
               evaluation={evaluation}
               masked={privacy.masked}
