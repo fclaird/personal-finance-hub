@@ -2,17 +2,23 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { isoDate, makeOptionChain, type ChainDraft, type DraftContract, type OptionChain } from "@/lib/optionChain/chain";
-import { createLab, editLab, evaluateLab, type LabEvaluation, type PricedStructure } from "@/lib/strategyLab/lab";
+import { createLab, editLab, evaluateLab, zeroPackageNotice, type HorizonView, type LabEvaluation, type PricedStructure } from "@/lib/strategyLab/lab";
 import {
+  applyHorizonPolicy,
   crossoverCallouts,
+  defaultChartChrome,
+  everyNthHorizonIds,
   initialChartSelection,
+  parseChartSettings,
   rainbowColor,
+  readableHorizonIds,
   reconcileChartSelection,
   setChartMode,
   setHorizons,
   setStructures,
   toggleStructure,
   visibleCurves,
+  writeChartSettings,
   type ChartSelection,
 } from "@/lib/strategyLab/chartDisplay";
 
@@ -257,5 +263,124 @@ describe("chart display selector", () => {
     assert.match(todayColor, /^#[0-9a-f]{6}$/);
     assert.notEqual(todayColor, expiryColor);
     assert.notEqual(rainbowColor(0.5), todayColor);
+  });
+
+  it("starts overlay on today, a few quarters, and expiry", () => {
+    const horizons = quarterHorizons(11);
+    const ids = readableHorizonIds(horizons);
+    assert.ok(ids.length <= 5);
+    assert.equal(ids[0], horizons[0]!.id);
+    assert.equal(ids[ids.length - 1], horizons[10]!.id);
+    const everyFourth = everyNthHorizonIds(horizons, 4);
+    assert.ok(everyFourth.includes(horizons[10]!.id));
+    assert.deepEqual(applyHorizonPolicy(horizons, { kind: "every", step: 4 }, null).at(-1), horizons[10]!.id);
+    const overlay = visibleCurves(ev, { ...initial, mode: "overlay", horizonIds: readableHorizonIds(ev.horizons) });
+    assert.ok(overlay.length > 0);
+    assert.ok(overlay.every((curve) => curve.structureId === zebra.spec.id || curve.structureId === spread.spec.id));
+  });
+});
+
+function quarterHorizons(count: number): HorizonView[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `h${index}`,
+    date: `2026-${String((index % 12) + 1).padStart(2, "0")}-15`,
+    label: index === count - 1 ? "Expiry · end" : index === 0 ? "Today · start" : `+${index * 3} mo · step`,
+    shared: true,
+    settlement: index === count - 1,
+    structureId: null,
+  }));
+}
+
+describe("ZEBRA zero packages", () => {
+  const chain = expensiveChain();
+  const whole = evaluateLab(
+    editLab(
+      createLab(chain),
+      [
+        { kind: "setAssumptions", patch: { rate: 0.04, dividendYield: 0, ivSource: "mid" } },
+        { kind: "setBasis", basis: { kind: "equalCapital", capital: 10_000, units: "whole" } },
+        {
+          kind: "addStructure",
+          label: "ZEBRA",
+          expiry: isoDate(EXPIRY),
+          request: { template: "zebra", long: { by: "strike", strike: 400 }, short: { by: "strike", strike: 520 } },
+        },
+      ],
+      chain,
+    ),
+    chain,
+  );
+  const row = whole.structures.find((item) => item.spec.label === "ZEBRA");
+
+  it("does not draw a flat zero line when one ZEBRA package costs more than $10,000", () => {
+    assert.ok(row && row.status === "priced");
+    if (!row || row.status !== "priced") return;
+    assert.equal(row.sizing.status, "sized");
+    if (row.sizing.status !== "sized") return;
+    assert.equal(row.sizing.packages, 0);
+    assert.ok(row.curves.length > 0);
+    assert.ok(row.curves.every((curve) => curve.points.every((point) => point.pnl === 0)));
+    assert.equal(visibleCurves(whole, initialChartSelection(whole)).length, 0);
+    const notice = whole.issues.find((issue) => issue.code === "below-one-package")?.message ?? "";
+    assert.equal(notice, zeroPackageNotice("ZEBRA", 10_000, row.risk.maxLoss === "unbounded" ? null : row.risk.maxLoss));
+    assert.match(notice, /ZEBRA: 0 packages on \$10,000 \(package costs \$/);
+    assert.match(notice, /raise capital or use fractional units/);
+  });
+
+  it("plots a non-zero ZEBRA once units are fractional", () => {
+    const fractional = evaluateLab(
+      editLab(createLab(chain), [
+        { kind: "setAssumptions", patch: { rate: 0.04, dividendYield: 0, ivSource: "mid" } },
+        { kind: "setBasis", basis: { kind: "equalCapital", capital: 10_000, units: "fractional" } },
+        {
+          kind: "addStructure",
+          label: "ZEBRA",
+          expiry: isoDate(EXPIRY),
+          request: { template: "zebra", long: { by: "strike", strike: 400 }, short: { by: "strike", strike: 520 } },
+        },
+      ], chain),
+      chain,
+    );
+    const pricedRow = fractional.structures.find((item) => item.spec.label === "ZEBRA");
+    assert.ok(pricedRow && pricedRow.status === "priced");
+    if (!pricedRow || pricedRow.status !== "priced" || pricedRow.sizing.status !== "sized") return;
+    assert.ok(pricedRow.sizing.packages > 0);
+    assert.ok(pricedRow.curves.length > 0);
+    const pnl = pricedRow.curves.flatMap((curve) => curve.points.map((point) => point.pnl));
+    assert.ok(pnl.some((value) => Math.abs(value) > 1));
+    const curves = visibleCurves(fractional, initialChartSelection(fractional));
+    assert.ok(curves.some((curve) => curve.structureId === pricedRow.spec.id));
+  });
+});
+
+function expensiveChain(): OptionChain {
+  const built = makeOptionChain(
+    draft([
+      contract("C", 400, 120, 130),
+      contract("C", 520, 30, 40),
+    ]),
+  );
+  if (!built.ok) throw new Error(built.error);
+  return { ...built.chain, spot: 450, symbol: "NOW" };
+}
+
+describe("chart settings parser", () => {
+  it("rejects a bad blob and round-trips a valid one", () => {
+    assert.equal(parseChartSettings(null), null);
+    assert.equal(parseChartSettings({ v: 2 }), null);
+    assert.equal(parseChartSettings({ v: 1, mode: "grid", horizonPolicy: { kind: "readable" }, chrome: defaultChartChrome() }), null);
+    const chrome = { ...defaultChartChrome(), thickness: 3.5, yAxis: { kind: "manual" as const, min: -500, max: 8000 } };
+    const settings = { mode: "overlay" as const, horizonPolicy: { kind: "every" as const, step: 2 as const }, chrome };
+    assert.deepEqual(parseChartSettings({ v: 1, ...settings }), settings);
+    assert.equal(parseChartSettings({ v: 1, ...settings, chrome: { ...chrome, thickness: 0 } }), null);
+    const mem = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => mem.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        mem.set(key, value);
+      },
+    };
+    writeChartSettings(storage, settings);
+    assert.deepEqual(parseChartSettings(JSON.parse(mem.values().next().value ?? "null")), settings);
   });
 });

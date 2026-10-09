@@ -16,9 +16,16 @@ import {
 
 import { formatSignedUsd2 } from "@/lib/format";
 import {
+  applyHorizonPolicy,
   CHART_MODES,
   crossoverCallouts,
+  defaultChartChrome,
+  everyNthHorizonIds,
+  expiryPlusOneIds,
+  isPlottableStructure,
   initialChartSelection,
+  policyFromIds,
+  readChartSettings,
   reconcileChartSelection,
   samplePnl,
   setChartMode,
@@ -30,12 +37,17 @@ import {
   toggleHorizon,
   toggleStructure,
   visibleCurves,
+  writeChartSettings,
+  type ChartChrome,
   type ChartMode,
   type ChartSelection,
   type CurveView,
+  type HorizonPolicy,
 } from "@/lib/strategyLab/chartDisplay";
 import {
   capitalExpiryPnl,
+  packageCostOf,
+  zeroPackageNotice,
   type ExpiryBoard,
   type ExpiryZone,
   type LabEdit,
@@ -47,6 +59,8 @@ import { LAB_PALETTE, labControl, labLabel } from "@/lib/strategyLab/palette";
 type Row = { spot: number; stock?: number } & Record<string, number | undefined>;
 
 const MODE_HINT: Record<ChartMode, string> = {
+  overlay: "Today, a few quarters, and expiry. Turn on more dates when you want them.",
+  structure: "One structure on this chart. Its dates use the same chips as Overlay.",
   waterfall: "Every quarter for the rainbow structure, today through a thick expiry line. Other structures are one dashed expiry line.",
   quarters: "Only the dates you turn on.",
   expiry: "Settlement P&L only.",
@@ -96,7 +110,7 @@ function yExtent(values: number[]): { domain: [number, number]; ticks: number[] 
 }
 
 function pricedOf(evaluation: LabEvaluation): PricedStructure[] {
-  return evaluation.structures.filter((row): row is PricedStructure => row.status === "priced" && row.curves.length > 0);
+  return evaluation.structures.filter(isPlottableStructure);
 }
 
 function ChartTip({
@@ -155,12 +169,12 @@ export function LabCharts({
 }) {
   const priced = pricedOf(evaluation);
   const [selection, setSelection] = useState<ChartSelection>(() => initialChartSelection(evaluation));
-  const [showCrossovers, setShowCrossovers] = useState(true);
-  const [showZones, setShowZones] = useState(false);
-  const [showStrikes, setShowStrikes] = useState(false);
-  const [showBreakevens, setShowBreakevens] = useState(false);
+  const [chrome, setChrome] = useState<ChartChrome>(() => defaultChartChrome());
   const [minDraft, setMinDraft] = useState<string | null>(null);
   const [maxDraft, setMaxDraft] = useState<string | null>(null);
+  const [yMinDraft, setYMinDraft] = useState<string | null>(null);
+  const [yMaxDraft, setYMaxDraft] = useState<string | null>(null);
+  const hydrated = useRef(false);
   const knownStructures = useRef<string[] | null>(null);
   const knownHorizons = useRef<string[] | null>(null);
   const liveStructures = priced.map((row) => row.spec.id);
@@ -176,20 +190,69 @@ export function LabCharts({
     knownStructures.current = structures;
     knownHorizons.current = horizons;
     if (prevStructures == null || prevHorizons == null) return;
-    setSelection((prev) =>
-      reconcileChartSelection(prev, { structures, horizons }, { structures: prevStructures, horizons: prevHorizons }),
-    );
+    setSelection((prev) => {
+      const next = reconcileChartSelection(prev, { structures, horizons }, { structures: prevStructures, horizons: prevHorizons });
+      if (prev.horizonPolicy.kind === "picked") return next;
+      return { ...next, horizonIds: applyHorizonPolicy(evaluation.horizons, prev.horizonPolicy, next.focusHorizonId) };
+    });
+    // evaluation is the render that produced structureKey / horizonKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [structureKey, horizonKey]);
 
-  const curves = visibleCurves(evaluation, selection);
+  useEffect(() => {
+    const stored = readChartSettings(window.localStorage);
+    hydrated.current = true;
+    if (!stored) return;
+    // One-time read of localStorage after mount. The server render cannot see it.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setChrome(stored.chrome);
+    setSelection((prev) => ({
+      ...prev,
+      mode: stored.mode,
+      horizonPolicy: stored.horizonPolicy,
+      horizonIds: applyHorizonPolicy(evaluation.horizons, stored.horizonPolicy, prev.focusHorizonId),
+    }));
+    if (stored.chrome.showStock !== evaluation.stock.length > 0) {
+      onEdit({ kind: "setShowStock", show: stored.chrome.showStock });
+    }
+    // Hydrate once. Later edits write through persist().
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const persist = (nextSelection: ChartSelection, nextChrome: ChartChrome) => {
+    if (!hydrated.current) return;
+    writeChartSettings(window.localStorage, {
+      mode: nextSelection.mode,
+      horizonPolicy: nextSelection.horizonPolicy,
+      chrome: nextChrome,
+    });
+  };
+  const choose = (next: ChartSelection) => {
+    setSelection(next);
+    persist(next, chrome);
+  };
+  const restyle = (next: ChartChrome) => {
+    setChrome(next);
+    persist(selection, next);
+  };
+
+  const curves = visibleCurves(evaluation, selection, {
+    colorMode: chrome.colorMode,
+    stroke: chrome.stroke,
+    thickness: chrome.thickness,
+  });
   const selected = priced.filter((row) => selection.structureIds.includes(row.spec.id));
   const xLo = evaluation.spotWindow.min;
   const xHi = evaluation.spotWindow.max;
   const inside = (spot: number) => spot >= xLo - 1e-8 && spot <= xHi + 1e-8;
-  const stockId = stockHorizonId(evaluation, curves);
+  const stockId = chrome.showStock ? stockHorizonId(evaluation, curves) : null;
   const stock = stockId ? evaluation.stock.find((series) => series.horizonId === stockId) : undefined;
+  const quiet = evaluation.structures.filter(
+    (row): row is PricedStructure => row.status === "priced" && row.sizing.status === "sized" && row.sizing.packages === 0,
+  );
+  const capital = evaluation.basis.kind === "equalCapital" ? evaluation.basis.capital : null;
 
-  if (priced.length === 0) {
+  if (priced.length === 0 && quiet.length === 0) {
     return <p className="text-sm text-zinc-700 dark:text-zinc-300">Add a structure to draw P&amp;L by horizon.</p>;
   }
 
@@ -217,11 +280,12 @@ export function LabCharts({
     }
     if (typeof row.stock === "number") yValues.push(row.stock);
   }
-  const yAxis = yExtent(yValues);
-  const callouts = showCrossovers ? crossoverCallouts(evaluation, curves, { min: xLo, max: xHi }) : [];
-  const zones = showZones ? zoneBands(evaluation, curves, xLo, xHi) : [];
+  const yAxis =
+    chrome.yAxis.kind === "manual" ? niceAxis(chrome.yAxis.min, chrome.yAxis.max) : yExtent(yValues);
+  const callouts = chrome.showCrossovers ? crossoverCallouts(evaluation, curves, { min: xLo, max: xHi }) : [];
+  const zones = chrome.showZones ? zoneBands(evaluation, curves, xLo, xHi) : [];
   const dateChoices = [...evaluation.horizons].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.settlement ? 1 : -1));
-  const multiDates = selection.mode === "quarters" || selection.mode === "custom";
+  const multiDates = selection.mode === "quarters" || selection.mode === "custom" || selection.mode === "overlay" || selection.mode === "structure";
   const singleDate = selection.mode === "span" || selection.mode === "dateOverlay";
   const singleChoices =
     selection.mode === "span"
@@ -239,12 +303,13 @@ export function LabCharts({
   };
 
   const readoutSpot = whatIfSpot ?? evaluation.spot;
-  const strikeSpots = showStrikes
+  const strikeSpots = chrome.showStrikes
     ? [...new Set(selected.flatMap((row) => row.legs.map((leg) => leg.strike)))].filter(inside).sort((a, b) => a - b)
     : [];
-  const breakevens = showBreakevens
+  const breakevens = chrome.showBreakevens
     ? selected.flatMap((row) => row.risk.breakevens.filter(inside).map((spot) => ({ spot, id: row.spec.id, color: seriesColor(row.spec.slot) })))
     : [];
+  const useLook = selection.mode === "overlay" || selection.mode === "structure";
 
   return (
     <div className="relative left-1/2 w-screen max-w-[100vw] -translate-x-1/2 space-y-3 px-4 sm:px-6" data-chart-mode={selection.mode}>
@@ -254,7 +319,7 @@ export function LabCharts({
             key={mode.id}
             type="button"
             aria-pressed={selection.mode === mode.id}
-            onClick={() => setSelection((prev) => setChartMode(prev, mode.id))}
+            onClick={() => choose(setChartMode(selection, mode.id))}
             className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
               selection.mode === mode.id
                 ? "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950"
@@ -271,8 +336,8 @@ export function LabCharts({
         mode={selection.mode}
         priced={priced}
         selection={selection}
-        onToggle={(id) => setSelection((prev) => toggleStructure(prev, id))}
-        onSet={(ids) => setSelection((prev) => setStructures(prev, ids))}
+        onToggle={(id) => choose(selection.mode === "structure" ? setStructures(selection, [id]) : toggleStructure(selection, id))}
+        onSet={(ids) => choose(setStructures(selection, ids))}
       />
 
       {multiDates || (singleDate && singleChoices.length > 0) ? (
@@ -281,17 +346,26 @@ export function LabCharts({
           horizons={singleDate ? singleChoices : dateChoices}
           selection={selection}
           multi={multiDates}
-          onToggle={(id) => setSelection((prev) => toggleHorizon(prev, id))}
-          onSet={(ids) => setSelection((prev) => setHorizons(prev, ids))}
-          onFocus={(id) => setSelection((prev) => setFocusHorizon(prev, id))}
+          onToggle={(id) => choose(toggleHorizon(selection, id, evaluation.horizons))}
+          onSet={(ids, policy) => choose(setHorizons(selection, ids, policy ?? policyFromIds(evaluation.horizons, ids)))}
+          onFocus={(id) => choose(setFocusHorizon(selection, id))}
         />
       ) : null}
 
       <div className="flex flex-wrap items-end gap-2">
-        <Toggle on={showCrossovers} onClick={() => setShowCrossovers((value) => !value)} label="Crossovers" />
-        <Toggle on={showZones} onClick={() => setShowZones((value) => !value)} label="Zones" />
-        <Toggle on={showStrikes} onClick={() => setShowStrikes((value) => !value)} label="Strikes" />
-        <Toggle on={showBreakevens} onClick={() => setShowBreakevens((value) => !value)} label="Breakevens" />
+        <Toggle on={chrome.showCrossovers} onClick={() => restyle({ ...chrome, showCrossovers: !chrome.showCrossovers })} label="Crossovers" />
+        <Toggle on={chrome.showZones} onClick={() => restyle({ ...chrome, showZones: !chrome.showZones })} label="Zones" />
+        <Toggle on={chrome.showStrikes} onClick={() => restyle({ ...chrome, showStrikes: !chrome.showStrikes })} label="Strikes" />
+        <Toggle on={chrome.showBreakevens} onClick={() => restyle({ ...chrome, showBreakevens: !chrome.showBreakevens })} label="Breakevens" />
+        <Toggle
+          on={chrome.showStock}
+          onClick={() => {
+            const showStock = !chrome.showStock;
+            restyle({ ...chrome, showStock });
+            onEdit({ kind: "setShowStock", show: showStock });
+          }}
+          label="Stock"
+        />
         <label className={labLabel}>
           Min spot
           <input
@@ -336,10 +410,43 @@ export function LabCharts({
         <p className="pb-1 text-xs text-zinc-700 dark:text-zinc-300">
           {evaluation.spotWindow.source === "fit" ? "Fitted to crossovers, breakevens, strikes, and spot." : "Typed spot window."} Spot stays on.
         </p>
+        {useLook ? (
+          <OverlayLookControls
+            chrome={chrome}
+            onChrome={restyle}
+            yMinDraft={yMinDraft}
+            yMaxDraft={yMaxDraft}
+            onYMin={setYMinDraft}
+            onYMax={setYMaxDraft}
+            suggestMin={yAxis?.domain[0] ?? -1000}
+            suggestMax={yAxis?.domain[1] ?? 1000}
+          />
+        ) : null}
       </div>
+      {quiet.map((row) => (
+        <p key={row.spec.id} className="rounded-lg border border-amber-400 bg-zinc-950 px-3 py-2 text-sm text-amber-200">
+          {capital != null ? zeroPackageNotice(row.spec.label, capital, packageCostOf(row)) : `${row.spec.label} has no sized packages.`}
+          {evaluation.basis.kind === "equalCapital" && evaluation.basis.units === "whole" ? (
+            <button
+              type="button"
+              className="ml-2 underline decoration-amber-300 underline-offset-2"
+              onClick={() =>
+                onEdit({
+                  kind: "setBasis",
+                  basis: { kind: "equalCapital", capital: evaluation.basis.kind === "equalCapital" ? evaluation.basis.capital : 10_000, units: "fractional" },
+                })
+              }
+            >
+              Size fractionally
+            </button>
+          ) : null}
+        </p>
+      ))}
 
       {curves.length === 0 || !yAxis ? (
-        <p className="text-sm text-zinc-700 dark:text-zinc-300">Select a structure and a date to draw P&amp;L.</p>
+        <p className="text-sm text-zinc-700 dark:text-zinc-300">
+          {quiet.length > 0 ? "That curve stays off the chart until a package fits." : "Select a structure and a date to draw P&L."}
+        </p>
       ) : (
         <section className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
           <div className="h-[70vh] min-h-[36rem] w-full">
@@ -428,6 +535,7 @@ export function LabCharts({
                     name={curve.name}
                     stroke={curve.color}
                     strokeDasharray={curve.dash}
+                    strokeOpacity={!useLook || chrome.focusedCurveKey == null || chrome.focusedCurveKey === curve.key ? 1 : chrome.dimOpacity}
                     dot={false}
                     strokeWidth={curve.width}
                     isAnimationActive={false}
@@ -450,12 +558,23 @@ export function LabCharts({
           </div>
 
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
-            {curves.map((curve) => (
-              <span key={curve.key} className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-100">
-                <Swatch color={curve.color} width={curve.width} dash={curve.dash} />
-                {curve.name}
-              </span>
-            ))}
+            {curves.map((curve) => {
+              const focused = chrome.focusedCurveKey === curve.key;
+              const dimmed = useLook && chrome.focusedCurveKey != null && !focused;
+              return (
+                <button
+                  key={curve.key}
+                  type="button"
+                  aria-pressed={focused}
+                  onClick={() => restyle({ ...chrome, focusedCurveKey: focused ? null : curve.key })}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-100"
+                  style={{ opacity: dimmed ? chrome.dimOpacity : 1 }}
+                >
+                  <Swatch color={curve.color} width={curve.width} dash={curve.dash} />
+                  {curve.name}
+                </button>
+              );
+            })}
             {stock ? (
               <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-300">
                 <Swatch color={LAB_PALETTE.stock} width={LAB_PALETTE.stockLine} dash="6 4" />
@@ -464,7 +583,7 @@ export function LabCharts({
             ) : null}
           </div>
 
-          {showCrossovers ? (
+          {chrome.showCrossovers ? (
             <ol className="mt-3 grid list-none gap-1.5 sm:grid-cols-2">
               {callouts.length === 0 ? (
                 <li className="text-xs text-zinc-300">No crossovers on the curves in view.</li>
@@ -592,10 +711,11 @@ function DatePicker({
   selection: ChartSelection;
   multi: boolean;
   onToggle: (id: string) => void;
-  onSet: (ids: string[]) => void;
+  onSet: (ids: string[], policy?: HorizonPolicy) => void;
   onFocus: (id: string) => void;
 }) {
   const ids = horizons.map((horizon) => horizon.id);
+  const adjustable = mode === "overlay" || mode === "structure" || mode === "quarters";
   const label = mode === "span" ? "Middle date" : mode === "dateOverlay" ? "Date" : "Dates";
   return (
     <div className="space-y-1.5">
@@ -603,8 +723,17 @@ function DatePicker({
         <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">{label}</span>
         {multi ? (
           <>
-            <TextButton onClick={() => onSet(ids)}>Select all</TextButton>
-            <TextButton onClick={() => onSet([])}>Clear</TextButton>
+            <TextButton onClick={() => onSet(ids, { kind: "all" })}>Select all</TextButton>
+            <TextButton onClick={() => onSet([], { kind: "none" })}>None</TextButton>
+            {adjustable ? (
+              <>
+                <TextButton onClick={() => onSet(everyNthHorizonIds(horizons, 2), { kind: "every", step: 2 })}>Every 2nd</TextButton>
+                <TextButton onClick={() => onSet(everyNthHorizonIds(horizons, 4), { kind: "every", step: 4 })}>Every 4th</TextButton>
+                <TextButton onClick={() => onSet(expiryPlusOneIds(horizons, selection.focusHorizonId), { kind: "expiryPlus" })}>
+                  Expiry + one date
+                </TextButton>
+              </>
+            ) : null}
           </>
         ) : null}
       </div>
@@ -645,6 +774,111 @@ function DatePicker({
             );
           })}
         </div>
+      )}
+    </div>
+  );
+}
+
+function OverlayLookControls({
+  chrome,
+  onChrome,
+  yMinDraft,
+  yMaxDraft,
+  onYMin,
+  onYMax,
+  suggestMin,
+  suggestMax,
+}: {
+  chrome: ChartChrome;
+  onChrome: (next: ChartChrome) => void;
+  yMinDraft: string | null;
+  yMaxDraft: string | null;
+  onYMin: (value: string | null) => void;
+  onYMax: (value: string | null) => void;
+  suggestMin: number;
+  suggestMax: number;
+}) {
+  const commitY = (minText: string, maxText: string) => {
+    const min = Number(minText);
+    const max = Number(maxText);
+    if (Number.isFinite(min) && Number.isFinite(max) && max > min) onChrome({ ...chrome, yAxis: { kind: "manual", min, max } });
+    onYMin(null);
+    onYMax(null);
+  };
+  return (
+    <div className="flex flex-wrap items-end gap-3">
+      <label className={labLabel}>
+        Line thickness
+        <input
+          aria-label="Line thickness"
+          type="range"
+          min={1.5}
+          max={6}
+          step={0.5}
+          value={chrome.thickness}
+          onChange={(event) => onChrome({ ...chrome, thickness: Number(event.target.value) })}
+          className="mt-1 block w-28 accent-zinc-100"
+        />
+      </label>
+      <label className={labLabel}>
+        Other lines
+        <input
+          aria-label="Opacity of other lines"
+          type="range"
+          min={0.15}
+          max={1}
+          step={0.05}
+          value={chrome.dimOpacity}
+          onChange={(event) => onChrome({ ...chrome, dimOpacity: Number(event.target.value) })}
+          className="mt-1 block w-28 accent-zinc-100"
+        />
+      </label>
+      <div className="flex gap-1">
+        <Toggle on={chrome.colorMode === "rainbow"} onClick={() => onChrome({ ...chrome, colorMode: "rainbow" })} label="Rainbow" />
+        <Toggle on={chrome.colorMode === "structure"} onClick={() => onChrome({ ...chrome, colorMode: "structure" })} label="Structure colors" />
+      </div>
+      <div className="flex gap-1">
+        <Toggle on={chrome.stroke === "solid"} onClick={() => onChrome({ ...chrome, stroke: "solid" })} label="Solid" />
+        <Toggle on={chrome.stroke === "dashed"} onClick={() => onChrome({ ...chrome, stroke: "dashed" })} label="Dashed" />
+      </div>
+      <Toggle on={chrome.yAxis.kind === "auto"} onClick={() => onChrome({ ...chrome, yAxis: { kind: "auto" } })} label="Y auto" />
+      {chrome.yAxis.kind === "manual" ? (
+        <>
+          <label className={labLabel}>
+            Y min
+            <input
+              aria-label="Y axis minimum"
+              type="number"
+              value={yMinDraft ?? String(chrome.yAxis.min)}
+              onChange={(event) => onYMin(event.target.value)}
+              onBlur={() => {
+                if (yMinDraft == null || chrome.yAxis.kind !== "manual") return;
+                commitY(yMinDraft, yMaxDraft ?? String(chrome.yAxis.max));
+              }}
+              className={`mt-1 block w-24 px-2 py-1 text-sm tabular-nums ${labControl}`}
+            />
+          </label>
+          <label className={labLabel}>
+            Y max
+            <input
+              aria-label="Y axis maximum"
+              type="number"
+              value={yMaxDraft ?? String(chrome.yAxis.max)}
+              onChange={(event) => onYMax(event.target.value)}
+              onBlur={() => {
+                if (yMaxDraft == null || chrome.yAxis.kind !== "manual") return;
+                commitY(yMinDraft ?? String(chrome.yAxis.min), yMaxDraft);
+              }}
+              className={`mt-1 block w-24 px-2 py-1 text-sm tabular-nums ${labControl}`}
+            />
+          </label>
+        </>
+      ) : (
+        <TextButton
+          onClick={() => onChrome({ ...chrome, yAxis: { kind: "manual", min: suggestMin, max: suggestMax } })}
+        >
+          Y manual
+        </TextButton>
       )}
     </div>
   );

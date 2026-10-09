@@ -10,6 +10,7 @@ import {
   type OptionChain,
   type OptionRight,
 } from "@/lib/optionChain/chain";
+import { formatInt, formatUsd2 } from "@/lib/format";
 import {
   entryDollars,
   expiryPnl,
@@ -554,6 +555,22 @@ function axisCovering(
   return buildAxis(Math.max(0.01, lo), hi, extras);
 }
 
+/** Whole dollars when the amount is already whole, otherwise cents. */
+export function labDollars(amount: number): string {
+  return Math.abs(amount - Math.round(amount)) < 0.005 ? `$${formatInt(Math.round(amount))}` : formatUsd2(amount);
+}
+
+/** A whole-contract structure whose package costs more than the capital. P&L would otherwise be a flat $0. */
+export function zeroPackageNotice(label: string, capital: number, packageCost: number | null): string {
+  const cost = packageCost != null && packageCost > 0 ? labDollars(packageCost) : "more than the capital";
+  return `${label}: 0 packages on ${labDollars(capital)} (package costs ${cost}); raise capital or use fractional units`;
+}
+
+export function packageCostOf(row: { spec: { capitalOverride: number | null }; risk: { maxLoss: number | "unbounded" } }): number | null {
+  if (row.spec.capitalOverride != null && row.spec.capitalOverride > 0) return row.spec.capitalOverride;
+  return typeof row.risk.maxLoss === "number" && row.risk.maxLoss > 0 ? row.risk.maxLoss : null;
+}
+
 function attachCurves(
   priced: readonly PricedStructure[],
   horizons: readonly HorizonView[],
@@ -699,12 +716,13 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
         message: "Undefined risk. Equal-dollar sizing waits for a typed dollars-at-risk number.",
       });
     }
-    if (sizing.status === "sized" && sizing.packages === 0) {
+    if (sizing.status === "sized" && sizing.packages === 0 && lab.basis.kind === "equalCapital") {
+      const packageCost = spec.capitalOverride ?? (typeof risk.maxLoss === "number" ? risk.maxLoss : null);
       issues.push({
         severity: "warn",
         structureId: spec.id,
         code: "below-one-package",
-        message: "Capital does not cover one package.",
+        message: zeroPackageNotice(spec.label, lab.basis.capital, packageCost),
       });
     }
     for (const b of risk.breakevens) axisExtras.push(b);
