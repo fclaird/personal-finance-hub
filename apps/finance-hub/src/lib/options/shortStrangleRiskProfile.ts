@@ -1,5 +1,7 @@
 /** Short-strangle (and generic multi-leg) expiration + approximate T+0 risk profile. */
 
+import { bsmPrice } from "@/lib/options/blackScholes";
+
 export type RiskProfileLeg = {
   right: "C" | "P";
   strike: number;
@@ -36,99 +38,6 @@ export type RiskProfileModel = {
   upperBreakeven: number | null;
   dte: number | null;
 };
-
-export function erf(x: number): number {
-  // Abramowitz & Stegun 7.1.26
-  const sign = x < 0 ? -1 : 1;
-  const ax = Math.abs(x);
-  const t = 1 / (1 + 0.3275911 * ax);
-  const y =
-    1 -
-    (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t) *
-      Math.exp(-ax * ax);
-  return sign * y;
-}
-
-export function normCdf(x: number): number {
-  return 0.5 * (1 + erf(x / Math.SQRT2));
-}
-
-/** European Black–Scholes price per share. */
-export function blackScholesPrice(
-  right: "C" | "P",
-  spot: number,
-  strike: number,
-  years: number,
-  rate: number,
-  iv: number,
-): number {
-  if (!(spot > 0) || !(strike > 0) || !(iv > 0)) {
-    const intrinsic = right === "C" ? Math.max(spot - strike, 0) : Math.max(strike - spot, 0);
-    return intrinsic;
-  }
-  if (!(years > 1e-8)) {
-    return right === "C" ? Math.max(spot - strike, 0) : Math.max(strike - spot, 0);
-  }
-  const sqrtT = Math.sqrt(years);
-  const d1 = (Math.log(spot / strike) + (rate + 0.5 * iv * iv) * years) / (iv * sqrtT);
-  const d2 = d1 - iv * sqrtT;
-  if (right === "C") {
-    return spot * normCdf(d1) - strike * Math.exp(-rate * years) * normCdf(d2);
-  }
-  return strike * Math.exp(-rate * years) * normCdf(-d2) - spot * normCdf(-d1);
-}
-
-/** Contract delta (call +ve, put -ve) — underwriting delta, not position delta. */
-export function blackScholesDelta(
-  right: "C" | "P",
-  spot: number,
-  strike: number,
-  years: number,
-  rate: number,
-  iv: number,
-): number | null {
-  if (!(spot > 0) || !(strike > 0) || !(iv > 0) || !(years > 1e-8)) return null;
-  const sqrtT = Math.sqrt(years);
-  const d1 = (Math.log(spot / strike) + (rate + 0.5 * iv * iv) * years) / (iv * sqrtT);
-  if (right === "C") return normCdf(d1);
-  return normCdf(d1) - 1;
-}
-
-/**
- * Solve implied vol from a fill premium via bisection on Black-Scholes.
- * Returns null when the premium is unattainable / inputs are invalid.
- */
-export function impliedVolFromPrice(
-  right: "C" | "P",
-  spot: number,
-  strike: number,
-  years: number,
-  rate: number,
-  price: number,
-): number | null {
-  if (!(spot > 0) || !(strike > 0) || !(years > 1e-8) || !(price >= 0) || !Number.isFinite(price)) {
-    return null;
-  }
-  const intrinsic = right === "C" ? Math.max(spot - strike, 0) : Math.max(strike - spot, 0);
-  // Allow tiny below-intrinsic noise from fees/marks
-  if (price < intrinsic - 0.02) return null;
-
-  let lo = 1e-4;
-  let hi = 5;
-  const pLo = blackScholesPrice(right, spot, strike, years, rate, lo);
-  const pHi = blackScholesPrice(right, spot, strike, years, rate, hi);
-  if (price <= pLo) return lo;
-  if (price >= pHi) return hi;
-
-  for (let i = 0; i < 60; i++) {
-    const mid = 0.5 * (lo + hi);
-    const p = blackScholesPrice(right, spot, strike, years, rate, mid);
-    if (Math.abs(p - price) < 1e-6) return mid;
-    if (p > price) hi = mid;
-    else lo = mid;
-  }
-  return 0.5 * (lo + hi);
-}
 
 function legExpirationValue(right: "C" | "P", strike: number, spot: number): number {
   return right === "C" ? Math.max(spot - strike, 0) : Math.max(strike - spot, 0);
@@ -185,7 +94,15 @@ export function t0PnlAtSpot(
   for (const leg of legs) {
     const iv = leg.iv != null && leg.iv > 0 ? (leg.iv > 1.5 ? leg.iv / 100 : leg.iv) : null;
     if (iv == null) return null;
-    const mark = blackScholesPrice(leg.right, spot, leg.strike, years, rate, iv);
+    const mark = bsmPrice({
+      right: leg.right,
+      spot,
+      strike: leg.strike,
+      years,
+      rate,
+      dividendYield: 0,
+      vol: iv,
+    });
     sum += legPnlAtMark(leg, mark);
     any = true;
   }

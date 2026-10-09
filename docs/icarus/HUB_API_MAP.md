@@ -23,6 +23,7 @@ Base: `https://127.0.0.1:3000` (or Electron `3049`). When `FINANCE_HUB_API_KEY` 
 | `/api/accounts` | Accounts |
 | `/api/health` | Liveness |
 | `/api/real-estate` | Owned-property values, loan, equity, and the Main-flavor net-worth strip |
+| `/api/strategy-lab/chain` | Full option chain for Strategy Lab (`?symbol=&refresh=1`). Schwab, then Cboe delayed. Read only |
 
 Other `GET /api/*` pages (terminal, dividends, earnings, taxonomy, …) are also read-only.
 

@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import Database from "better-sqlite3";
 
-import {
-  blackScholesDelta,
-  blackScholesPrice,
-  impliedVolFromPrice,
-} from "@/lib/options/shortStrangleRiskProfile";
+import { bsmGreeks, bsmPrice, impliedVol } from "@/lib/options/blackScholes";
 import {
   deltaAtFillFromDb,
   lookupSpotNearTrade,
@@ -26,10 +22,12 @@ describe("fillDelta helpers", () => {
     const years = 9 / 365;
     const rate = 0.045;
     const iv = 0.35;
-    const px = blackScholesPrice("P", spot, strike, years, rate, iv);
-    const solved = impliedVolFromPrice("P", spot, strike, years, rate, px)!;
-    assert.ok(Math.abs(solved - iv) < 1e-3);
-    const delta = blackScholesDelta("P", spot, strike, years, rate, solved)!;
+    const px = bsmPrice({ right: "P", spot, strike, years, rate, dividendYield: 0, vol: iv });
+    const solved = impliedVol({ right: "P", spot, strike, years, rate, dividendYield: 0, price: px });
+    assert.equal(solved.ok, true);
+    if (!solved.ok) return;
+    assert.ok(Math.abs(solved.vol - iv) < 1e-3);
+    const delta = bsmGreeks({ right: "P", spot, strike, years, rate, dividendYield: 0, vol: solved.vol }).delta;
     assert.ok(delta < 0);
     assert.ok(delta > -0.5);
   });

@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Finance Hub",
+  title: "Financial Bridge",
   description: "Local-first personal finance hub",
 };
 

@@ -44,6 +44,7 @@ const MAIN_NAV: SidebarNavItem[] = [
   { href: "/terminal", label: "Terminal" },
   { href: "/positions", label: "Positions" },
   { href: "/strategies/situations", label: "Option Strategies", prefix: "/strategies" },
+  { href: "/strategy-lab", label: "Strategy Lab" },
   { href: "/allocation", label: "Allocation" },
   { href: "/diversification", label: "Diversification" },
   { href: "/real-estate", label: "Real Estate" },
