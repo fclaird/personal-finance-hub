@@ -411,7 +411,7 @@ export function LabCharts({
                   strokeDasharray="5 5"
                   label={{ value: "Spot", fill: LAB_PALETTE.spot, fontSize: 12, position: "insideTopRight" }}
                 />
-                {whatIfSpot != null && whatIfSpot >= xLo && whatIfSpot <= xHi ? (
+                {whatIfSpot != null && Math.abs(whatIfSpot - evaluation.spot) > 0.05 && whatIfSpot >= xLo && whatIfSpot <= xHi ? (
                   <ReferenceLine
                     x={whatIfSpot}
                     stroke={LAB_PALETTE.whatIf}
