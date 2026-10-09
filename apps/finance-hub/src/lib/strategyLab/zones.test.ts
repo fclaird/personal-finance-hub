@@ -300,6 +300,7 @@ describe("zone edge cases", () => {
     const lab = editLab(
       createLab(chain),
       [
+        { kind: "setBasis", basis: { kind: "equalCapital", capital: 10_000, units: "whole" } },
         {
           kind: "addStructure",
           label: "Cheap",
@@ -397,6 +398,7 @@ describe("zone edge cases", () => {
     const lab = editLab(
       createLab(chain),
       [
+        { kind: "setBasis", basis: { kind: "equalCapital", capital: 10_000, units: "whole" } },
         { kind: "setCompareStock", compare: true },
         {
           kind: "addStructure",

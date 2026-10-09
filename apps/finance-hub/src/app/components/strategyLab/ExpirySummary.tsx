@@ -137,8 +137,14 @@ export function ExpirySummary({
             type="number"
             min={1}
             step={100}
-            value={evaluation.basis.kind === "equalCapital" ? evaluation.basis.capital : capital}
+            readOnly={evaluation.basis.kind === "matchExpensive"}
+            value={
+              evaluation.basis.kind === "equalCapital"
+                ? evaluation.basis.capital
+                : (evaluation.match?.capital ?? capital)
+            }
             onChange={(e) => {
+              if (evaluation.basis.kind === "matchExpensive") return;
               const next = Number(e.target.value);
               if (!Number.isFinite(next) || next <= 0) return;
               const units = evaluation.basis.kind === "equalCapital" ? evaluation.basis.units : "whole";

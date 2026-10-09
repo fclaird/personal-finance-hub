@@ -24,14 +24,30 @@ function signed(n: number | null | undefined, mask: boolean): string {
   return formatSignedUsd2(n, { mask });
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="min-w-0">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">{label}</div>
-      <div className="truncate text-sm tabular-nums font-medium">{value}</div>
+    <div className="relative min-w-0" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300" title={hint}>
+        {label}
+      </div>
+      <div className="truncate text-sm tabular-nums font-medium" title={hint}>
+        {value}
+      </div>
+      {hint && open ? (
+        <p
+          role="tooltip"
+          className="absolute left-0 top-full z-20 mt-1 w-64 rounded border border-zinc-500 bg-zinc-950 p-2 text-[11px] font-normal normal-case leading-snug tracking-normal text-zinc-100"
+        >
+          {hint}
+        </p>
+      ) : null}
     </div>
   );
 }
+
+const SIZING_HINT =
+  "Exposure / invested is share-equivalent dollar exposure (delta × spot × packages) divided by the dollars invested. Idle cash is left out, so leftover whole-contract cash does not dilute it. P&L per 1% stock move is that same exposure times 1%. It is approximate and leaves gamma out.";
 
 function DollarsAtRisk({ row, onEdit }: { row: StructureEval; onEdit: (edit: LabEdit) => void }) {
   const spec = row.spec;
@@ -342,17 +358,29 @@ export function StructureCard({
             value={
               row.sizing.status === "needsCapitalOverride"
                 ? "Needs $"
-                : row.sizing.status === "perPackage"
-                  ? "1"
-                  : formatNum(row.sizing.packages, Number.isInteger(row.sizing.packages) ? 0 : 2)
+                : `${row.spec.label}: ${formatNum(row.sizing.packages, Number.isInteger(row.sizing.packages) ? 0 : 1)} ${row.sizing.packages === 1 ? "package" : "packages"}`
             }
+          />
+          <Stat
+            label="Invested"
+            value={row.sizing.status === "needsCapitalOverride" ? "—" : usd(row.sizing.invested, masked)}
           />
           <Stat label="Idle cash" value={row.sizing.status === "sized" ? usd(row.sizing.idleCash, masked) : usd(0, masked)} />
           <Stat
-            label="Leverage"
+            label="Exposure / invested"
+            hint={SIZING_HINT}
             value={
               row.sizing.status !== "needsCapitalOverride" && row.sizing.leverage != null
                 ? `${row.sizing.leverage.toFixed(2)}x`
+                : "—"
+            }
+          />
+          <Stat
+            label="P&L per 1% stock move"
+            hint={SIZING_HINT}
+            value={
+              row.sizing.status !== "needsCapitalOverride" && row.sizing.pnlPerPercent != null
+                ? signed(row.sizing.pnlPerPercent, masked)
                 : "—"
             }
           />

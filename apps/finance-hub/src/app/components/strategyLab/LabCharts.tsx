@@ -449,6 +449,7 @@ export function LabCharts({
         </p>
       ) : (
         <section className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
+          <p className="mb-2 text-base font-semibold text-zinc-100">{evaluation.metric}</p>
           <div className="h-[70vh] min-h-[36rem] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={rows} margin={{ top: 16, right: 16, left: 8, bottom: 8 }}>

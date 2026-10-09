@@ -410,30 +410,47 @@ export function StrategyLabPage() {
               <span className="mt-1 flex gap-2">
                 <select
                   aria-label="Capital units"
-                  value={lab.basis.kind === "perPackage" ? "package" : lab.basis.units}
+                  value={lab.basis.kind === "matchExpensive" ? "match" : lab.basis.kind === "perPackage" ? "package" : lab.basis.units}
                   onChange={(e) => {
                     const value = e.target.value;
-                    if (value === "package") edit({ kind: "setBasis", basis: { kind: "perPackage" } });
+                    if (value === "match") edit({ kind: "setBasis", basis: { kind: "matchExpensive" } });
+                    else if (value === "package") edit({ kind: "setBasis", basis: { kind: "perPackage" } });
                     else
                       edit({
                         kind: "setBasis",
-                        basis: { kind: "equalCapital", capital, units: value === "fractional" ? "fractional" : "whole" },
+                        basis: {
+                          kind: "equalCapital",
+                          capital: evaluation.match?.capital ?? capital,
+                          units: value === "fractional" ? "fractional" : "whole",
+                        },
                       });
                   }}
                   className="w-full rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm"
                 >
+                  <option value="match">Match most expensive</option>
+                  <option value="fractional">Manual dollars</option>
                   <option value="whole">Whole contracts</option>
-                  <option value="fractional">Fractional</option>
                   <option value="package">Per package</option>
                 </select>
                 <input
                   aria-label="Capital dollars"
                   type="number"
-                  value={lab.basis.kind === "equalCapital" ? lab.basis.capital : capitalDraft}
+                  readOnly={lab.basis.kind === "matchExpensive"}
+                  value={
+                    lab.basis.kind === "equalCapital"
+                      ? lab.basis.capital
+                      : lab.basis.kind === "matchExpensive"
+                        ? (evaluation.match?.capital ?? "")
+                        : capitalDraft
+                  }
                   onChange={(e) => {
+                    if (lab.basis.kind !== "equalCapital") {
+                      setCapitalDraft(e.target.value);
+                      return;
+                    }
                     setCapitalDraft(e.target.value);
                     const next = Number(e.target.value);
-                    if (lab.basis.kind === "equalCapital" && Number.isFinite(next) && next > 0) {
+                    if (Number.isFinite(next) && next > 0) {
                       edit({ kind: "setBasis", basis: { kind: "equalCapital", capital: next, units: lab.basis.units } });
                     }
                   }}
