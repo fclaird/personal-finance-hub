@@ -199,6 +199,8 @@ describe("phase 3 position import", () => {
     assert.equal(copied.structures.length, 2);
     const alt = copied.structures[1]!;
     assert.equal(alt.label, "Covered 2027-01-15 alt");
+    const third = editLab(copied, { kind: "duplicateStructure", id: alt.id }, chain);
+    assert.equal(third.structures[2]?.label, "Covered 2027-01-15 alt 2");
     assert.equal(alt.stock?.shares, 100);
     assert.equal(alt.entry.kind, "limit");
     const moved = editLab(copied, { kind: "setStrike", id: alt.id, legIndex: 0, strike: 30 }, chain);

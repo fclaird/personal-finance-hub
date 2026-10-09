@@ -405,8 +405,14 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
       const used = new Set(lab.structures.map((item) => item.slot));
       const slot = STRUCTURE_SLOTS.find((item) => !used.has(item));
       if (slot == null) return lab;
-      const suffix = spec.label.endsWith(" alt") ? "" : " alt";
-      const label = `${spec.label}${suffix}`.slice(0, 40);
+      const base = spec.label.replace(/ alt( \d+)?$/, "");
+      const taken = new Set(lab.structures.map((item) => item.label));
+      let label = `${base} alt`.slice(0, 40);
+      let n = 2;
+      while (taken.has(label)) {
+        label = `${base} alt ${n}`.slice(0, 40);
+        n += 1;
+      }
       const copy: StructureSpec = {
         ...spec,
         id: `s${lab.seq}`,
