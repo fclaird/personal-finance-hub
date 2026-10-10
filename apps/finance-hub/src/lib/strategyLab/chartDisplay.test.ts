@@ -5,7 +5,9 @@ import { isoDate, makeOptionChain, type ChainDraft, type DraftContract, type Opt
 import { createLab, editLab, evaluateLab, zeroPackageNotice, type HorizonView, type LabEvaluation, type PricedStructure } from "@/lib/strategyLab/lab";
 import {
   applyHorizonPolicy,
+  combinedDateCurves,
   crossoverCallouts,
+  structurePanelCurves,
   defaultChartChrome,
   everyNthHorizonIds,
   initialChartSelection,
@@ -321,10 +323,59 @@ describe("ZEBRA zero packages", () => {
     assert.ok(row.curves.length > 0);
     assert.ok(row.curves.every((curve) => curve.points.every((point) => point.pnl === 0)));
     assert.equal(visibleCurves(whole, initialChartSelection(whole)).length, 0);
+    const selection = initialChartSelection(whole);
+    assert.equal(structurePanelCurves(whole, selection, row.spec.id).length, 0);
+    assert.equal(combinedDateCurves(whole, selection).length, 0);
     const notice = whole.issues.find((issue) => issue.code === "below-one-package")?.message ?? "";
     assert.equal(notice, zeroPackageNotice("ZEBRA", 10_000, row.risk.maxLoss === "unbounded" ? null : row.risk.maxLoss));
     assert.match(notice, /ZEBRA: 0 packages on \$10,000 \(package costs \$/);
     assert.match(notice, /raise capital or use fractional units/);
+  });
+
+  it("draws the expensive ZEBRA once the match basis sizes it to one package", () => {
+    const matched = evaluateLab(
+      editLab(
+        createLab(chain),
+        [
+          { kind: "setAssumptions", patch: { rate: 0.04, dividendYield: 0, ivSource: "mid" } },
+          {
+            kind: "addStructure",
+            label: "ZEBRA",
+            expiry: isoDate(EXPIRY),
+            request: { template: "zebra", long: { by: "strike", strike: 400 }, short: { by: "strike", strike: 520 } },
+          },
+          {
+            kind: "addStructure",
+            label: "Spread",
+            expiry: isoDate(EXPIRY),
+            request: { template: "callDebitSpread", long: { by: "strike", strike: 400 }, short: { by: "strike", strike: 520 } },
+          },
+        ],
+        chain,
+      ),
+      chain,
+    );
+    const zebraRow = matched.structures.find((item) => item.spec.label === "ZEBRA");
+    const spreadRow = matched.structures.find((item) => item.spec.label === "Spread");
+    assert.ok(zebraRow && zebraRow.status === "priced" && spreadRow && spreadRow.status === "priced");
+    if (!zebraRow || zebraRow.status !== "priced" || zebraRow.sizing.status !== "sized") return;
+    if (!spreadRow || spreadRow.status !== "priced" || spreadRow.sizing.status !== "sized") return;
+    assert.equal(matched.basis.kind, "matchExpensive");
+    assert.equal(zebraRow.sizing.packages, 1);
+    assert.equal(zebraRow.sizing.idleCash, 0);
+    assert.ok(spreadRow.sizing.packages > 0);
+    const pnl = zebraRow.curves.flatMap((curve) => curve.points.map((point) => point.pnl));
+    assert.ok(pnl.some((value) => Math.abs(value) > 1));
+    const selection = initialChartSelection(matched);
+    const panel = structurePanelCurves(matched, selection, zebraRow.spec.id);
+    assert.ok(panel.length > 0);
+    assert.ok(panel.every((curve) => curve.structureId === zebraRow.spec.id));
+    const combined = combinedDateCurves(matched, selection);
+    assert.deepEqual(
+      combined.map((curve) => curve.structureId).sort(),
+      [spreadRow.spec.id, zebraRow.spec.id].sort(),
+    );
+    assert.equal(new Set(combined.map((curve) => curve.horizonId)).size, 1);
   });
 
   it("plots a non-zero ZEBRA once units are fractional", () => {

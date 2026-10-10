@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CartesianGrid,
   ComposedChart,
@@ -18,6 +18,7 @@ import { formatSignedUsd2 } from "@/lib/format";
 import {
   applyHorizonPolicy,
   CHART_MODES,
+  combinedDateCurves,
   crossoverCallouts,
   defaultChartChrome,
   everyNthHorizonIds,
@@ -31,6 +32,7 @@ import {
   setChartMode,
   setFocusHorizon,
   setHorizons,
+  structurePanelCurves,
   setStructures,
   shortHorizon,
   stockHorizonId,
@@ -60,7 +62,7 @@ type Row = { spot: number; stock?: number } & Record<string, number | undefined>
 
 const MODE_HINT: Record<ChartMode, string> = {
   overlay: "Today, a few quarters, and expiry. Turn on more dates when you want them.",
-  structure: "One structure on this chart. Its dates use the same chips as Overlay.",
+  structure: "Every structure on one date, then a larger chart for each structure. Focus expands one chart to full width.",
   waterfall: "Every quarter for the rainbow structure, today through a thick expiry line. Other structures are one dashed expiry line.",
   quarters: "Only the dates you turn on.",
   expiry: "Settlement P&L only.",
@@ -173,6 +175,7 @@ export function LabCharts({
   const [minDraft, setMinDraft] = useState<string | null>(null);
   const [maxDraft, setMaxDraft] = useState<string | null>(null);
   const [yMinDraft, setYMinDraft] = useState<string | null>(null);
+  const [expandedStructureId, setExpandedStructureId] = useState<string | null>(null);
   const [yMaxDraft, setYMaxDraft] = useState<string | null>(null);
   const hydrated = useRef(false);
   const knownStructures = useRef<string[] | null>(null);
@@ -336,7 +339,7 @@ export function LabCharts({
         mode={selection.mode}
         priced={priced}
         selection={selection}
-        onToggle={(id) => choose(selection.mode === "structure" ? setStructures(selection, [id]) : toggleStructure(selection, id))}
+        onToggle={(id) => choose(toggleStructure(selection, id))}
         onSet={(ids) => choose(setStructures(selection, ids))}
       />
 
@@ -443,7 +446,24 @@ export function LabCharts({
         </p>
       ))}
 
-      {curves.length === 0 || !yAxis ? (
+      {selection.mode === "structure" ? (
+        <ByStructureView
+          evaluation={evaluation}
+          priced={priced}
+          panels={selected}
+          selection={selection}
+          chrome={chrome}
+          masked={masked}
+          whatIfSpot={whatIfSpot}
+          xLo={xLo}
+          xHi={xHi}
+          readoutSpot={readoutSpot}
+          expandedId={expandedStructureId}
+          onExpand={setExpandedStructureId}
+          onFocusDate={(id) => choose(setFocusHorizon(selection, id))}
+          restyle={restyle}
+        />
+      ) : curves.length === 0 || !yAxis ? (
         <p className="text-sm text-zinc-700 dark:text-zinc-300">
           {quiet.length > 0 ? "That curve stays off the chart until a package fits." : "Select a structure and a date to draw P&L."}
         </p>
@@ -585,7 +605,7 @@ export function LabCharts({
           </div>
 
           {chrome.showCrossovers ? (
-            <ol className="mt-3 grid list-none gap-1.5 sm:grid-cols-2">
+            <ol className="mt-3 flex list-none flex-wrap gap-x-4 gap-y-2" aria-label="Crossover legend">
               {callouts.length === 0 ? (
                 <li className="text-xs text-zinc-300">No crossovers on the curves in view.</li>
               ) : (
@@ -622,6 +642,363 @@ export function LabCharts({
         </section>
       )}
     </div>
+  );
+}
+
+function ByStructureView({
+  evaluation,
+  priced,
+  panels,
+  selection,
+  chrome,
+  masked,
+  whatIfSpot,
+  xLo,
+  xHi,
+  readoutSpot,
+  expandedId,
+  onExpand,
+  onFocusDate,
+  restyle,
+}: {
+  evaluation: LabEvaluation;
+  priced: readonly PricedStructure[];
+  panels: readonly PricedStructure[];
+  selection: ChartSelection;
+  chrome: ChartChrome;
+  masked: boolean;
+  whatIfSpot: number | null;
+  xLo: number;
+  xHi: number;
+  readoutSpot: number;
+  expandedId: string | null;
+  onExpand: (id: string | null) => void;
+  onFocusDate: (id: string) => void;
+  restyle: (chrome: ChartChrome) => void;
+}) {
+  const openId = expandedId && panels.some((row) => row.spec.id === expandedId) ? expandedId : null;
+  const shown = openId ? panels.filter((row) => row.spec.id === openId) : panels;
+  const dates = [...evaluation.horizons].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.settlement ? 1 : -1));
+  const combined = combinedDateCurves(evaluation, selection);
+  const dateLabel = shortHorizon(evaluation.horizons.find((horizon) => horizon.id === combined[0]?.horizonId)?.label ?? "this date");
+  return (
+    <div className="space-y-4" data-chart-layout="by-structure">
+      <PlotCard
+        title={`All structures on this date · ${dateLabel}`}
+        metric={evaluation.metric}
+        heightClass="h-[50vh] min-h-[28rem]"
+        evaluation={evaluation}
+        priced={priced}
+        curves={combined}
+        chrome={chrome}
+        masked={masked}
+        whatIfSpot={whatIfSpot}
+        xLo={xLo}
+        xHi={xHi}
+        readoutSpot={readoutSpot}
+        restyle={restyle}
+        useLook={false}
+        toolbar={
+          <div className="mb-2 flex flex-wrap gap-1.5" role="group" aria-label="Combined chart date">
+            {dates.map((horizon) => {
+              const on = horizon.id === selection.focusHorizonId;
+              return (
+                <button
+                  key={horizon.id}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => onFocusDate(horizon.id)}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                    on ? "bg-zinc-100 text-zinc-950" : "border border-zinc-500 text-zinc-100"
+                  }`}
+                >
+                  {shortHorizon(horizon.label)}
+                </button>
+              );
+            })}
+          </div>
+        }
+      />
+      {shown.map((row) => {
+        const curves = structurePanelCurves(evaluation, selection, row.spec.id);
+        const focused = openId === row.spec.id;
+        return (
+          <section key={row.spec.id} className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-base font-semibold" style={{ color: seriesColor(row.spec.slot) }}>
+                {row.spec.label}
+              </h3>
+              <button
+                type="button"
+                aria-pressed={focused}
+                aria-label={focused ? "Show all panels" : `Focus ${row.spec.label}`}
+                onClick={() => onExpand(focused ? null : row.spec.id)}
+                className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
+              >
+                {focused ? "Show all panels" : "Focus"}
+              </button>
+            </div>
+            <PlotCard
+              title=""
+              metric=""
+              heightClass={focused ? "h-[70vh] min-h-[36rem]" : "h-[44vh] min-h-[24rem]"}
+              evaluation={evaluation}
+              priced={priced}
+              curves={curves}
+              chrome={chrome}
+              masked={masked}
+              whatIfSpot={whatIfSpot}
+              xLo={xLo}
+              xHi={xHi}
+              readoutSpot={readoutSpot}
+              restyle={restyle}
+              useLook
+            />
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function PlotCard({
+  title,
+  metric,
+  heightClass,
+  toolbar,
+  evaluation,
+  priced,
+  curves,
+  chrome,
+  masked,
+  whatIfSpot,
+  xLo,
+  xHi,
+  readoutSpot,
+  restyle,
+  useLook,
+}: {
+  title: string;
+  metric: string;
+  heightClass: string;
+  toolbar?: ReactNode;
+  evaluation: LabEvaluation;
+  priced: readonly PricedStructure[];
+  curves: readonly CurveView[];
+  chrome: ChartChrome;
+  masked: boolean;
+  whatIfSpot: number | null;
+  xLo: number;
+  xHi: number;
+  readoutSpot: number;
+  restyle: (chrome: ChartChrome) => void;
+  useLook: boolean;
+}) {
+  const inside = (spot: number) => spot >= xLo - 1e-8 && spot <= xHi + 1e-8;
+  const stockId = chrome.showStock ? stockHorizonId(evaluation, curves) : null;
+  const stock = stockId ? evaluation.stock.find((series) => series.horizonId === stockId) : undefined;
+  const spots = (evaluation.axis.length > 0 ? evaluation.axis : (priced[0]?.curves[0]?.points.map((point) => point.spot) ?? [])).filter(inside);
+  const rows: Row[] = spots.map((spot) => {
+    const row: Row = { spot };
+    for (const curve of curves) {
+      const structure = priced.find((item) => item.spec.id === curve.structureId);
+      const points = structure?.curves.find((item) => item.horizonId === curve.horizonId)?.points;
+      const pnl = points ? samplePnl(points, spot) : null;
+      if (pnl != null) row[curve.key] = pnl;
+    }
+    if (stock) {
+      const pnl = samplePnl(stock.points, spot);
+      if (pnl != null) row.stock = pnl;
+    }
+    return row;
+  });
+  const yValues: number[] = [];
+  for (const row of rows) {
+    for (const curve of curves) {
+      const value = row[curve.key];
+      if (typeof value === "number") yValues.push(value);
+    }
+    if (typeof row.stock === "number") yValues.push(row.stock);
+  }
+  const yAxis = chrome.yAxis.kind === "manual" ? niceAxis(chrome.yAxis.min, chrome.yAxis.max) : yExtent(yValues);
+  const callouts = chrome.showCrossovers ? crossoverCallouts(evaluation, curves, { min: xLo, max: xHi }) : [];
+  const zones = chrome.showZones ? zoneBands(evaluation, curves, xLo, xHi) : [];
+  const marked = priced.filter((row) => curves.some((curve) => curve.structureId === row.spec.id));
+  const strikeSpots = chrome.showStrikes
+    ? [...new Set(marked.flatMap((row) => row.legs.map((leg) => leg.strike)))].filter(inside).sort((a, b) => a - b)
+    : [];
+  const breakevens = chrome.showBreakevens
+    ? marked.flatMap((row) => row.risk.breakevens.filter(inside).map((spot) => ({ spot, id: row.spec.id, color: seriesColor(row.spec.slot) })))
+    : [];
+  if (curves.length === 0 || !yAxis) {
+    return (
+      <section className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-sm text-zinc-300">
+        {title ? <p className="text-base font-semibold text-zinc-100">{title}</p> : null}
+        <p className="mt-2">Nothing to draw until a package fits and a date is on.</p>
+      </section>
+    );
+  }
+  return (
+    <section className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
+      {toolbar}
+      {title ? <p className="mb-1 text-base font-semibold text-zinc-100">{title}</p> : null}
+      {metric ? <p className="mb-2 text-sm text-zinc-300">{metric}</p> : null}
+      <div className={`${heightClass} w-full`}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={rows} margin={{ top: 16, right: 16, left: 8, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={LAB_PALETTE.grid} />
+            <XAxis
+              dataKey="spot"
+              type="number"
+              domain={[xLo, xHi]}
+              tickFormatter={(value: number) => value.toFixed(0)}
+              allowDataOverflow
+              tick={{ fill: LAB_PALETTE.axis, fontSize: 13 }}
+              axisLine={{ stroke: LAB_PALETTE.axisLine }}
+              tickLine={{ stroke: LAB_PALETTE.axisLine }}
+            />
+            <YAxis
+              domain={yAxis.domain}
+              ticks={yAxis.ticks}
+              tickFormatter={(value: number) => (masked ? "XXXXX" : formatSignedUsd2(value))}
+              width={96}
+              allowDataOverflow
+              tick={{ fill: LAB_PALETTE.axis, fontSize: 13 }}
+              axisLine={{ stroke: LAB_PALETTE.axisLine }}
+              tickLine={{ stroke: LAB_PALETTE.axisLine }}
+            />
+            <Tooltip content={<ChartTip mask={masked} structures={marked} />} cursor={{ stroke: LAB_PALETTE.spot, strokeWidth: 1.5 }} />
+            {zones.map((zone) => (
+              <ReferenceArea key={zone.key} x1={zone.x1} x2={zone.x2} fill={zone.color} fillOpacity={LAB_PALETTE.zoneOpacity} strokeOpacity={0} />
+            ))}
+            {strikeSpots.map((strike) => (
+              <ReferenceLine key={strike} x={strike} stroke={LAB_PALETTE.strike} strokeWidth={1} strokeDasharray="3 3" />
+            ))}
+            {callouts.map((callout) => {
+              const y = calloutY(priced, curves, callout.horizonId, callout.structureId, callout.spot);
+              if (y == null) return null;
+              const color = curves.find((curve) => curve.structureId === callout.structureId && curve.horizonId === callout.horizonId)?.color ?? LAB_PALETTE.axis;
+              return (
+                <ReferenceDot
+                  key={`${callout.horizonId}-${callout.n}`}
+                  x={callout.spot}
+                  y={y}
+                  r={10}
+                  fill={color}
+                  stroke={LAB_PALETTE.dotStroke}
+                  strokeWidth={1.5}
+                  label={{ value: String(callout.n), position: "center", fill: "#09090b", fontSize: 11, fontWeight: 700 }}
+                />
+              );
+            })}
+            {breakevens.map((mark) => (
+              <ReferenceDot key={`${mark.id}-${mark.spot}`} x={mark.spot} y={0} r={4} fill={mark.color} stroke={LAB_PALETTE.dotStroke} strokeWidth={1} />
+            ))}
+            <ReferenceLine y={0} stroke={LAB_PALETTE.zero} strokeWidth={1.5} />
+            <ReferenceLine
+              x={evaluation.spot}
+              stroke={LAB_PALETTE.spot}
+              strokeWidth={2}
+              strokeDasharray="5 5"
+              label={{ value: "Spot", fill: LAB_PALETTE.spot, fontSize: 12, position: "insideTopRight" }}
+            />
+            {whatIfSpot != null && Math.abs(whatIfSpot - evaluation.spot) > 0.05 && whatIfSpot >= xLo && whatIfSpot <= xHi ? (
+              <ReferenceLine
+                x={whatIfSpot}
+                stroke={LAB_PALETTE.whatIf}
+                strokeWidth={2}
+                strokeDasharray="2 2"
+                label={{ value: "What-if", fill: LAB_PALETTE.whatIf, fontSize: 12, position: "insideBottomRight" }}
+              />
+            ) : null}
+            {curves.map((curve) => (
+              <Line
+                key={curve.key}
+                type="linear"
+                dataKey={curve.key}
+                name={curve.name}
+                stroke={curve.color}
+                strokeDasharray={curve.dash}
+                strokeOpacity={!useLook || chrome.focusedCurveKey == null || chrome.focusedCurveKey === curve.key ? 1 : chrome.dimOpacity}
+                dot={false}
+                strokeWidth={curve.width}
+                isAnimationActive={false}
+              />
+            ))}
+            {stock ? (
+              <Line
+                type="linear"
+                dataKey="stock"
+                name={`Stock · ${shortHorizon(evaluation.horizons.find((horizon) => horizon.id === stockId)?.label ?? "Stock")}`}
+                stroke={LAB_PALETTE.stock}
+                strokeDasharray="6 4"
+                dot={false}
+                strokeWidth={LAB_PALETTE.stockLine}
+                isAnimationActive={false}
+              />
+            ) : null}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
+        {curves.map((curve) => {
+          const focused = chrome.focusedCurveKey === curve.key;
+          const dimmed = useLook && chrome.focusedCurveKey != null && !focused;
+          return (
+            <button
+              key={curve.key}
+              type="button"
+              aria-pressed={focused}
+              onClick={() => restyle({ ...chrome, focusedCurveKey: focused ? null : curve.key })}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-100"
+              style={{ opacity: dimmed ? chrome.dimOpacity : 1 }}
+            >
+              <Swatch color={curve.color} width={curve.width} dash={curve.dash} />
+              {curve.name}
+            </button>
+          );
+        })}
+        {stock ? (
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-300">
+            <Swatch color={LAB_PALETTE.stock} width={LAB_PALETTE.stockLine} dash="6 4" />
+            Stock
+          </span>
+        ) : null}
+      </div>
+      {chrome.showCrossovers ? (
+        <ol className="mt-3 flex list-none flex-wrap gap-x-4 gap-y-2" aria-label="Crossover legend">
+          {callouts.length === 0 ? (
+            <li className="text-xs text-zinc-300">No crossovers on the curves in view.</li>
+          ) : (
+            callouts.map((callout) => {
+              const color =
+                curves.find((curve) => curve.structureId === callout.structureId && curve.horizonId === callout.horizonId)?.color ?? LAB_PALETTE.axis;
+              return (
+                <li key={`${callout.horizonId}-${callout.n}`} className="flex max-w-xl items-start gap-2 text-sm text-zinc-100">
+                  <span
+                    className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-zinc-950"
+                    style={{ backgroundColor: color }}
+                  >
+                    {callout.n}
+                  </span>
+                  <span>{callout.text}</span>
+                </li>
+              );
+            })
+          )}
+        </ol>
+      ) : null}
+      <div className="mt-3 border-t border-zinc-700 pt-2">
+        <p className="text-xs font-semibold text-zinc-300">At expiry if spot is {readoutSpot.toFixed(2)}</p>
+        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+          {marked.map((row) => (
+            <span key={row.spec.id} className="text-sm font-semibold tabular-nums" style={{ color: seriesColor(row.spec.slot) }}>
+              {row.spec.label} {money(capitalExpiryPnl(row, readoutSpot), masked)}
+            </span>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 

@@ -301,6 +301,28 @@ export function visibleCurves(evaluation: LabEvaluation, selection: ChartSelecti
   }
 }
 
+/** Every selected structure on one date. That is the top chart in By structure. */
+export function combinedDateCurves(evaluation: LabEvaluation, selection: ChartSelection): CurveView[] {
+  const known = new Set(evaluation.horizons.map((horizon) => horizon.id));
+  const horizonId =
+    (selection.focusHorizonId && known.has(selection.focusHorizonId) ? selection.focusHorizonId : null) ??
+    selection.horizonIds.find((id) => known.has(id)) ??
+    evaluation.horizons[0]?.id ??
+    null;
+  if (!horizonId) return [];
+  return visibleCurves(evaluation, { ...selection, mode: "dateOverlay", focusHorizonId: horizonId });
+}
+
+/** One structure's selected dates, drawn as a rainbow. A zero-package structure contributes nothing. */
+export function structurePanelCurves(evaluation: LabEvaluation, selection: ChartSelection, structureId: string): CurveView[] {
+  if (!selection.structureIds.includes(structureId)) return [];
+  return visibleCurves(
+    evaluation,
+    { ...selection, mode: "overlay", structureIds: [structureId] },
+    { colorMode: "rainbow", stroke: "dashed", thickness: 3 },
+  );
+}
+
 /** One stock line: expiry when several dates are drawn, otherwise the only visible date. */
 export function stockHorizonId(evaluation: LabEvaluation, curves: readonly CurveView[]): string | null {
   if (evaluation.stock.length === 0 || curves.length === 0) return null;
