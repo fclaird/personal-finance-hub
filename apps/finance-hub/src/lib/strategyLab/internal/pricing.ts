@@ -150,6 +150,45 @@ export function expiryPnl(legs: readonly { right: OptionRight; strike: number; r
   return expiryValue(legs, spot) - debit;
 }
 
+/**
+ * Share-equivalent delta of the settled package from this spot to one dollar higher.
+ * Starting on a strike counts the region just through it: a call spread is flat above
+ * its short strike, and a ZEBRA is long 100 shares once that short call is reached.
+ */
+export function settledShareDelta(
+  legs: readonly { right: OptionRight; strike: number; ratio: number }[],
+  spot: number,
+): number {
+  return expiryValue(legs, spot + 1) - expiryValue(legs, spot);
+}
+
+/** Model share-equivalent delta at an arbitrary spot. IV stays the entry IV. Expired dates use the settled slope. */
+export function packageShareDelta(
+  legs: readonly PricedLeg[],
+  assumptions: Assumptions,
+  spot: number,
+  years: number,
+): number | null {
+  if (!(years > 1e-8)) return settledShareDelta(legs, spot);
+  let delta = 0;
+  for (const leg of legs) {
+    if (leg.iv == null) return null;
+    delta +=
+      bsmGreeks({
+        right: leg.right,
+        spot,
+        strike: leg.strike,
+        years,
+        rate: assumptions.rate,
+        dividendYield: assumptions.dividendYield,
+        vol: leg.iv,
+      }).delta *
+      leg.ratio *
+      100;
+  }
+  return delta;
+}
+
 export type ExpiryRisk = {
   readonly breakevens: readonly number[];
   readonly maxLoss: number | "unbounded";

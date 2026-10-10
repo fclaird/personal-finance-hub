@@ -23,6 +23,8 @@ import {
   type ExpiryRisk,
   type PricedLeg,
 } from "@/lib/strategyLab/internal/pricing";
+
+export type { Assumptions };
 import { resolveTemplate, TEMPLATE_CATALOG, type TemplateRequest } from "@/lib/strategyLab/internal/templates";
 import {
   basisMetric,

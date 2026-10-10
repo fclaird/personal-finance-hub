@@ -8,9 +8,9 @@ import { LabCharts } from "@/app/components/strategyLab/LabCharts";
 import { ExpirySummary } from "@/app/components/strategyLab/ExpirySummary";
 import { ScenarioBar } from "@/app/components/strategyLab/ScenarioBar";
 import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
-import { StructureCard } from "@/app/components/strategyLab/StructureCard";
+import { TargetSection } from "@/app/components/strategyLab/TargetBoard";
 import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
-import { bestWhenFor, TEMPLATE_CATALOG, type HorizonSpec, type TemplateRequest } from "@/lib/strategyLab/lab";
+import { TEMPLATE_CATALOG, type HorizonSpec, type TemplateRequest } from "@/lib/strategyLab/lab";
 import { formatModelDelta, nearestDeltaStrike, strikeDeltas } from "@/lib/strategyLab/strikeDelta";
 import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
 import { useStrategyLab } from "@/lib/strategyLab/useStrategyLab";
@@ -175,6 +175,8 @@ export function StrategyLabPage() {
   const [shortStrike, setShortStrike] = useState("");
   const [limit, setLimit] = useState("");
   const [capitalDraft, setCapitalDraft] = useState("10000");
+  const [targetHorizon, setTargetHorizon] = useState("expiry");
+  const [targetText, setTargetText] = useState("");
   const [whatIf, setWhatIf] = useState<{ symbol: string; spot: number } | null>(null);
   const [customDate, setCustomDate] = useState("");
   const [customMonths, setCustomMonths] = useState("9");
@@ -614,19 +616,17 @@ export function StrategyLabPage() {
 
           <ChainGrid chain={chain} assumptions={lab.assumptions} onAddLeg={addChainLeg} />
 
-          <div className="grid gap-4 lg:grid-cols-3">
-            {evaluation.structures.map((row) => (
-              <StructureCard
-                key={row.spec.id}
-                chain={chain}
-                assumptions={lab.assumptions}
-                row={row}
-                masked={privacy.masked}
-                bestWhen={bestWhenFor(evaluation.expiryBoards, row.spec.id)}
-                onEdit={edit}
-              />
-            ))}
-          </div>
+          <TargetSection
+            evaluation={evaluation}
+            chain={chain}
+            assumptions={lab.assumptions}
+            horizonId={evaluation.horizons.some((horizon) => horizon.id === targetHorizon) ? targetHorizon : "expiry"}
+            onHorizon={setTargetHorizon}
+            targetText={targetText}
+            onTargetText={setTargetText}
+            masked={privacy.masked}
+            onEdit={edit}
+          />
 
           <div id="charts" className="space-y-4">
             <ExpirySummary

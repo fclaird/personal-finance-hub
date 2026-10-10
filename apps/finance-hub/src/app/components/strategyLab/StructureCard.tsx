@@ -6,6 +6,15 @@ import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/Strik
 import { formatExpiryLabel, type OptionChain, type OptionRight } from "@/lib/optionChain/chain";
 import { formatNum, formatSignedUsd2, formatUsd2 } from "@/lib/format";
 import type { LabEdit, StructureEval } from "@/lib/strategyLab/lab";
+import {
+  CAPPED_DELTA,
+  COST_PER_DELTA_HINT,
+  costPerDeltaLine,
+  describeShareDelta,
+  shortCallStrike,
+  TARGET_LEVERAGE_HINT,
+  type TargetRead,
+} from "@/lib/strategyLab/targetMetrics";
 import { LAB_PALETTE, labControl, labLabel } from "@/lib/strategyLab/palette";
 import {
   formatModelDelta,
@@ -46,8 +55,9 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   );
 }
 
-const SIZING_HINT =
-  "Exposure / invested is share-equivalent dollar exposure (delta × spot × packages) divided by the dollars invested. Idle cash is left out, so leftover whole-contract cash does not dilute it. P&L per 1% stock move is that same exposure times 1%. It is approximate and leaves gamma out.";
+const MOVE_HINT =
+  "Approximate P&L if the stock moves 1% from today's spot, using today's share-equivalent exposure times 1%. Gamma is not included.";
+const MULTIPLE_HINT = "Position value at the target divided by dollars invested. Value is the dollars invested plus the P&L at that spot.";
 
 function DollarsAtRisk({ row, onEdit }: { row: StructureEval; onEdit: (edit: LabEdit) => void }) {
   const spec = row.spec;
@@ -103,6 +113,7 @@ export function StructureCard({
   row,
   masked,
   bestWhen,
+  target,
   onEdit,
 }: {
   chain: OptionChain;
@@ -110,6 +121,7 @@ export function StructureCard({
   row: StructureEval;
   masked: boolean;
   bestWhen: string;
+  target: TargetRead | null;
   onEdit: (edit: LabEdit | readonly LabEdit[]) => void;
 }) {
   const spec = row.spec;
@@ -346,6 +358,7 @@ export function StructureCard({
       {row.status === "blocked" ? (
         <p className="text-sm text-rose-600">{row.reason}</p>
       ) : (
+        <>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <Stat label="Debit" value={usd(row.debit, masked)} />
           <Stat label="Breakeven" value={row.risk.breakevens.map((b) => b.toFixed(2)).join(", ") || "—"} />
@@ -367,22 +380,49 @@ export function StructureCard({
           />
           <Stat label="Idle cash" value={row.sizing.status === "sized" ? usd(row.sizing.idleCash, masked) : usd(0, masked)} />
           <Stat
-            label="Exposure / invested"
-            hint={SIZING_HINT}
+            label="Leverage if target reached"
+            hint={TARGET_LEVERAGE_HINT}
+            value={
+              target == null
+                ? "—"
+                : target.capped
+                  ? CAPPED_DELTA
+                  : target.leverageAtTarget != null
+                    ? `${target.leverageAtTarget.toFixed(2)}×`
+                    : "—"
+            }
+          />
+          <Stat
+            label="at entry"
+            hint={TARGET_LEVERAGE_HINT}
             value={
               row.sizing.status !== "needsCapitalOverride" && row.sizing.leverage != null
-                ? `${row.sizing.leverage.toFixed(2)}x`
+                ? `${row.sizing.leverage.toFixed(2)}×`
                 : "—"
             }
           />
           <Stat
             label="P&L per 1% stock move"
-            hint={SIZING_HINT}
+            hint={MOVE_HINT}
             value={
               row.sizing.status !== "needsCapitalOverride" && row.sizing.pnlPerPercent != null
                 ? signed(row.sizing.pnlPerPercent, masked)
                 : "—"
             }
+          />
+          <Stat
+            label="Delta if short strike is reached"
+            hint={COST_PER_DELTA_HINT}
+            value={target ? describeShareDelta(target.positionDelta, target.capped) : "—"}
+          />
+          <Stat
+            label="P&L at target"
+            value={target?.pnl != null ? signed(target.pnl, masked) : "—"}
+          />
+          <Stat
+            label="If the trade works"
+            hint={MULTIPLE_HINT}
+            value={target?.multiple != null ? `${target.multiple.toFixed(2)}× invested` : "—"}
           />
           <Stat label="Delta" value={row.greeks ? formatNum(row.greeks.delta, 1) : "—"} />
           <Stat label="Gamma" value={row.greeks ? formatNum(row.greeks.gamma, 3) : "—"} />
@@ -394,6 +434,14 @@ export function StructureCard({
             value={masked ? "XXXXX" : row.risk.slopeAbove === 0 ? "Flat" : `${row.risk.slopeAbove > 0 ? "+" : ""}$${row.risk.slopeAbove}`}
           />
         </div>
+        {target ? (
+          <p className="mt-3 text-sm text-zinc-900 dark:text-zinc-100" title={COST_PER_DELTA_HINT}>
+            {costPerDeltaLine(target)}
+          </p>
+        ) : row.status === "priced" && shortCallStrike(row.legs) == null ? (
+          <p className="mt-3 text-sm text-zinc-700 dark:text-zinc-300">Set a target price. This structure has no short call.</p>
+        ) : null}
+        </>
       )}
     </article>
   );
