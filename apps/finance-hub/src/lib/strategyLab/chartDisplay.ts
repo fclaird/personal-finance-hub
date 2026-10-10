@@ -13,7 +13,6 @@ import {
 import { LAB_PALETTE } from "@/lib/strategyLab/palette";
 
 export const CHART_MODES = [
-  { id: "overlay", label: "Overlay" },
   { id: "structure", label: "By structure" },
   { id: "waterfall", label: "Waterfall" },
   { id: "quarters", label: "Quarters" },
@@ -45,7 +44,7 @@ export type ChartSelection = {
   focusHorizonId: string | null;
 };
 
-export type OverlayLook = {
+export type CurveLook = {
   colorMode: "rainbow" | "structure";
   stroke: "solid" | "dashed";
   thickness: number;
@@ -237,7 +236,12 @@ export function reconcileChartSelection(prev: ChartSelection, live: KnownIds, kn
   return { ...prev, structureIds, horizonIds, focusStructureId, focusHorizonId };
 }
 
-export function visibleCurves(evaluation: LabEvaluation, selection: ChartSelection, look?: OverlayLook): CurveView[] {
+export function visibleCurves(evaluation: LabEvaluation, selection: ChartSelection, look?: CurveLook): CurveView[] {
+  const painted = paintMode(evaluation, selection);
+  return look ? applyCurveLook(painted, look, evaluation) : painted;
+}
+
+function paintMode(evaluation: LabEvaluation, selection: ChartSelection): CurveView[] {
   const structures = selectedStructures(evaluation, selection);
   if (structures.length === 0) return [];
   const focus = structures.find((row) => row.spec.id === selection.focusStructureId) ?? structures[0]!;
@@ -269,40 +273,42 @@ export function visibleCurves(evaluation: LabEvaluation, selection: ChartSelecti
         const chosen = structureHorizons(evaluation, row).filter((horizon) => selection.horizonIds.includes(horizon.id));
         return paint(row, chosen, rainbow ? "rainbow" : "palette");
       });
-    case "overlay":
-    case "structure": {
-      const rows = selection.mode === "structure" ? [focus] : structures;
-      const applied = look ?? (selection.mode === "structure"
-        ? { colorMode: "rainbow" as const, stroke: "dashed" as const, thickness: 3 }
-        : { colorMode: "structure" as const, stroke: "dashed" as const, thickness: 3 });
-      const curves = rows.flatMap((row) => {
-        const chosen = structureHorizons(evaluation, row).filter((horizon) => selection.horizonIds.includes(horizon.id));
-        return paint(row, chosen, applied.colorMode === "rainbow" ? "rainbow" : "palette");
-      });
-      return curves.map((curve) => {
-        const expiry = evaluation.horizons.some((horizon) => horizon.id === curve.horizonId && horizon.settlement);
-        return {
-          ...curve,
-          width: applied.thickness + (expiry ? 1 : 0),
-          dash: applied.stroke === "solid" || expiry ? undefined : (curve.dash ?? "6 3"),
-        };
-      });
-    }
+    case "structure":
+    case "dateOverlay":
+      return curvesOnFocusDate(evaluation, selection);
     case "span":
       return structures.flatMap((row) => paint(row, spanHorizons(evaluation, row, selection.focusHorizonId), rainbow ? "rainbow" : "palette"));
-    case "dateOverlay":
-      return structures.flatMap((row) => {
-        const horizons = structureHorizons(evaluation, row);
-        const chosen = horizons.find((horizon) => horizon.id === selection.focusHorizonId) ?? horizons[0];
-        return chosen ? paint(row, [chosen], "palette") : [];
-      });
     default:
       return [];
   }
 }
 
-/** Every selected structure on one date. That is the top chart in By structure. */
+/** Line thickness, dash, and color from the chart controls. Waterfall keeps its own colors. */
+export function applyCurveLook(curves: readonly CurveView[], look: CurveLook, evaluation: LabEvaluation): CurveView[] {
+  return curves.map((curve, index) => {
+    const expiry = evaluation.horizons.some((horizon) => horizon.id === curve.horizonId && horizon.settlement);
+    const slot = evaluation.structures.find((row) => row.spec.id === curve.structureId)?.spec.slot ?? index;
+    const color =
+      look.colorMode === "rainbow"
+        ? rainbowColor(curves.length <= 1 ? 1 : index / (curves.length - 1))
+        : (LAB_PALETTE.series[slot] ?? LAB_PALETTE.series[0]);
+    return {
+      ...curve,
+      color,
+      width: look.thickness + (expiry ? 1 : 0),
+      dash: look.stroke === "solid" || expiry ? undefined : (curve.dash ?? "6 3"),
+    };
+  });
+}
+
+/** Every selected structure on one date. That is the By structure chart. */
 export function combinedDateCurves(evaluation: LabEvaluation, selection: ChartSelection): CurveView[] {
+  return curvesOnFocusDate(evaluation, selection);
+}
+
+function curvesOnFocusDate(evaluation: LabEvaluation, selection: ChartSelection): CurveView[] {
+  const structures = selectedStructures(evaluation, selection);
+  if (structures.length === 0) return [];
   const known = new Set(evaluation.horizons.map((horizon) => horizon.id));
   const horizonId =
     (selection.focusHorizonId && known.has(selection.focusHorizonId) ? selection.focusHorizonId : null) ??
@@ -310,17 +316,17 @@ export function combinedDateCurves(evaluation: LabEvaluation, selection: ChartSe
     evaluation.horizons[0]?.id ??
     null;
   if (!horizonId) return [];
-  return visibleCurves(evaluation, { ...selection, mode: "dateOverlay", focusHorizonId: horizonId });
+  return structures.flatMap((row) => {
+    const horizons = structureHorizons(evaluation, row);
+    const chosen = horizons.find((horizon) => horizon.id === horizonId) ?? horizons[0];
+    return chosen ? paint(row, [chosen], "palette") : [];
+  });
 }
 
 /** One structure's selected dates, drawn as a rainbow. A zero-package structure contributes nothing. */
 export function structurePanelCurves(evaluation: LabEvaluation, selection: ChartSelection, structureId: string): CurveView[] {
   if (!selection.structureIds.includes(structureId)) return [];
-  return visibleCurves(
-    evaluation,
-    { ...selection, mode: "overlay", structureIds: [structureId] },
-    { colorMode: "rainbow", stroke: "dashed", thickness: 3 },
-  );
+  return visibleCurves(evaluation, { ...selection, mode: "quarters", structureIds: [structureId] });
 }
 
 /** One stock line: expiry when several dates are drawn, otherwise the only visible date. */
@@ -493,7 +499,7 @@ export function defaultChartChrome(): ChartChrome {
     thickness: 3,
     dimOpacity: 0.28,
     colorMode: "structure",
-    stroke: "dashed",
+    stroke: "solid",
     yAxis: { kind: "auto" },
     showStock: true,
     showStrikes: false,
@@ -505,12 +511,19 @@ export function defaultChartChrome(): ChartChrome {
 }
 
 export function parseChartSettings(raw: unknown): StoredChartSettings | null {
-  if (!isRecord(raw) || raw.v !== 1) return null;
-  const mode = CHART_MODES.some((item) => item.id === raw.mode) ? (raw.mode as ChartMode) : null;
-  const horizonPolicy = parseHorizonPolicy(raw.horizonPolicy);
-  const chrome = parseChrome(raw.chrome);
-  if (!mode || !horizonPolicy || !chrome) return null;
-  return { mode, horizonPolicy, chrome };
+  try {
+    if (!isRecord(raw) || raw.v !== 1) return null;
+    const horizonPolicy = parseHorizonPolicy(raw.horizonPolicy);
+    const chrome = parseChrome(raw.chrome);
+    if (!horizonPolicy || !chrome) return null;
+    // Overlay was removed. Keep the saved line settings and open By structure.
+    if (raw.mode === "overlay") return { mode: "structure", horizonPolicy, chrome };
+    const mode = CHART_MODES.some((item) => item.id === raw.mode) ? (raw.mode as ChartMode) : null;
+    if (!mode) return null;
+    return { mode, horizonPolicy, chrome };
+  } catch {
+    return null;
+  }
 }
 
 export function readChartSettings(storage: Pick<Storage, "getItem">): StoredChartSettings | null {

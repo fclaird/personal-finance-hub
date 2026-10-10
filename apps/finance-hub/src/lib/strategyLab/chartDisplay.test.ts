@@ -4,7 +4,9 @@ import { describe, it } from "node:test";
 import { isoDate, makeOptionChain, type ChainDraft, type DraftContract, type OptionChain } from "@/lib/optionChain/chain";
 import { createLab, editLab, evaluateLab, zeroPackageNotice, type HorizonView, type LabEvaluation, type PricedStructure } from "@/lib/strategyLab/lab";
 import {
+  applyCurveLook,
   applyHorizonPolicy,
+  CHART_MODES,
   combinedDateCurves,
   crossoverCallouts,
   structurePanelCurves,
@@ -267,7 +269,7 @@ describe("chart display selector", () => {
     assert.notEqual(rainbowColor(0.5), todayColor);
   });
 
-  it("starts overlay on today, a few quarters, and expiry", () => {
+  it("keeps a readable set of dates to today, a few quarters, and expiry", () => {
     const horizons = quarterHorizons(11);
     const ids = readableHorizonIds(horizons);
     assert.ok(ids.length <= 5);
@@ -276,9 +278,19 @@ describe("chart display selector", () => {
     const everyFourth = everyNthHorizonIds(horizons, 4);
     assert.ok(everyFourth.includes(horizons[10]!.id));
     assert.deepEqual(applyHorizonPolicy(horizons, { kind: "every", step: 4 }, null).at(-1), horizons[10]!.id);
-    const overlay = visibleCurves(ev, { ...initial, mode: "overlay", horizonIds: readableHorizonIds(ev.horizons) });
-    assert.ok(overlay.length > 0);
-    assert.ok(overlay.every((curve) => curve.structureId === zebra.spec.id || curve.structureId === spread.spec.id));
+    const modeIds = CHART_MODES.map((mode) => mode.id as string);
+    assert.equal(modeIds.includes("overlay"), false);
+    assert.equal(modeIds.includes("grid"), false);
+    assert.equal(CHART_MODES.some((mode) => mode.label === "Overlay"), false);
+  });
+
+  it("restyles the big chart from thickness, dash, and color", () => {
+    const curves = visibleCurves(ev, setChartMode(initial, "expiry"));
+    const styled = applyCurveLook(curves, { colorMode: "rainbow", stroke: "dashed", thickness: 2 }, ev);
+    assert.equal(styled.length, curves.length);
+    assert.equal(styled[0]?.width, 3);
+    assert.equal(styled[0]?.dash, undefined);
+    if (styled.length > 1) assert.notEqual(styled[0]?.color, styled[1]?.color);
   });
 });
 
@@ -421,9 +433,20 @@ describe("chart settings parser", () => {
     assert.equal(parseChartSettings({ v: 2 }), null);
     assert.equal(parseChartSettings({ v: 1, mode: "grid", horizonPolicy: { kind: "readable" }, chrome: defaultChartChrome() }), null);
     const chrome = { ...defaultChartChrome(), thickness: 3.5, yAxis: { kind: "manual" as const, min: -500, max: 8000 } };
-    const settings = { mode: "overlay" as const, horizonPolicy: { kind: "every" as const, step: 2 as const }, chrome };
+    const settings = { mode: "quarters" as const, horizonPolicy: { kind: "every" as const, step: 2 as const }, chrome };
     assert.deepEqual(parseChartSettings({ v: 1, ...settings }), settings);
     assert.equal(parseChartSettings({ v: 1, ...settings, chrome: { ...chrome, thickness: 0 } }), null);
+    const savedOverlay = parseChartSettings({
+      v: 1,
+      mode: "overlay",
+      horizonPolicy: { kind: "every", step: 2 },
+      chrome: { ...chrome, colorMode: "rainbow" },
+    });
+    assert.equal(savedOverlay?.mode, "structure");
+    assert.deepEqual(savedOverlay?.horizonPolicy, { kind: "every", step: 2 });
+    assert.equal(savedOverlay?.chrome.thickness, 3.5);
+    assert.equal(savedOverlay?.chrome.colorMode, "rainbow");
+    assert.doesNotThrow(() => parseChartSettings({ v: 1, mode: "overlay", horizonPolicy: null, chrome: "nope" }));
     const mem = new Map<string, string>();
     const storage = {
       getItem: (key: string) => mem.get(key) ?? null,

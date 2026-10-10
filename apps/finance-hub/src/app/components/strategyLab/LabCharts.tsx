@@ -18,6 +18,7 @@ import { formatSignedUsd2 } from "@/lib/format";
 import {
   applyHorizonPolicy,
   CHART_MODES,
+  applyCurveLook,
   combinedDateCurves,
   crossoverCallouts,
   defaultChartChrome,
@@ -70,7 +71,6 @@ import { LAB_PALETTE, labControl, labLabel } from "@/lib/strategyLab/palette";
 type Row = { spot: number; stock?: number } & Record<string, number | undefined>;
 
 const MODE_HINT: Record<ChartMode, string> = {
-  overlay: "Today, a few quarters, and expiry. Turn on more dates when you want them.",
   structure: "Every selected structure on the date you pick, on one large chart. Drag to pan, scroll or pinch to zoom.",
   waterfall: "Every quarter for the rainbow structure, today through a thick expiry line. Other structures are one dashed expiry line.",
   quarters: "Only the dates you turn on.",
@@ -241,17 +241,25 @@ export function LabCharts({
     persist(selection, next);
   };
 
-  const curves = useMemo(
-    () =>
-      selection.mode === "structure"
-        ? combinedDateCurves(evaluation, selection)
-        : visibleCurves(evaluation, selection, {
-            colorMode: chrome.colorMode,
-            stroke: chrome.stroke,
-            thickness: chrome.thickness,
-          }),
-    [evaluation, selection, chrome.colorMode, chrome.stroke, chrome.thickness],
-  );
+  const curves = useMemo(() => {
+    const painted =
+      selection.mode === "structure" ? combinedDateCurves(evaluation, selection) : visibleCurves(evaluation, selection);
+    if (selection.mode === "waterfall") {
+      return painted.map((curve) => {
+        const expiry = evaluation.horizons.some((horizon) => horizon.id === curve.horizonId && horizon.settlement);
+        return {
+          ...curve,
+          width: chrome.thickness + (expiry ? 1 : 0),
+          dash: chrome.stroke === "dashed" && !expiry ? (curve.dash ?? "6 3") : curve.dash,
+        };
+      });
+    }
+    return applyCurveLook(
+      painted,
+      { colorMode: chrome.colorMode, stroke: chrome.stroke, thickness: chrome.thickness },
+      evaluation,
+    );
+  }, [evaluation, selection, chrome.colorMode, chrome.stroke, chrome.thickness]);
   const onHome = useCallback((next: ChartView) => {
     setHome((prev) => (sameView(prev, next) ? prev : next));
   }, [setHome]);
@@ -266,7 +274,7 @@ export function LabCharts({
   }
 
   const dateChoices = [...evaluation.horizons].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.settlement ? 1 : -1));
-  const multiDates = selection.mode === "quarters" || selection.mode === "custom" || selection.mode === "overlay";
+  const multiDates = selection.mode === "quarters" || selection.mode === "custom";
   const singleDate = selection.mode === "span" || selection.mode === "dateOverlay" || selection.mode === "structure";
   const singleChoices =
     selection.mode === "span"
@@ -283,7 +291,7 @@ export function LabCharts({
     setMaxDraft(null);
   };
 
-  const useLook = selection.mode === "overlay" || selection.mode === "structure";
+  const useLook = true;
   const dateLabel = shortHorizon(
     evaluation.horizons.find((horizon) => horizon.id === selection.focusHorizonId)?.label ?? "this date",
   );
@@ -400,21 +408,19 @@ export function LabCharts({
               : "Typed spot window."}{" "}
           Spot stays on.
         </p>
-        {useLook ? (
-          <OverlayLookControls
-            chrome={chrome}
-            onChrome={(next) => {
-              if (yAxisDiffers(chrome.yAxis, next.yAxis)) setView(null);
-              restyle(next);
-            }}
-            yMinDraft={yMinDraft}
-            yMaxDraft={yMaxDraft}
-            onYMin={setYMinDraft}
-            onYMax={setYMaxDraft}
-            suggestMin={home?.yMin ?? -1000}
-            suggestMax={home?.yMax ?? 1000}
-          />
-        ) : null}
+        <ChartLookControls
+          chrome={chrome}
+          onChrome={(next) => {
+            if (yAxisDiffers(chrome.yAxis, next.yAxis)) setView(null);
+            restyle(next);
+          }}
+          yMinDraft={yMinDraft}
+          yMaxDraft={yMaxDraft}
+          onYMin={setYMinDraft}
+          onYMax={setYMaxDraft}
+          suggestMin={home?.yMin ?? -1000}
+          suggestMax={home?.yMax ?? 1000}
+        />
       </div>
       {quiet.map((row) => (
         <p key={row.spec.id} className="rounded-lg border border-amber-400 bg-zinc-950 px-3 py-2 text-sm text-amber-200">
@@ -1039,7 +1045,7 @@ function DatePicker({
   onFocus: (id: string) => void;
 }) {
   const ids = horizons.map((horizon) => horizon.id);
-  const adjustable = mode === "overlay" || mode === "structure" || mode === "quarters";
+  const adjustable = mode === "quarters" || mode === "custom";
   const label = mode === "span" ? "Middle date" : mode === "dateOverlay" || mode === "structure" ? "Date" : "Dates";
   return (
     <div className="space-y-1.5">
@@ -1103,7 +1109,7 @@ function DatePicker({
   );
 }
 
-function OverlayLookControls({
+function ChartLookControls({
   chrome,
   onChrome,
   yMinDraft,
