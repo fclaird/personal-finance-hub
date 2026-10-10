@@ -10,6 +10,7 @@ import {
   type OptionChain,
   type OptionRight,
 } from "@/lib/optionChain/chain";
+import { formatInt, formatUsd2 } from "@/lib/format";
 import {
   entryDollars,
   expiryPnl,
@@ -22,6 +23,8 @@ import {
   type ExpiryRisk,
   type PricedLeg,
 } from "@/lib/strategyLab/internal/pricing";
+
+export type { Assumptions };
 import { resolveTemplate, TEMPLATE_CATALOG, type TemplateRequest } from "@/lib/strategyLab/internal/templates";
 import {
   basisMetric,
@@ -85,7 +88,9 @@ export type StructureSpec = {
 
 export type Basis =
   | { readonly kind: "perPackage" }
-  | { readonly kind: "equalCapital"; readonly capital: number; readonly units: "whole" | "fractional" };
+  | { readonly kind: "equalCapital"; readonly capital: number; readonly units: "whole" | "fractional" }
+  /** Capital equals one package of the most expensive structure. Other structures scale in fractional packages. */
+  | { readonly kind: "matchExpensive" };
 
 export type HorizonSpec =
   | { readonly kind: "entry" }
@@ -143,9 +148,26 @@ export type LabEdit =
 export type CurvePoint = { readonly spot: number; readonly pnl: number };
 
 export type Sizing =
-  | { readonly status: "perPackage"; readonly packages: 1; readonly invested: number; readonly idleCash: 0; readonly leverage: number | null }
-  | { readonly status: "sized"; readonly packages: number; readonly invested: number; readonly idleCash: number; readonly leverage: number | null }
+  | {
+      readonly status: "perPackage";
+      readonly packages: 1;
+      readonly invested: number;
+      readonly idleCash: 0;
+      readonly leverage: number | null;
+      readonly pnlPerPercent: number | null;
+    }
+  | {
+      readonly status: "sized";
+      readonly packages: number;
+      readonly invested: number;
+      readonly idleCash: number;
+      readonly leverage: number | null;
+      readonly pnlPerPercent: number | null;
+    }
   | { readonly status: "needsCapitalOverride" };
+
+/** Dollar amount and structure the match-the-most-expensive basis locked onto. */
+export type MatchedBasis = { readonly capital: number; readonly label: string };
 
 export type HorizonView = {
   readonly id: string;
@@ -203,6 +225,7 @@ export type LabEvaluation = {
   readonly stock: readonly { readonly horizonId: string; readonly points: readonly CurvePoint[] }[];
   readonly issues: readonly LabIssue[];
   readonly basis: Basis;
+  readonly match: MatchedBasis | null;
   readonly metric: string;
   readonly expiryBoards: readonly ExpiryBoard[];
   readonly modelCrossovers: readonly ModelCrossover[];
@@ -222,7 +245,7 @@ export function createLab(chain: OptionChain): LabScenario {
   return {
     symbol: chain.symbol,
     assumptions: { rate: DEFAULT_RATE, dividendYield: 0, ivSource: "mid" },
-    basis: { kind: "equalCapital", capital: 10_000, units: "whole" },
+    basis: { kind: "matchExpensive" },
     horizons: [{ kind: "quartersToAnchor" }],
     structures: [],
     window: { kind: "fit" },
@@ -554,6 +577,22 @@ function axisCovering(
   return buildAxis(Math.max(0.01, lo), hi, extras);
 }
 
+/** Whole dollars when the amount is already whole, otherwise cents. */
+export function labDollars(amount: number): string {
+  return Math.abs(amount - Math.round(amount)) < 0.005 ? `$${formatInt(Math.round(amount))}` : formatUsd2(amount);
+}
+
+/** A whole-contract structure whose package costs more than the capital. P&L would otherwise be a flat $0. */
+export function zeroPackageNotice(label: string, capital: number, packageCost: number | null): string {
+  const cost = packageCost != null && packageCost > 0 ? labDollars(packageCost) : "more than the capital";
+  return `${label}: 0 packages on ${labDollars(capital)} (package costs ${cost}); raise capital or use fractional units`;
+}
+
+export function packageCostOf(row: { spec: { capitalOverride: number | null }; risk: { maxLoss: number | "unbounded" } }): number | null {
+  if (row.spec.capitalOverride != null && row.spec.capitalOverride > 0) return row.spec.capitalOverride;
+  return typeof row.risk.maxLoss === "number" && row.risk.maxLoss > 0 ? row.risk.maxLoss : null;
+}
+
 function attachCurves(
   priced: readonly PricedStructure[],
   horizons: readonly HorizonView[],
@@ -600,9 +639,9 @@ function stockSeries(
   horizons: readonly HorizonView[],
   axis: readonly number[],
   chain: OptionChain,
+  capital: number,
 ): { horizonId: string; points: CurvePoint[] }[] {
   if (!lab.showStock) return [];
-  const capital = lab.basis.kind === "equalCapital" ? lab.basis.capital : chain.spot * 100;
   return horizons
     .filter((h) => h.shared)
     .map((h) => ({
@@ -611,28 +650,71 @@ function stockSeries(
     }));
 }
 
+/**
+ * Entry leverage: today's share-equivalent exposure (package delta × packages × spot)
+ * divided by dollars invested. Dollars invested is the net debit of the packages bought.
+ * Idle cash is not in the denominator. The tile headline uses the short-strike-at-expiry basis;
+ * this field is the "at entry" line.
+ */
+function exposureStats(packages: number, invested: number, delta: number | null, spot: number): { leverage: number | null; pnlPerPercent: number | null } {
+  if (delta == null) return { leverage: null, pnlPerPercent: null };
+  const exposure = delta * packages * spot;
+  return {
+    leverage: invested > 0 ? exposure / invested : null,
+    pnlPerPercent: exposure * 0.01,
+  };
+}
+
+/**
+ * Cash to open one package. A positive debit is that cash. A credit uses defined max loss.
+ * A typed dollars-at-risk number wins.
+ */
+export function packageOutlay(debit: number, maxLoss: number | "unbounded", override: number | null): number | null {
+  if (override != null && override > 0) return override;
+  if (debit > 0) return debit;
+  if (typeof maxLoss === "number" && maxLoss > 0) return maxLoss;
+  return null;
+}
+
 function sizeOf(
   basis: Basis,
   maxLoss: number | "unbounded",
   override: number | null,
   delta: number | null,
   spot: number,
+  matched: MatchedBasis | null,
+  debit: number,
 ): Sizing {
+  if (basis.kind === "matchExpensive") {
+    const cost = packageOutlay(debit, maxLoss, override);
+    if (matched == null || cost == null || !(cost > 0)) return { status: "needsCapitalOverride" };
+    const packages = matched.capital / cost;
+    return { status: "sized", packages, invested: matched.capital, idleCash: 0, ...exposureStats(packages, matched.capital, delta, spot) };
+  }
   const capitalPer = override ?? (typeof maxLoss === "number" ? maxLoss : null);
   if (basis.kind === "perPackage") {
-    const leverage = capitalPer && delta != null && capitalPer > 0 ? (delta * spot) / capitalPer : null;
-    return { status: "perPackage", packages: 1, invested: capitalPer ?? 0, idleCash: 0, leverage };
+    const invested = capitalPer ?? 0;
+    return { status: "perPackage", packages: 1, invested, idleCash: 0, ...exposureStats(1, invested, delta, spot) };
   }
   if (capitalPer == null || !(capitalPer > 0)) return { status: "needsCapitalOverride" };
   if (basis.units === "whole") {
     const packages = Math.floor(basis.capital / capitalPer);
     const invested = packages * capitalPer;
-    const leverage = delta != null && basis.capital > 0 ? (delta * packages * spot) / basis.capital : null;
-    return { status: "sized", packages, invested, idleCash: basis.capital - invested, leverage };
+    return { status: "sized", packages, invested, idleCash: basis.capital - invested, ...exposureStats(packages, invested, delta, spot) };
   }
   const packages = basis.capital / capitalPer;
-  const leverage = delta != null && basis.capital > 0 ? (delta * packages * spot) / basis.capital : null;
-  return { status: "sized", packages, invested: basis.capital, idleCash: 0, leverage };
+  return { status: "sized", packages, invested: basis.capital, idleCash: 0, ...exposureStats(packages, basis.capital, delta, spot) };
+}
+
+function matchedBasis(basis: Basis, rows: readonly PricedStructure[]): MatchedBasis | null {
+  if (basis.kind !== "matchExpensive") return null;
+  let best: { capital: number; label: string } | null = null;
+  for (const row of rows) {
+    const cost = packageOutlay(row.debit, row.risk.maxLoss, row.spec.capitalOverride);
+    if (cost == null || !(cost > 0)) continue;
+    if (best == null || cost > best.capital) best = { capital: cost, label: row.spec.label };
+  }
+  return best;
 }
 
 export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation {
@@ -690,23 +772,6 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
     const debit = entryDollars(usedPerShare);
     const risk = expiryRisk(quoted.legs, debit, chain.spot);
     const greeks = packageGreeks(chain, spec.expiry, quoted.legs, lab.assumptions);
-    const sizing = sizeOf(lab.basis, risk.maxLoss, spec.capitalOverride, greeks?.delta ?? null, chain.spot);
-    if (sizing.status === "needsCapitalOverride") {
-      issues.push({
-        severity: "warn",
-        structureId: spec.id,
-        code: "needs-capital",
-        message: "Undefined risk. Equal-dollar sizing waits for a typed dollars-at-risk number.",
-      });
-    }
-    if (sizing.status === "sized" && sizing.packages === 0) {
-      issues.push({
-        severity: "warn",
-        structureId: spec.id,
-        code: "below-one-package",
-        message: "Capital does not cover one package.",
-      });
-    }
     for (const b of risk.breakevens) axisExtras.push(b);
     for (const leg of quoted.legs) axisExtras.push(leg.strike);
     const days = calendarDaysBetween(chain.tradeDate, spec.expiry);
@@ -722,10 +787,33 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
       debit,
       risk,
       greeks,
-      sizing,
+      sizing: { status: "needsCapitalOverride" },
       curves: [],
     });
   }
+
+  const match = matchedBasis(lab.basis, priced);
+  const sized = priced.map((row) => {
+    const sizing = sizeOf(lab.basis, row.risk.maxLoss, row.spec.capitalOverride, row.greeks?.delta ?? null, chain.spot, match, row.debit);
+    if (sizing.status === "needsCapitalOverride") {
+      issues.push({
+        severity: "warn",
+        structureId: row.spec.id,
+        code: "needs-capital",
+        message: "Undefined risk. Equal-dollar sizing waits for a typed dollars-at-risk number.",
+      });
+    }
+    if (sizing.status === "sized" && sizing.packages === 0 && lab.basis.kind === "equalCapital") {
+      const cost = row.spec.capitalOverride ?? (typeof row.risk.maxLoss === "number" ? row.risk.maxLoss : null);
+      issues.push({
+        severity: "warn",
+        structureId: row.spec.id,
+        code: "below-one-package",
+        message: zeroPackageNotice(row.spec.label, lab.basis.capital, cost),
+      });
+    }
+    return { ...row, sizing };
+  });
 
   const createdRatio = chain.spot / lab.createdFrom.spot;
   const whole = Math.round(createdRatio);
@@ -743,13 +831,13 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
     }
   }
 
-  const metric = basisMetric(lab.basis);
-  const capital = lab.basis.kind === "equalCapital" ? lab.basis.capital : chain.spot * 100;
-  const expiryBoards = expiryBoardsOf(priced, metric, lab.compareStock, chain.spot, capital);
+  const metric = basisMetric(lab.basis, match);
+  const capital = lab.basis.kind === "equalCapital" ? lab.basis.capital : (match?.capital ?? chain.spot * 100);
+  const expiryBoards = expiryBoardsOf(sized, metric, lab.compareStock, chain.spot, capital);
   const anchorSpots = [chain.spot, ...axisExtras, ...expiryBoards.flatMap((board) => board.crossovers.map((crossover) => crossover.spot))];
   let fitted = fitSpotWindow(anchorSpots);
   let axis = axisCovering(fitted, lab.window, [chain.spot, ...axisExtras]);
-  let withCurves = attachCurves(priced, horizons, chain, lab, axis, issues, true);
+  let withCurves = attachCurves(sized, horizons, chain, lab, axis, issues, true);
   let modelCrossovers = modelCrossoversOf(horizons, withCurves);
   fitted = fitSpotWindow([...anchorSpots, ...modelCrossovers.map((crossover) => crossover.spot)]);
   const manual = lab.window.kind === "manual" && lab.window.max > lab.window.min ? lab.window : null;
@@ -763,13 +851,13 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
     const lo = Math.min(display.min, fitted.min, axis[0] ?? display.min);
     const hi = Math.max(display.max, fitted.max, axis[axis.length - 1] ?? display.max);
     axis = buildAxis(lo, hi, [chain.spot, ...axisExtras]);
-    withCurves = attachCurves(priced, horizons, chain, lab, axis, issues, false);
+    withCurves = attachCurves(sized, horizons, chain, lab, axis, issues, false);
     modelCrossovers = modelCrossoversOf(horizons, withCurves);
     fitted = fitSpotWindow([...anchorSpots, ...modelCrossovers.map((crossover) => crossover.spot)]);
     display = manual ?? fitted;
   }
 
-  const stock = stockSeries(lab, horizons, axis, chain);
+  const stock = stockSeries(lab, horizons, axis, chain, capital);
   const structures: StructureEval[] = [...withCurves, ...blocked].sort((a, b) => a.spec.slot - b.spec.slot);
 
   return {
@@ -782,6 +870,7 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
     stock,
     issues,
     basis: lab.basis,
+    match,
     metric,
     expiryBoards,
     modelCrossovers,

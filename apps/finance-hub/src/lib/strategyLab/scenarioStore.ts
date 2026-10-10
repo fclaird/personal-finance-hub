@@ -207,6 +207,7 @@ function parseAssumptions(raw: unknown): Assumptions | null {
 function parseBasis(raw: unknown): Basis | null {
   if (!isRecord(raw)) return null;
   if (raw.kind === "perPackage") return { kind: "perPackage" };
+  if (raw.kind === "matchExpensive") return { kind: "matchExpensive" };
   if (raw.kind === "equalCapital") {
     const capital = finite(raw.capital);
     if (capital == null || !(capital > 0)) return null;

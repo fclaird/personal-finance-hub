@@ -172,8 +172,8 @@ describe("phase 2 save and restore", () => {
   it("rejects garbage, a bad horizon, and negative capital", () => {
     assert.equal(parseScenario("nope"), null);
     assert.equal(parseScenario(null), null);
-    const negative = JSON.parse(JSON.stringify(lab)) as { basis: { capital: number } };
-    negative.basis.capital = -1;
+    const negative = JSON.parse(JSON.stringify(lab)) as { basis: { kind: string; capital: number; units: string } };
+    negative.basis = { kind: "equalCapital", capital: -1, units: "whole" };
     assert.equal(parseScenario(negative), null);
     const moon = JSON.parse(JSON.stringify(lab)) as { horizons: unknown[] };
     moon.horizons = [{ kind: "moon" }];
@@ -232,6 +232,7 @@ describe("phase 2 csv", () => {
     assert.equal(csvField("a,b"), '"a,b"');
     const chain = chainOf();
     const lab = editLab(createLab(chain), [
+      { kind: "setBasis", basis: { kind: "equalCapital", capital: 10_000, units: "whole" } },
       {
         kind: "addStructure",
         label: "Synthetic",

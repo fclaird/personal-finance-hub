@@ -6,6 +6,17 @@ import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/Strik
 import { formatExpiryLabel, type OptionChain, type OptionRight } from "@/lib/optionChain/chain";
 import { formatNum, formatSignedUsd2, formatUsd2 } from "@/lib/format";
 import type { LabEdit, StructureEval } from "@/lib/strategyLab/lab";
+import {
+  COST_PER_DELTA_HINT,
+  TARGET_LEVERAGE_HINT,
+  costPerDeltaLine,
+  deltaLabel,
+  leverageValue,
+  shortCallStrike,
+  type LeverageBasis,
+  type LeverageQuote,
+  type TargetRead,
+} from "@/lib/strategyLab/targetMetrics";
 import { LAB_PALETTE, labControl, labLabel } from "@/lib/strategyLab/palette";
 import {
   formatModelDelta,
@@ -24,14 +35,81 @@ function signed(n: number | null | undefined, mask: boolean): string {
   return formatSignedUsd2(n, { mask });
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function LeverageBlock({ quotes, basis }: { quotes: readonly LeverageQuote[] | null; basis: LeverageBasis }) {
+  const [open, setOpen] = useState(false);
+  if (!quotes || quotes.length === 0) return null;
+  const ordered = [...quotes].sort((a, b) => (a.basis === basis ? -1 : b.basis === basis ? 1 : 0));
   return (
-    <div className="min-w-0">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">{label}</div>
-      <div className="truncate text-sm tabular-nums font-medium">{value}</div>
+    <div
+      className="relative col-span-2 rounded border border-zinc-400 bg-zinc-50 p-2 dark:border-zinc-600 dark:bg-zinc-900 sm:col-span-3"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <ul className="space-y-1.5">
+        {ordered.map((quote) => {
+          const headline = quote.basis === basis;
+          return (
+            <li key={quote.basis}>
+              <div className={`flex items-baseline justify-between gap-2 ${headline ? "text-sm font-bold text-zinc-950 dark:text-zinc-50" : "text-xs text-zinc-700 dark:text-zinc-300"}`}>
+                <span>{headline ? "Leverage" : quote.title}</span>
+                <span className="tabular-nums">{leverageValue(quote)}</span>
+              </div>
+              {headline ? (
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{quote.title}</div>
+              ) : null}
+              {quote.delta != null && quote.price != null && quote.leverage != null ? (
+                <p className={`tabular-nums ${headline ? "text-xs text-zinc-800 dark:text-zinc-200" : "text-[11px] text-zinc-600 dark:text-zinc-400"}`}>
+                  {deltaLabelText(quote)}
+                </p>
+              ) : null}
+              <p className="text-[11px] leading-snug text-zinc-600 dark:text-zinc-400">{quote.note}</p>
+            </li>
+          );
+        })}
+      </ul>
+      {open ? (
+        <p
+          role="tooltip"
+          className="absolute left-0 top-full z-20 mt-1 w-80 rounded border border-zinc-500 bg-zinc-950 p-2 text-[11px] font-normal leading-snug text-zinc-100"
+        >
+          {TARGET_LEVERAGE_HINT}
+        </p>
+      ) : null}
     </div>
   );
 }
+
+function deltaLabelText(quote: LeverageQuote): string {
+  const shares = quote.delta == null ? "—" : `${quote.delta > 0 ? "+" : ""}${quote.delta.toFixed(1)} shares`;
+  const price = quote.price == null ? "—" : `$${quote.price.toFixed(2)}`;
+  return `${shares} × ${price}`;
+}
+
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative min-w-0" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300" title={hint}>
+        {label}
+      </div>
+      <div className="truncate text-sm tabular-nums font-medium" title={hint}>
+        {value}
+      </div>
+      {hint && open ? (
+        <p
+          role="tooltip"
+          className="absolute left-0 top-full z-20 mt-1 w-64 rounded border border-zinc-500 bg-zinc-950 p-2 text-[11px] font-normal normal-case leading-snug tracking-normal text-zinc-100"
+        >
+          {hint}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+const MOVE_HINT =
+  "Approximate P&L if the stock moves 1% from today's spot, using today's share-equivalent exposure times 1%. Gamma is not included.";
+const MULTIPLE_HINT = "Position value at the target divided by dollars invested. Value is the dollars invested plus the P&L at that spot.";
 
 function DollarsAtRisk({ row, onEdit }: { row: StructureEval; onEdit: (edit: LabEdit) => void }) {
   const spec = row.spec;
@@ -87,6 +165,9 @@ export function StructureCard({
   row,
   masked,
   bestWhen,
+  target,
+  leverage,
+  leverageBasis,
   onEdit,
 }: {
   chain: OptionChain;
@@ -94,6 +175,9 @@ export function StructureCard({
   row: StructureEval;
   masked: boolean;
   bestWhen: string;
+  target: TargetRead | null;
+  leverage: readonly LeverageQuote[] | null;
+  leverageBasis: LeverageBasis;
   onEdit: (edit: LabEdit | readonly LabEdit[]) => void;
 }) {
   const spec = row.spec;
@@ -330,6 +414,7 @@ export function StructureCard({
       {row.status === "blocked" ? (
         <p className="text-sm text-rose-600">{row.reason}</p>
       ) : (
+        <>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <Stat label="Debit" value={usd(row.debit, masked)} />
           <Stat label="Breakeven" value={row.risk.breakevens.map((b) => b.toFixed(2)).join(", ") || "—"} />
@@ -342,19 +427,37 @@ export function StructureCard({
             value={
               row.sizing.status === "needsCapitalOverride"
                 ? "Needs $"
-                : row.sizing.status === "perPackage"
-                  ? "1"
-                  : formatNum(row.sizing.packages, Number.isInteger(row.sizing.packages) ? 0 : 2)
+                : `${row.spec.label}: ${formatNum(row.sizing.packages, Number.isInteger(row.sizing.packages) ? 0 : 1)} ${row.sizing.packages === 1 ? "package" : "packages"}`
             }
           />
-          <Stat label="Idle cash" value={row.sizing.status === "sized" ? usd(row.sizing.idleCash, masked) : usd(0, masked)} />
           <Stat
-            label="Leverage"
+            label="Invested"
+            value={row.sizing.status === "needsCapitalOverride" ? "—" : usd(row.sizing.invested, masked)}
+          />
+          <Stat label="Idle cash" value={row.sizing.status === "sized" ? usd(row.sizing.idleCash, masked) : usd(0, masked)} />
+          <LeverageBlock quotes={leverage} basis={leverageBasis} />
+          <Stat
+            label="P&L per 1% stock move"
+            hint={MOVE_HINT}
             value={
-              row.sizing.status !== "needsCapitalOverride" && row.sizing.leverage != null
-                ? `${row.sizing.leverage.toFixed(2)}x`
+              row.sizing.status !== "needsCapitalOverride" && row.sizing.pnlPerPercent != null
+                ? signed(row.sizing.pnlPerPercent, masked)
                 : "—"
             }
+          />
+          <Stat
+            label="Delta if short strike is reached"
+            hint={COST_PER_DELTA_HINT}
+            value={target ? deltaLabel(target) : "—"}
+          />
+          <Stat
+            label="P&L at target"
+            value={target?.pnl != null ? signed(target.pnl, masked) : "—"}
+          />
+          <Stat
+            label="If the trade works"
+            hint={MULTIPLE_HINT}
+            value={target?.multiple != null ? `${target.multiple.toFixed(2)}× invested` : "—"}
           />
           <Stat label="Delta" value={row.greeks ? formatNum(row.greeks.delta, 1) : "—"} />
           <Stat label="Gamma" value={row.greeks ? formatNum(row.greeks.gamma, 3) : "—"} />
@@ -366,6 +469,14 @@ export function StructureCard({
             value={masked ? "XXXXX" : row.risk.slopeAbove === 0 ? "Flat" : `${row.risk.slopeAbove > 0 ? "+" : ""}$${row.risk.slopeAbove}`}
           />
         </div>
+        {target ? (
+          <p className="mt-3 text-sm text-zinc-900 dark:text-zinc-100" title={COST_PER_DELTA_HINT}>
+            {costPerDeltaLine(target)}
+          </p>
+        ) : row.status === "priced" && shortCallStrike(row.legs) == null ? (
+          <p className="mt-3 text-sm text-zinc-700 dark:text-zinc-300">Set a target price. This structure has no short call.</p>
+        ) : null}
+        </>
       )}
     </article>
   );
