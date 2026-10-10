@@ -650,7 +650,12 @@ function stockSeries(
     }));
 }
 
-/** Share-equivalent dollars (delta × spot × packages) over dollars actually spent. */
+/**
+ * Entry leverage: today's share-equivalent exposure (package delta × packages × spot)
+ * divided by dollars invested. Dollars invested is the net debit of the packages bought.
+ * Idle cash is not in the denominator. The tile headline uses the short-strike-at-expiry basis;
+ * this field is the "at entry" line.
+ */
 function exposureStats(packages: number, invested: number, delta: number | null, spot: number): { leverage: number | null; pnlPerPercent: number | null } {
   if (delta == null) return { leverage: null, pnlPerPercent: null };
   const exposure = delta * packages * spot;

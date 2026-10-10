@@ -9,6 +9,7 @@ import { ExpirySummary } from "@/app/components/strategyLab/ExpirySummary";
 import { ScenarioBar } from "@/app/components/strategyLab/ScenarioBar";
 import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
 import { TargetSection } from "@/app/components/strategyLab/TargetBoard";
+import { DEFAULT_LEVERAGE_BASIS, type LeverageBasis } from "@/lib/strategyLab/targetMetrics";
 import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
 import { TEMPLATE_CATALOG, type HorizonSpec, type TemplateRequest } from "@/lib/strategyLab/lab";
 import { formatModelDelta, nearestDeltaStrike, strikeDeltas } from "@/lib/strategyLab/strikeDelta";
@@ -177,6 +178,7 @@ export function StrategyLabPage() {
   const [capitalDraft, setCapitalDraft] = useState("10000");
   const [targetHorizon, setTargetHorizon] = useState("expiry");
   const [targetText, setTargetText] = useState("");
+  const [leverageBasis, setLeverageBasis] = useState<LeverageBasis>(DEFAULT_LEVERAGE_BASIS);
   const [whatIf, setWhatIf] = useState<{ symbol: string; spot: number } | null>(null);
   const [customDate, setCustomDate] = useState("");
   const [customMonths, setCustomMonths] = useState("9");
@@ -624,6 +626,8 @@ export function StrategyLabPage() {
             onHorizon={setTargetHorizon}
             targetText={targetText}
             onTargetText={setTargetText}
+            leverageBasis={leverageBasis}
+            onLeverageBasis={setLeverageBasis}
             masked={privacy.masked}
             onEdit={edit}
           />
