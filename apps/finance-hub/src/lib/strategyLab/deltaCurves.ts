@@ -1,10 +1,10 @@
 import { calendarDaysBetween, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
 import type { Assumptions, LabEvaluation } from "@/lib/strategyLab/lab";
 import { packageShareDelta } from "@/lib/strategyLab/internal/pricing";
-import { FLAT_DELTA_SHARES } from "@/lib/strategyLab/targetMetrics";
+import { FLAT_DELTA_SHARES, positionLeverage } from "@/lib/strategyLab/targetMetrics";
 
 export type DeltaScale = "shares" | "package" | "pct";
-export type DeltaMeasure = "delta" | "exposure" | "cost";
+export type DeltaMeasure = "delta" | "exposure" | "cost" | "omega";
 
 export type DeltaLeg = {
   readonly right: OptionRight;
@@ -58,6 +58,7 @@ export function positionShareDelta(input: {
  * Shares and “% of 100” are the same numbers (100 shares reads as 100%).
  * Per package divides by the package count. Dollar exposure is that delta times spot.
  * Cost per delta is dollars invested over that delta, and breaks when the delta is under one share.
+ * Omega is that delta times the price, divided by the debit. Shares and per package give the same ratio.
  */
 export function presentDelta(
   positionShares: number,
@@ -71,9 +72,10 @@ export function presentDelta(
   const scaled = scale === "package" ? (packages !== 0 ? positionShares / packages : null) : positionShares;
   if (scaled == null || !Number.isFinite(scaled)) return null;
   if (measure === "exposure") return scaled * spot;
-  if (measure === "cost") {
-    if (Math.abs(scaled) < FLAT_DELTA_SHARES) return null;
+  if (measure === "cost" || measure === "omega") {
     const dollars = scale === "package" ? (packages !== 0 ? invested / packages : invested) : invested;
+    if (measure === "omega") return positionLeverage(scaled, spot, dollars);
+    if (Math.abs(scaled) < FLAT_DELTA_SHARES) return null;
     return dollars / scaled;
   }
   return scaled;
@@ -124,7 +126,9 @@ export function sampleStructureDelta(
     years,
   });
   if (shares == null) return null;
-  return presentDelta(shares, sized.packages, sized.invested, spot, scale, measure);
+  if (measure === "omega" && !(sized.row.debit > 0)) return null;
+  const dollars = measure === "omega" ? sized.row.debit * sized.packages : sized.invested;
+  return presentDelta(shares, sized.packages, dollars, spot, scale, measure);
 }
 
 /** The comparison stock line: capital buys this many shares, and that count does not change with price. */

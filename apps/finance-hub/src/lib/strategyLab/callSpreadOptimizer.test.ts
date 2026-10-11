@@ -139,7 +139,7 @@ describe("call debit spread scan", () => {
     ]);
   }
 
-  it("prices the debit from mids and the leverage from the delta just inside the short strike", () => {
+  it("prices the debit from mids and leverage now from today's delta", () => {
     const scan = scanCallSpreads({
       chain: quoted(),
       expiry,
@@ -160,7 +160,8 @@ describe("call debit spread scan", () => {
     assert.equal(row.breakevenDistance, 4);
     assert.equal(row.deltaJustInside, 100);
     assert.equal(row.deltaAtShortExpiry, 0);
-    assert.equal(row.leverage, (100 * 110) / 400);
+    assert.ok(Math.abs(row.leverage - (row.netDelta * 100) / 400) < 1e-9);
+    assert.notEqual(Math.round(row.leverage * 100), Math.round(((100 * 110) / 400) * 100));
     assert.ok(row.pop > 0 && row.pop < 1);
     assert.ok(row.probShort > 0 && row.probShort < row.pop);
     assert.equal(row.returnAtTarget, (1000 - 400) / 400);

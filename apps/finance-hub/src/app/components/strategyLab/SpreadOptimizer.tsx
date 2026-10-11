@@ -204,7 +204,7 @@ export function SpreadOptimizer({
         ))}
       </div>
       <p className="mt-2 text-[11px] text-zinc-400">
-        Leverage is the share delta just inside the short strike at expiry, times that strike, divided by the debit. Probability is the
+        Leverage now is the model delta today, in shares, times the stock price, divided by the debit. It is not the share count at the short strike. Probability is the
         risk-neutral lognormal chance of finishing above the breakeven, and above the short strike. Compare up to {COMPARE_LIMIT}.{" "}
         {structureCount}/{structureLimit} structure tiles in the lab.
         {scan && scan.skipped > 0 ? ` ${scan.skipped} pairs were dropped by the filters or had no debit.` : ""}
@@ -235,7 +235,7 @@ export function SpreadOptimizer({
                   <th className="py-1 pr-3 font-semibold">Long Δ</th>
                   <th className="py-1 pr-3 font-semibold">Short Δ</th>
                   <th className="py-1 pr-3 font-semibold">Net Δ</th>
-                  <th className="py-1 font-semibold">Leverage</th>
+                  <th className="py-1 font-semibold">Leverage now</th>
                 </tr>
               </thead>
               <tbody>
@@ -274,7 +274,7 @@ export function SpreadOptimizer({
                       <td className="py-1.5 pr-3 tabular-nums">{row.longDelta.toFixed(2)}</td>
                       <td className="py-1.5 pr-3 tabular-nums">{row.shortDelta.toFixed(2)}</td>
                       <td className="py-1.5 pr-3 tabular-nums">{row.netDelta.toFixed(1)}</td>
-                      <td className="py-1.5 tabular-nums">{row.leverage.toFixed(1)}×</td>
+                      <td className="py-1.5 tabular-nums">{row.leverage.toFixed(2)}×</td>
                     </tr>
                   );
                 })}
@@ -368,6 +368,6 @@ function heat(t: number): string {
 
 function heatLabel(row: SpreadCandidate, score: ScoreId): string {
   if (score === "return" || score === "probability") return pct(row.scores[score]);
-  if (score === "leverage") return `${row.leverage.toFixed(1)}×`;
+  if (score === "leverage") return `${row.leverage.toFixed(2)}×`;
   return row.scores.delta.toFixed(0);
 }

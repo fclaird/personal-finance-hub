@@ -28,7 +28,7 @@ export type ScoreId = "return" | "delta" | "leverage" | "probability";
 export const SCORE_LABEL: Record<ScoreId, string> = {
   return: "Best return at target",
   delta: "Best delta profile",
-  leverage: "Cheapest leverage",
+  leverage: "Highest leverage now",
   probability: "Highest probability",
 };
 
@@ -252,8 +252,8 @@ function pricePair(
   const inside = shortStrike - Math.min(0.01, (shortStrike - longStrike) / 2);
   const deltaJustInside = packageExpiryDelta(CALL_LEGS(longStrike, shortStrike), inside);
   const deltaAtShortExpiry = packageExpiryDelta(CALL_LEGS(longStrike, shortStrike), shortStrike);
-  const leverage = debit > 0 ? (deltaJustInside * shortStrike) / debit : 0;
   const netDelta = (nowLong.delta - nowShort.delta) * 100;
+  const leverage = debit > 0 ? (netDelta * input.chain.spot) / debit : 0;
   const profileSpots = [input.chain.spot, input.targetSpot, inside];
   const remainProfile = yearsRemaining(years, input.horizon);
   const deltaProfile =
