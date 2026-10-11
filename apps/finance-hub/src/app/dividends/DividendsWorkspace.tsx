@@ -259,7 +259,9 @@ export function DividendsWorkspace() {
   }, [loadBook, loadTable, loadDashboard, loadTimeline]);
 
   const loadAllRef = useRef(loadAll);
-  loadAllRef.current = loadAll;
+  useEffect(() => {
+    loadAllRef.current = loadAll;
+  }, [loadAll]);
 
   useEffect(() => {
     void (async () => {
