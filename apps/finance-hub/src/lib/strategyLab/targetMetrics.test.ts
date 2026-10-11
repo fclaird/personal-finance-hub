@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  calendarDaysBetween,
   isoDate,
   makeOptionChain,
   type ChainDraft,
@@ -12,14 +13,17 @@ import { createLab, editLab, evaluateLab, type PricedStructure } from "@/lib/str
 import { settledShareDelta } from "@/lib/strategyLab/internal/pricing";
 import {
   CAPPED_DELTA,
-  TARGET_LEVERAGE_HINT,
-  costPerDeltaLine,
+  DELTA_AT_SHORT_HINT,
+  LEVERAGE_NOW_HINT,
+  MAX_PROFIT_HINT,
+  PEAK_LEVERAGE_HINT,
+  RETURN_ON_DEBIT_HINT,
   deltaLabel,
-  dollarsPerDelta,
-  leverageQuotes,
+  peakOmega,
   positionLeverage,
   readTarget,
   shortCallStrike,
+  tileMetrics,
 } from "@/lib/strategyLab/targetMetrics";
 
 const JAN = "2029-01-19";
@@ -61,7 +65,7 @@ function chainOf(): OptionChain {
   return built.chain;
 }
 
-function priced(label: string): { chain: OptionChain; row: PricedStructure; rows: PricedStructure[] } {
+function priced(label: string): { chain: OptionChain; row: PricedStructure; rows: PricedStructure[]; evaluation: ReturnType<typeof evaluateLab> } {
   const chain = chainOf();
   const lab = editLab(
     createLab(chain),
@@ -91,24 +95,32 @@ function priced(label: string): { chain: OptionChain; row: PricedStructure; rows
     ],
     chain,
   );
-  const ev = evaluateLab(lab, chain);
-  const rows = ev.structures.filter((item): item is PricedStructure => item.status === "priced");
+  const evaluation = evaluateLab(lab, chain);
+  const rows = evaluation.structures.filter((item): item is PricedStructure => item.status === "priced");
   const row = rows.find((item) => item.spec.label === label);
   assert.ok(row);
   if (!row) throw new Error("missing");
-  return { chain, row, rows };
+  return { chain, row, rows, evaluation };
 }
 
-describe("delta if the short strike is reached", () => {
-  it("works the $100 stock, $1,000, 100 delta-share example as 10×", () => {
+const assumptions = { rate: 0.04, dividendYield: 0, ivSource: "mid" as const };
+
+describe("leverage now, peak leverage, max profit, and return on debit", () => {
+  it("works the $100 stock, $1,000, 100 delta-share example as 10× leverage now", () => {
     assert.equal(positionLeverage(100, 100, 1000), 10);
-    assert.equal(1000 / 100, 10);
-    assert.match(TARGET_LEVERAGE_HINT, /\$100/);
-    assert.match(TARGET_LEVERAGE_HINT, /\$1,000/);
-    assert.match(TARGET_LEVERAGE_HINT, /\$10,000/);
-    assert.match(TARGET_LEVERAGE_HINT, /10×/);
-    assert.match(TARGET_LEVERAGE_HINT, /Idle cash is not in the denominator/);
-    assert.match(TARGET_LEVERAGE_HINT, /long leg only/);
+    assert.equal(positionLeverage(0.2, 100, 1000), null);
+    assert.match(LEVERAGE_NOW_HINT, /\$100/);
+    assert.match(LEVERAGE_NOW_HINT, /\$1,000/);
+    assert.match(LEVERAGE_NOW_HINT, /10×/);
+    assert.match(LEVERAGE_NOW_HINT, /Idle cash is not included/);
+    assert.match(LEVERAGE_NOW_HINT, /today's model delta/i);
+    assert.match(PEAK_LEVERAGE_HINT, /today's price curve/i);
+    assert.match(PEAK_LEVERAGE_HINT, /does not divide a future share count/i);
+    assert.match(MAX_PROFIT_HINT, /divided by the debit/i);
+    assert.match(RETURN_ON_DEBIT_HINT, /target price and date/i);
+    assert.match(DELTA_AT_SHORT_HINT, /share count, not leverage/i);
+    assert.match(DELTA_AT_SHORT_HINT, /Nothing here is divided by the debit/);
+    assert.doesNotMatch(LEVERAGE_NOW_HINT, /short strike at expiry/i);
   });
 
   it("settles a capped spread at 0 and a ZEBRA at +100 shares above 210", () => {
@@ -129,8 +141,8 @@ describe("delta if the short strike is reached", () => {
     assert.equal(shortCallStrike([{ right: "C", strike: 150, ratio: 1 }]), null);
   });
 
-  it("uses the match-the-most-expensive basis and hand-checks expiry cost per delta", () => {
-    const { chain, rows } = priced("ZEBRA");
+  it("reports leverage now, peak leverage, max profit, and return on debit", () => {
+    const { chain, rows, evaluation } = priced("ZEBRA");
     const zebra = rows.find((row) => row.spec.label === "ZEBRA")!;
     const a = rows.find((row) => row.spec.label === "A")!;
     const b = rows.find((row) => row.spec.label === "B")!;
@@ -148,7 +160,7 @@ describe("delta if the short strike is reached", () => {
     assert.equal(b.sizing.invested, 8470);
 
     const atExpiry = (row: PricedStructure) =>
-      readTarget({ row, assumptions: { rate: 0.04, dividendYield: 0, ivSource: "mid" }, chain, date: isoDate(JAN), targetSpot: null });
+      readTarget({ row, assumptions, chain, date: isoDate(JAN), targetSpot: null });
     const z = atExpiry(zebra);
     const spreadA = atExpiry(a);
     const spreadB = atExpiry(b);
@@ -160,65 +172,54 @@ describe("delta if the short strike is reached", () => {
     assert.equal(z.capped, false);
     assert.equal(z.pnl, 2 * (210 - 120) * 100 - 8470);
     assert.equal(z.multiple, (8470 + z.pnl!) / 8470);
-    assert.equal(z.costPerDeltaTarget, 8470 / 100);
-    assert.equal(z.costPerDeltaEntry, 8470 / zebra.greeks.delta);
-    assert.equal(z.leverageAtTarget, (100 * 210) / 8470);
-    assert.equal(z.insideLeverage, null);
 
     assert.equal(spreadA.packageDelta, 0);
     assert.equal(spreadB.packageDelta, 0);
     assert.equal(spreadA.capped, true);
     assert.equal(spreadB.capped, true);
-    assert.equal(spreadA.costPerDeltaTarget, null);
     assert.equal(spreadA.insidePositionDelta, 100 * a.sizing.packages);
     assert.equal(spreadB.insidePositionDelta, 100 * b.sizing.packages);
-    assert.equal(spreadA.insideLeverage, (100 * a.sizing.packages * 210) / 8470);
-    assert.equal(spreadB.insideLeverage, (100 * b.sizing.packages * 210) / 8470);
-    assert.equal(spreadA.costPerInsideDelta, 8470 / spreadA.insidePositionDelta!);
-    assert.equal(spreadB.costPerInsideDelta, 8470 / spreadB.insidePositionDelta!);
     assert.equal(spreadA.pnl, ((210 - 150) * 100 - 1555) * a.sizing.packages);
     assert.equal(spreadB.pnl, ((210 - 160) * 100 - 1235) * b.sizing.packages);
-    assert.match(costPerDeltaLine(spreadA), new RegExp(CAPPED_DELTA));
-    assert.match(costPerDeltaLine(spreadA), /long leg only/);
-    assert.match(costPerDeltaLine(z), /per delta at entry/);
-    assert.match(costPerDeltaLine(z), /per delta at the short strike/);
     assert.match(deltaLabel(spreadA), /just inside/);
+    assert.match(deltaLabel(spreadA), new RegExp(CAPPED_DELTA));
+    assert.doesNotMatch(deltaLabel(spreadA), /×|leverage|debit/i);
     assert.match(deltaLabel(z), /^\+100$/);
-
-    assert.equal(dollarsPerDelta(z.costPerDeltaEntry!), "$84");
-    assert.equal(dollarsPerDelta(z.costPerDeltaTarget!), "$85");
-    assert.equal(dollarsPerDelta(spreadA.costPerDeltaEntry!), "$94");
-    assert.equal(dollarsPerDelta(spreadB.costPerDeltaEntry!), "$92");
-    assert.equal(dollarsPerDelta(spreadA.costPerInsideDelta!), "$16");
-    assert.equal(dollarsPerDelta(spreadB.costPerInsideDelta!), "$12");
 
     for (const row of [a, b, zebra]) {
       const read = atExpiry(row)!;
-      const quotes = leverageQuotes(row, chain.spot, read);
-      assert.ok(quotes);
-      if (!quotes || row.sizing.status !== "sized" || row.greeks == null) continue;
-      const [expiry, entry, scenario] = quotes;
-      assert.equal(expiry?.basis, "expiryShort");
-      assert.equal(entry?.basis, "entry");
-      assert.equal(scenario?.basis, "scenario");
-      assert.equal(entry?.leverage, (row.greeks.delta * row.sizing.packages * chain.spot) / row.sizing.invested);
-      assert.equal(entry?.leverage, row.sizing.leverage);
-      assert.equal(scenario?.price, 210);
-      if (row.spec.label === "ZEBRA") {
-        assert.equal(expiry?.cappedBeyond, false);
-        assert.equal(expiry?.delta, 100);
-        assert.equal(expiry?.leverage, (100 * 210) / 8470);
-        assert.equal(scenario?.leverage, expiry?.leverage);
-        assert.match(expiry?.note ?? "", /just through the short strike/);
-      } else {
-        assert.equal(expiry?.cappedBeyond, true);
-        assert.equal(expiry?.beyondDelta, 0);
-        assert.equal(expiry?.delta, 100 * row.sizing.packages);
-        assert.equal(expiry?.leverage, (100 * row.sizing.packages * 210) / 8470);
-        assert.equal(scenario?.leverage, expiry?.leverage);
-        assert.match(expiry?.note ?? "", /long leg only/i);
-        assert.match(expiry?.note ?? "", /capped/);
+      const tile = tileMetrics({
+        row,
+        assumptions,
+        spot: chain.spot,
+        spots: evaluation.axis,
+        entryDate: evaluation.entryDate,
+        target: read,
+      });
+      assert.ok(tile);
+      if (!tile || row.sizing.status !== "sized" || row.greeks == null || typeof row.risk.maxGain === "undefined") continue;
+      const debit = row.debit * row.sizing.packages;
+      const now = (row.greeks.delta * row.sizing.packages * chain.spot) / debit;
+      assert.equal(tile.leverageNow, now);
+      assert.ok(Math.abs((tile.leverageNow ?? 0) - (row.sizing.leverage ?? 0)) < 1e-9);
+      const rejected = (100 * row.sizing.packages * 210) / debit;
+      assert.ok(Math.abs((tile.leverageNow ?? 0) - rejected) > 1e-6);
+      assert.ok(tile.peakLeverage != null && tile.peakSpot != null);
+      assert.ok(tile.peakLeverage >= (tile.leverageNow ?? 0) - 1e-9);
+      assert.ok(Math.abs(tile.peakLeverage - rejected) > 1e-6);
+      if (row.spec.label !== "ZEBRA") {
+        assert.ok((tile.leverageNow ?? 0) < rejected / 2);
+        assert.ok((tile.peakLeverage ?? 0) < rejected / 2);
       }
+      if (row.spec.label === "ZEBRA") {
+        assert.equal(tile.maxProfitUnbounded, true);
+        assert.equal(tile.maxProfitMultiple, null);
+      } else {
+        assert.equal(tile.maxProfitUnbounded, false);
+        assert.equal(typeof row.risk.maxGain, "number");
+        if (typeof row.risk.maxGain === "number") assert.equal(tile.maxProfitMultiple, (row.risk.maxGain * row.sizing.packages) / debit);
+      }
+      assert.equal(tile.returnOnDebit, read.pnl! / debit);
     }
   });
 
@@ -236,7 +237,7 @@ describe("delta if the short strike is reached", () => {
     assert.equal(today.settled, false);
     assert.ok(today.packageDelta > 90 && today.packageDelta < 110, `zebra delta at 210 today ${today.packageDelta}`);
     assert.equal(today.capped, false);
-    assert.ok(today.costPerDeltaTarget != null);
+    assert.match(deltaLabel(today), /^\+/);
 
     const callOnly = editLab(
       createLab(chain),
@@ -267,38 +268,55 @@ describe("delta if the short strike is reached", () => {
     if (!aimed) return;
     assert.equal(aimed.source, "override");
     assert.equal(aimed.packageDelta, 100);
-    assert.match(costPerDeltaLine(aimed), /at the target/);
+    assert.match(deltaLabel(aimed), /^\+100$/);
+    assert.doesNotMatch(deltaLabel(aimed), /×/);
   });
 
-  it("keeps the short-strike expiry reading when the typed target is somewhere else", () => {
-    const { chain, rows } = priced("A");
+  it("keeps leverage now fixed when the typed target moves, and still reports the share delta", () => {
+    const { chain, rows, evaluation } = priced("A");
     const a = rows.find((row) => row.spec.label === "A")!;
-    const assumptions = { rate: 0.04, dividendYield: 0, ivSource: "mid" as const };
     const between = readTarget({ row: a, assumptions, chain, date: isoDate(JAN), targetSpot: 180 });
     assert.ok(between);
     if (!between || a.sizing.status !== "sized") return;
     assert.equal(between.capped, false);
     assert.equal(between.packageDelta, 100);
-    assert.equal(between.leverageAtTarget, (100 * a.sizing.packages * 180) / a.sizing.invested);
-    const quotes = leverageQuotes(a, chain.spot, between);
-    assert.equal(quotes?.[0]?.price, 210);
-    assert.equal(quotes?.[0]?.cappedBeyond, true);
-    assert.equal(quotes?.[2]?.price, 180);
-    assert.equal(quotes?.[2]?.leverage, between.leverageAtTarget);
+    assert.match(deltaLabel(between), /^\+/);
+    const at180 = tileMetrics({
+      row: a,
+      assumptions,
+      spot: chain.spot,
+      spots: evaluation.axis,
+      entryDate: evaluation.entryDate,
+      target: between,
+    });
 
     const above = readTarget({ row: a, assumptions, chain, date: isoDate(JAN), targetSpot: 250 });
     assert.ok(above);
-    if (!above) return;
+    if (!above || !at180) return;
     assert.equal(above.capped, true);
-    assert.equal(above.insideLeverage, null);
-    assert.equal(above.leverageAtTarget, null);
-    const aboveQuotes = leverageQuotes(a, chain.spot, above);
-    assert.equal(aboveQuotes?.[2]?.leverage, null);
-    assert.equal(aboveQuotes?.[2]?.cappedBeyond, true);
-    assert.equal(aboveQuotes?.[0]?.leverage, (100 * a.sizing.packages * 210) / a.sizing.invested);
+    assert.equal(above.insidePositionDelta, null);
+    assert.match(deltaLabel(above), new RegExp(CAPPED_DELTA));
+    assert.doesNotMatch(deltaLabel(above), /×/);
+    const at250 = tileMetrics({
+      row: a,
+      assumptions,
+      spot: chain.spot,
+      spots: evaluation.axis,
+      entryDate: evaluation.entryDate,
+      target: above,
+    });
+    assert.ok(at250);
+    if (!at250) return;
+    assert.equal(at250.leverageNow, at180.leverageNow);
+    assert.equal(at250.peakLeverage, at180.peakLeverage);
+    assert.equal(at250.peakSpot, at180.peakSpot);
+    assert.notEqual(at250.returnOnDebit, at180.returnOnDebit);
+    const rejected = (100 * a.sizing.packages * 210) / (a.debit * a.sizing.packages);
+    assert.ok(Math.abs((at180.leverageNow ?? 0) - rejected) > 1);
+    assert.ok(Math.abs((at180.peakLeverage ?? 0) - rejected) > 1);
   });
 
-  it("divides every leverage line by dollars invested, not by capital that includes idle cash", () => {
+  it("divides leverage now by the debit, not by capital that includes idle cash", () => {
     const chain = chainOf();
     const lab = editLab(
       createLab(chain),
@@ -315,28 +333,49 @@ describe("delta if the short strike is reached", () => {
       ],
       chain,
     );
-    const row = evaluateLab(lab, chain).structures.find((item) => item.spec.label === "ZEBRA");
+    const evaluation = evaluateLab(lab, chain);
+    const row = evaluation.structures.find((item) => item.spec.label === "ZEBRA");
     assert.ok(row && row.status === "priced");
     if (!row || row.status !== "priced" || row.sizing.status !== "sized" || row.greeks == null) return;
     assert.equal(row.sizing.packages, 1);
     assert.equal(row.sizing.invested, 8470);
     assert.equal(row.sizing.idleCash, 1530);
-    const read = readTarget({
+    const read = readTarget({ row, assumptions, chain, date: isoDate(JAN), targetSpot: null });
+    const tile = tileMetrics({
       row,
-      assumptions: { rate: 0.04, dividendYield: 0, ivSource: "mid" },
-      chain,
-      date: isoDate(JAN),
-      targetSpot: null,
+      assumptions,
+      spot: chain.spot,
+      spots: evaluation.axis,
+      entryDate: evaluation.entryDate,
+      target: read,
     });
-    const quotes = leverageQuotes(row, chain.spot, read);
-    assert.ok(quotes);
-    if (!quotes || !read) return;
-    const investedLeverage = (row.greeks.delta * row.sizing.packages * chain.spot) / row.sizing.invested;
+    assert.ok(tile && read);
+    if (!tile || !read) return;
+    const debitLeverage = (row.greeks.delta * row.sizing.packages * chain.spot) / row.debit;
     const capitalLeverage = (row.greeks.delta * row.sizing.packages * chain.spot) / 10_000;
-    assert.equal(quotes[1]?.leverage, investedLeverage);
-    assert.ok(Math.abs((quotes[1]?.leverage ?? 0) - capitalLeverage) > 0.01);
-    assert.equal(quotes[0]?.leverage, (100 * 210) / row.sizing.invested);
-    assert.notEqual(quotes[0]?.leverage, (100 * 210) / 10_000);
-    assert.equal(read.leverageAtTarget, (100 * 210) / row.sizing.invested);
+    assert.equal(tile.leverageNow, debitLeverage);
+    assert.equal(tile.leverageNow, row.sizing.leverage);
+    assert.ok(Math.abs((tile.leverageNow ?? 0) - capitalLeverage) > 0.01);
+    const rejected = (100 * 210) / row.debit;
+    assert.ok(Math.abs((tile.leverageNow ?? 0) - rejected) > 1e-6);
+    assert.ok(tile.peakLeverage != null && Math.abs(tile.peakLeverage - rejected) > 1e-6);
+  });
+
+  it("picks the highest omega on the spots it is given", () => {
+    const { chain, row } = priced("A");
+    if (row.sizing.status === "needsCapitalOverride" || row.greeks == null) return;
+    const low = positionLeverage(row.greeks.delta * row.sizing.packages, chain.spot, row.debit * row.sizing.packages);
+    const found = peakOmega({
+      legs: row.legs,
+      assumptions,
+      packages: row.sizing.packages,
+      invested: row.debit * row.sizing.packages,
+      spots: [chain.spot, chain.spot * 0.8, chain.spot * 1.2],
+      years: calendarDaysBetween(chain.tradeDate, isoDate(JAN)) / 365,
+    });
+    assert.ok(found && low != null);
+    if (!found || low == null) return;
+    assert.ok(found.omega >= low - 1e-9);
+    assert.ok([chain.spot, chain.spot * 0.8, chain.spot * 1.2].some((spot) => Math.abs(spot - found.spot) < 1e-9));
   });
 });

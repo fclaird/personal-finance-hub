@@ -6,18 +6,19 @@ import type { OptionChain } from "@/lib/optionChain/chain";
 import { bestWhenFor, type Assumptions, type LabEdit, type LabEvaluation, type PricedStructure } from "@/lib/strategyLab/lab";
 import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
 import {
-  COST_PER_DELTA_HINT,
-  DEFAULT_LEVERAGE_BASIS,
-  LEVERAGE_BASES,
-  TARGET_LEVERAGE_HINT,
-  costPerDeltaLine,
+  DELTA_AT_SHORT_HINT,
+  LEVERAGE_NOW_HINT,
+  MAX_PROFIT_HINT,
+  PEAK_LEVERAGE_HINT,
+  RETURN_ON_DEBIT_HINT,
   deltaLabel,
-  leverageQuotes,
-  leverageValue,
+  formatLeverage,
+  formatMaxProfitMultiple,
+  formatPeakLeverage,
   readTarget,
-  type LeverageBasis,
-  type LeverageQuote,
+  tileMetrics,
   type TargetRead,
+  type TileMetrics,
 } from "@/lib/strategyLab/targetMetrics";
 
 export function readsForHorizon(
@@ -51,8 +52,6 @@ export function TargetSection({
   onHorizon,
   targetText,
   onTargetText,
-  leverageBasis,
-  onLeverageBasis,
   masked,
   plotted,
   onPlot,
@@ -65,8 +64,6 @@ export function TargetSection({
   onHorizon: (id: string) => void;
   targetText: string;
   onTargetText: (value: string) => void;
-  leverageBasis: LeverageBasis;
-  onLeverageBasis: (basis: LeverageBasis) => void;
   masked: boolean;
   plotted?: (id: string) => boolean;
   onPlot?: (id: string) => void;
@@ -75,11 +72,18 @@ export function TargetSection({
   const typed = Number(targetText);
   const targetSpot = targetText.trim() !== "" && Number.isFinite(typed) && typed > 0 ? typed : null;
   const reads = readsForHorizon(evaluation, chain, assumptions, horizonId, targetSpot);
-  const quotes = new Map<string, readonly LeverageQuote[]>();
+  const metrics = new Map<string, TileMetrics>();
   for (const row of evaluation.structures) {
     if (row.status !== "priced") continue;
-    const set = leverageQuotes(row, chain.spot, reads.get(row.spec.id) ?? null);
-    if (set) quotes.set(row.spec.id, set);
+    const tile = tileMetrics({
+      row,
+      assumptions,
+      spot: chain.spot,
+      spots: evaluation.axis,
+      entryDate: evaluation.entryDate,
+      target: reads.get(row.spec.id) ?? null,
+    });
+    if (tile) metrics.set(row.spec.id, tile);
   }
   return (
     <>
@@ -90,9 +94,7 @@ export function TargetSection({
         targetText={targetText}
         onTargetText={onTargetText}
         reads={reads}
-        quotes={quotes}
-        leverageBasis={leverageBasis}
-        onLeverageBasis={onLeverageBasis}
+        metrics={metrics}
         masked={masked}
       />
       <div className="grid min-w-0 max-w-full gap-4 lg:grid-cols-3 [&>*]:min-w-0 [&>*]:max-w-full">
@@ -105,8 +107,7 @@ export function TargetSection({
             masked={masked}
             bestWhen={bestWhenFor(evaluation.expiryBoards, row.spec.id)}
             target={row.status === "priced" ? (reads.get(row.spec.id) ?? null) : null}
-            leverage={row.status === "priced" ? (quotes.get(row.spec.id) ?? null) : null}
-            leverageBasis={leverageBasis}
+            metrics={row.status === "priced" ? (metrics.get(row.spec.id) ?? null) : null}
             plotted={plotted ? plotted(row.spec.id) : true}
             onPlot={onPlot ? () => onPlot(row.spec.id) : undefined}
             onEdit={onEdit}
@@ -124,9 +125,7 @@ function TargetBoard({
   targetText,
   onTargetText,
   reads,
-  quotes,
-  leverageBasis,
-  onLeverageBasis,
+  metrics,
   masked,
 }: {
   evaluation: LabEvaluation;
@@ -135,9 +134,7 @@ function TargetBoard({
   targetText: string;
   onTargetText: (value: string) => void;
   reads: Map<string, TargetRead>;
-  quotes: Map<string, readonly LeverageQuote[]>;
-  leverageBasis: LeverageBasis;
-  onLeverageBasis: (basis: LeverageBasis) => void;
+  metrics: Map<string, TileMetrics>;
   masked: boolean;
 }) {
   const dates = evaluation.horizons.filter((horizon) => horizon.shared && !horizon.settlement);
@@ -147,8 +144,8 @@ function TargetBoard({
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">If the target is reached</h2>
-          <p className="mt-1 max-w-3xl text-xs text-zinc-700 dark:text-zinc-300" title={TARGET_LEVERAGE_HINT}>
-            Leverage = (share-equivalent delta × stock price) / dollars invested. Worked example: a $100 stock, 100 delta-shares, $1,000 invested = 10×. Idle cash stays out of the denominator. {COST_PER_DELTA_HINT}
+          <p className="mt-1 max-w-3xl text-xs text-zinc-700 dark:text-zinc-300" title={LEVERAGE_NOW_HINT}>
+            Leverage now is today&apos;s model delta times the stock price, divided by the debit. Peak leverage is the highest of that ratio on today&apos;s price curve. Max profit and return on debit divide by the debit you paid. The delta column is a share count.
           </p>
         </div>
         <label className={labLabel}>
@@ -165,20 +162,6 @@ function TargetBoard({
           />
         </label>
       </div>
-      <div className="mt-3 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Delta basis for leverage">
-        {LEVERAGE_BASES.map((item) => (
-          <HorizonChip
-            key={item.id}
-            radio
-            on={leverageBasis === item.id}
-            onClick={() => onLeverageBasis(item.id)}
-            label={item.id === DEFAULT_LEVERAGE_BASIS ? `${item.label} (default)` : item.label}
-          />
-        ))}
-      </div>
-      <p className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-300">
-        The bold Leverage line on each tile uses this delta. Short strike at expiry is the settled share count just through that strike, times the strike. A capped spread also shows the long leg only, just inside the strike, because the delta beyond it is about 0. Target price and date follows the horizon and the price box.
-      </p>
       <div className="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="Target horizon">
         <HorizonChip on={horizonId === "expiry"} onClick={() => onHorizon("expiry")} label="Expiry" />
         {dates.map((horizon) => (
@@ -191,29 +174,28 @@ function TargetBoard({
             <tr className="text-[11px] uppercase tracking-wide text-zinc-600 dark:text-zinc-300">
               <th className="py-1 pr-3 font-semibold">Structure</th>
               <th className="py-1 pr-3 font-semibold">Target</th>
-              <th className="py-1 pr-3 font-semibold">Delta</th>
-              <th className="py-1 pr-3 font-semibold">Cost per delta</th>
-              <th className="py-1 pr-3 font-semibold">Leverage</th>
+              <th className="py-1 pr-3 font-semibold" title={DELTA_AT_SHORT_HINT}>Delta</th>
+              <th className="py-1 pr-3 font-semibold" title={LEVERAGE_NOW_HINT}>Leverage now</th>
+              <th className="py-1 pr-3 font-semibold" title={PEAK_LEVERAGE_HINT}>Peak leverage</th>
+              <th className="py-1 pr-3 font-semibold" title={MAX_PROFIT_HINT}>Max profit</th>
               <th className="py-1 pr-3 font-semibold">P&amp;L</th>
-              <th className="py-1 font-semibold">Multiple</th>
+              <th className="py-1 font-semibold" title={RETURN_ON_DEBIT_HINT}>Return on debit</th>
             </tr>
           </thead>
           <tbody>
             {priced.map((row) => {
               const read = reads.get(row.spec.id) ?? null;
+              const tile = metrics.get(row.spec.id) ?? null;
               return (
                 <tr key={row.spec.id} className="border-t border-zinc-300 dark:border-zinc-700">
                   <td className="py-1.5 pr-3 font-semibold">{row.spec.label}</td>
                   <td className="py-1.5 pr-3 tabular-nums">{read ? read.target.toFixed(2) : "—"}</td>
-                  <td className="py-1.5 pr-3 tabular-nums">{read ? deltaLabel(read) : "—"}</td>
-                  <td className="py-1.5 pr-3" title={COST_PER_DELTA_HINT}>
-                    {read ? costPerDeltaLine(read) : "—"}
-                  </td>
-                  <td className="py-1.5 pr-3 tabular-nums" title={TARGET_LEVERAGE_HINT}>
-                    <LeverageLines quotes={quotes.get(row.spec.id) ?? null} basis={leverageBasis} />
-                  </td>
+                  <td className="py-1.5 pr-3 tabular-nums" title={DELTA_AT_SHORT_HINT}>{read ? deltaLabel(read) : "—"}</td>
+                  <td className="py-1.5 pr-3 tabular-nums" title={LEVERAGE_NOW_HINT}>{formatLeverage(tile?.leverageNow ?? null)}</td>
+                  <td className="py-1.5 pr-3 tabular-nums" title={PEAK_LEVERAGE_HINT}>{formatPeakLeverage(tile?.peakLeverage ?? null, tile?.peakSpot ?? null)}</td>
+                  <td className="py-1.5 pr-3 tabular-nums" title={MAX_PROFIT_HINT}>{formatMaxProfitMultiple(tile)}</td>
                   <td className="py-1.5 pr-3 tabular-nums">{read?.pnl != null ? formatSignedUsd2(read.pnl, { mask: masked }) : "—"}</td>
-                  <td className="py-1.5 tabular-nums">{read?.multiple != null ? `${read.multiple.toFixed(2)}×` : "—"}</td>
+                  <td className="py-1.5 tabular-nums" title={RETURN_ON_DEBIT_HINT}>{formatLeverage(tile?.returnOnDebit ?? null)}</td>
                 </tr>
               );
             })}
@@ -224,30 +206,11 @@ function TargetBoard({
   );
 }
 
-function LeverageLines({ quotes, basis }: { quotes: readonly LeverageQuote[] | null; basis: LeverageBasis }) {
-  if (!quotes) return "—";
-  const ordered = [...quotes].sort((a, b) => (a.basis === basis ? -1 : b.basis === basis ? 1 : 0));
-  return (
-    <div className="space-y-0.5">
-      {ordered.map((quote) => {
-        const headline = quote.basis === basis;
-        return (
-          <div key={quote.basis} className={headline ? "font-bold" : "text-xs font-normal text-zinc-600 dark:text-zinc-400"}>
-            {headline ? "Leverage" : quote.title} {leverageValue(quote)}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function HorizonChip({ on, onClick, label, radio }: { on: boolean; onClick: () => void; label: string; radio?: boolean }) {
+function HorizonChip({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) {
   return (
     <button
       type="button"
-      role={radio ? "radio" : undefined}
-      aria-checked={radio ? on : undefined}
-      aria-pressed={radio ? undefined : on}
+      aria-pressed={on}
       onClick={onClick}
       className={`rounded-full px-3 py-1 text-xs font-semibold ${
         on

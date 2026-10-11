@@ -4,14 +4,15 @@ import { useCallback, useMemo, useRef, useState } from "react";
 
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { ChainGrid } from "@/app/components/strategyLab/ChainGrid";
+import { SpreadOptimizer } from "@/app/components/strategyLab/SpreadOptimizer";
 import { LabCharts } from "@/app/components/strategyLab/LabCharts";
 import { ExpirySummary } from "@/app/components/strategyLab/ExpirySummary";
 import { ScenarioBar } from "@/app/components/strategyLab/ScenarioBar";
 import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
 import { TargetSection } from "@/app/components/strategyLab/TargetBoard";
-import { DEFAULT_LEVERAGE_BASIS, type LeverageBasis } from "@/lib/strategyLab/targetMetrics";
 import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
-import { LAB_LIMITS, TEMPLATE_CATALOG, type HorizonSpec, type TemplateRequest } from "@/lib/strategyLab/lab";
+import { LAB_LIMITS, TEMPLATE_CATALOG, type HorizonSpec, type LabEdit, type TemplateRequest } from "@/lib/strategyLab/lab";
+import type { SpreadCandidate } from "@/lib/strategyLab/callSpreadOptimizer";
 import { formatModelDelta, nearestDeltaStrike, strikeDeltas } from "@/lib/strategyLab/strikeDelta";
 import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
 import { useStrategyLab } from "@/lib/strategyLab/useStrategyLab";
@@ -178,7 +179,6 @@ export function StrategyLabPage() {
   const [capitalDraft, setCapitalDraft] = useState("10000");
   const [targetHorizon, setTargetHorizon] = useState("expiry");
   const [targetText, setTargetText] = useState("");
-  const [leverageBasis, setLeverageBasis] = useState<LeverageBasis>(DEFAULT_LEVERAGE_BASIS);
   const [whatIf, setWhatIf] = useState<{ symbol: string; spot: number } | null>(null);
   const [customDate, setCustomDate] = useState("");
   const [customMonths, setCustomMonths] = useState("9");
@@ -186,6 +186,7 @@ export function StrategyLabPage() {
   const [shortDeltaTarget, setShortDeltaTarget] = useState("50");
   const [deltaPlotted, setDeltaPlotted] = useState<readonly string[] | null>(null);
   const toggleDelta = useRef<(id: string) => void>(() => {});
+  const loadedSpreads = useRef(new Map<string, string>());
   const bindDeltaToggle = useCallback((toggle: (id: string) => void) => {
     toggleDelta.current = toggle;
   }, []);
@@ -282,6 +283,41 @@ export function StrategyLabPage() {
   const needsShort = template !== "longCall" && template !== "syntheticLong";
   const pickedLong = longBoard.find((row) => String(row.strike) === longValue);
   const pickedShort = addBoard.find((row) => String(row.strike) === shortValue);
+
+  function addOptimizedSpread(row: SpreadCandidate): boolean {
+    if (!lab) return false;
+    const existing = loadedSpreads.current.get(row.key);
+    if (existing && lab.structures.some((spec) => spec.id === existing)) return true;
+    if (lab.structures.length >= LAB_LIMITS.structures) return false;
+    const id = `s${lab.seq}`;
+    const label = `${Number.isInteger(row.longStrike) ? row.longStrike : row.longStrike.toFixed(2)}/${
+      Number.isInteger(row.shortStrike) ? row.shortStrike : row.shortStrike.toFixed(2)
+    }`;
+    const edits: LabEdit[] = [
+      {
+        kind: "addStructure",
+        label,
+        expiry: row.expiry,
+        request: {
+          template: "callDebitSpread",
+          long: { by: "strike", strike: row.longStrike },
+          short: { by: "strike", strike: row.shortStrike },
+        },
+        entry: { kind: "mid" },
+      },
+      { kind: "setIvOverride", id, legIndex: 0, iv: row.iv },
+      { kind: "setIvOverride", id, legIndex: 1, iv: row.iv },
+    ];
+    loadedSpreads.current.set(row.key, id);
+    edit(edits);
+    return true;
+  }
+
+  function removeOptimizedSpread(key: string) {
+    const id = loadedSpreads.current.get(key);
+    loadedSpreads.current.delete(key);
+    if (id) edit({ kind: "removeStructure", id });
+  }
 
   function addChainLeg(expiryDate: IsoDate, right: OptionRight, strike: number, ratio: number) {
     if (!lab) return;
@@ -623,6 +659,15 @@ export function StrategyLabPage() {
 
           <ChainGrid chain={chain} assumptions={lab.assumptions} onAddLeg={addChainLeg} />
 
+          <SpreadOptimizer
+            chain={chain}
+            structureCount={lab.structures.length}
+            structureLimit={LAB_LIMITS.structures}
+            masked={privacy.masked}
+            onAdd={addOptimizedSpread}
+            onRemove={removeOptimizedSpread}
+          />
+
           <TargetSection
             evaluation={evaluation}
             chain={chain}
@@ -631,8 +676,6 @@ export function StrategyLabPage() {
             onHorizon={setTargetHorizon}
             targetText={targetText}
             onTargetText={setTargetText}
-            leverageBasis={leverageBasis}
-            onLeverageBasis={setLeverageBasis}
             masked={privacy.masked}
             plotted={(id) => deltaPlotted == null || deltaPlotted.includes(id)}
             onPlot={(id) => toggleDelta.current(id)}
