@@ -394,6 +394,61 @@ export function crossoverCallouts(
   return pending.map((callout, index) => ({ ...callout, n: index + 1 }));
 }
 
+export type ProfitCrossover = { readonly spot: number; readonly pnl: number };
+
+/**
+ * Crossovers of the plotted curves whose intersection is in profit (P&L above zero).
+ * Loss-side crossings are omitted so the default zoom can sit on the profit side.
+ */
+export function positiveCrossovers(evaluation: LabEvaluation, curves: readonly CurveView[]): ProfitCrossover[] {
+  const priced = evaluation.structures.filter(isPlottableStructure);
+  const byHorizon = new Map<string, CurveView[]>();
+  for (const curve of curves) {
+    const list = byHorizon.get(curve.horizonId) ?? [];
+    list.push(curve);
+    byHorizon.set(curve.horizonId, list);
+  }
+  const out: ProfitCrossover[] = [];
+  const seen = new Set<string>();
+  for (const callout of crossoverCallouts(evaluation, curves)) {
+    const key = `${callout.horizonId}|${callout.spot.toFixed(4)}`;
+    if (seen.has(key)) continue;
+    const pnl = intersectionPnl(priced, byHorizon.get(callout.horizonId) ?? [], callout.spot);
+    if (pnl == null || !(pnl > 0)) continue;
+    seen.add(key);
+    out.push({ spot: callout.spot, pnl });
+  }
+  return out;
+}
+
+function intersectionPnl(priced: readonly PricedStructure[], curves: readonly CurveView[], spot: number): number | null {
+  const values: number[] = [];
+  for (const curve of curves) {
+    const points = priced
+      .find((row) => row.spec.id === curve.structureId)
+      ?.curves.find((item) => item.horizonId === curve.horizonId)?.points;
+    if (!points || points.length === 0) continue;
+    const first = points[0]!.spot;
+    const last = points[points.length - 1]!.spot;
+    if (spot < first - 1e-6 || spot > last + 1e-6) continue;
+    const pnl = samplePnl(points, spot);
+    if (pnl != null && Number.isFinite(pnl)) values.push(pnl);
+  }
+  if (values.length < 2) return null;
+  let bestGap = Infinity;
+  let average = 0;
+  for (let i = 0; i < values.length; i++) {
+    for (let j = i + 1; j < values.length; j++) {
+      const gap = Math.abs(values[i]! - values[j]!);
+      if (gap < bestGap) {
+        bestGap = gap;
+        average = (values[i]! + values[j]!) / 2;
+      }
+    }
+  }
+  return average;
+}
+
 export function samplePnl(points: readonly { spot: number; pnl: number }[], spot: number): number | null {
   if (points.length === 0) return null;
   if (spot <= points[0]!.spot) return points[0]!.pnl;
