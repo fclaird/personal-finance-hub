@@ -2,9 +2,9 @@ import { OPTION_RISK_RULE_TYPES, type OptionRiskRuleType } from "@/lib/alerts/op
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 
-export type AlertRuleType = "drift" | "concentration" | OptionRiskRuleType;
+export type AlertRuleType = "drift" | "concentration" | "watch" | OptionRiskRuleType;
 
-export const ALL_ALERT_RULE_TYPES: AlertRuleType[] = ["drift", "concentration", ...OPTION_RISK_RULE_TYPES];
+export const ALL_ALERT_RULE_TYPES: AlertRuleType[] = ["drift", "concentration", "watch", ...OPTION_RISK_RULE_TYPES];
 
 export function isAlertRuleType(s: string): s is AlertRuleType {
   return (ALL_ALERT_RULE_TYPES as readonly string[]).includes(s);
