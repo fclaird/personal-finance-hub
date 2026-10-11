@@ -1,5 +1,6 @@
 "use client";
 
+import { PAGE_FRAME } from "@/app/components/pageFrame";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CartesianGrid,
@@ -407,7 +408,7 @@ export function DividendsWorkspace() {
   }
 
   return (
-    <div className="flex w-full max-w-[108rem] flex-1 flex-col gap-8 py-10 pl-5 pr-6 sm:pl-6 sm:pr-8">
+    <div className={PAGE_FRAME}>
       <div className="flex flex-wrap items-start justify-between gap-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Dividends</h1>
@@ -469,7 +470,7 @@ export function DividendsWorkspace() {
               {banner.totalEquitySymbolCount} equity/fund total
             </p>
           </div>
-          <div className="mt-5 grid gap-4 sm:grid-cols-3">
+          <div className="mt-5 grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-4 [&>*]:min-w-0">
             <div className="rounded-xl border border-zinc-200 bg-white/60 p-4 dark:border-white/10 dark:bg-white/5">
               <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
                 Dividend share of book

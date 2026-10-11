@@ -1,5 +1,6 @@
 "use client";
 
+import { PAGE_FRAME, STAT_GRID } from "@/app/components/pageFrame";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
@@ -203,7 +204,7 @@ function ReportsPageInner() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6">
+    <div className={PAGE_FRAME}>
       <EditablePageHeading pageId="reports" defaultTitle="Realized gain/loss" />
 
       <div className="flex flex-wrap gap-2">
@@ -235,7 +236,7 @@ function ReportsPageInner() {
 
       {metrics ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <div className={STAT_GRID}>
             <MetricCard
               title="Net portfolio balance"
               value={usd2Masked(metrics.netBalance, privacy.masked)}

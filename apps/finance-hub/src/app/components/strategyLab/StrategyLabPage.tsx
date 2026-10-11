@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 
+import { FIELD_GRID, PAGE_FRAME } from "@/app/components/pageFrame";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { ChainGrid } from "@/app/components/strategyLab/ChainGrid";
 import { SpreadOptimizer } from "@/app/components/strategyLab/SpreadOptimizer";
@@ -338,7 +339,7 @@ export function StrategyLabPage() {
   }
 
   return (
-    <div className="mx-auto box-border flex w-full min-w-0 max-w-6xl flex-col gap-6 overflow-x-clip px-4 py-6 sm:px-6 [&>*]:box-border [&>*]:min-w-0 [&>*]:max-w-full">
+    <div className={PAGE_FRAME}>
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Strategy Lab</h1>
@@ -408,7 +409,7 @@ export function StrategyLabPage() {
 
       {lab && chain && evaluation ? (
         <>
-          <section className={`${labCard} grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4`}>
+          <section className={`${labCard} ${FIELD_GRID} p-4`}>
             <label className={labLabel}>
               Rate %
               <input
