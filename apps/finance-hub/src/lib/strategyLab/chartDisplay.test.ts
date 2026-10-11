@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { isoDate, makeOptionChain, type ChainDraft, type DraftContract, type OptionChain } from "@/lib/optionChain/chain";
+import { calendarDaysBetween, formatExpiryLabel, isoDate, makeOptionChain, type ChainDraft, type DraftContract, type OptionChain } from "@/lib/optionChain/chain";
+import { bsmGreeks } from "@/lib/options/blackScholes";
+import { sampleStructureDelta } from "@/lib/strategyLab/deltaCurves";
 import { createLab, editLab, evaluateLab, zeroPackageNotice, type HorizonView, type LabEvaluation, type PricedStructure } from "@/lib/strategyLab/lab";
 import {
   applyCurveLook,
@@ -18,6 +20,7 @@ import {
   readableHorizonIds,
   reconcileChartSelection,
   setChartMode,
+  setFocusHorizon,
   setHorizons,
   setStructures,
   toggleStructure,
@@ -456,5 +459,90 @@ describe("chart settings parser", () => {
     };
     writeChartSettings(storage, settings);
     assert.deepEqual(parseChartSettings(JSON.parse(mem.values().next().value ?? "null")), settings);
+  });
+});
+
+describe("structures with different expiries", () => {
+  const near = "2027-01-15";
+  const far = "2028-01-21";
+  const built = makeOptionChain({
+    symbol: "NOW",
+    spot: 100,
+    tradeDate: "2026-10-08",
+    quoteTime: null,
+    source: "cboe",
+    delayed: true,
+    dividendYieldHint: 0,
+    contracts: [
+      { expiry: near, right: "C", strike: 100, bid: 5.5, ask: 6.5, feedIv: null, multiplier: 100, root: null, openInterest: 1, volume: 1 },
+      { expiry: far, right: "C", strike: 100, bid: 12, ask: 15, feedIv: null, multiplier: 100, root: null, openInterest: 1, volume: 1 },
+    ],
+    fetchedAt: "2026-10-08T16:00:00.000Z",
+    servedFrom: "network",
+    fallbackFrom: null,
+  });
+  if (!built.ok) throw new Error(built.error);
+
+  const ev = evaluateLab(
+    editLab(
+      createLab(built.chain),
+      [
+        { kind: "setAssumptions", patch: { rate: 0, dividendYield: 0, ivSource: "mid" } },
+        { kind: "setBasis", basis: { kind: "perPackage" } },
+        { kind: "addStructure", label: "Near", expiry: isoDate(near), request: { template: "longCall", strike: { by: "strike", strike: 100 } } },
+        { kind: "addStructure", label: "Far", expiry: isoDate(far), request: { template: "longCall", strike: { by: "strike", strike: 100 } } },
+      ],
+      built.chain,
+    ),
+    built.chain,
+  );
+
+  it("uses each structure's own time to expiry on a shared date, and its own expiry when Expiry is picked", () => {
+    const today = ev.horizons.find((horizon) => horizon.date === ev.entryDate && !horizon.settlement);
+    assert.ok(today);
+    const rows = ["Near", "Far"].map((label) => {
+      const row = ev.structures.find((item) => item.spec.label === label);
+      assert.ok(row && row.status === "priced");
+      if (!row || row.status !== "priced") throw new Error("unreachable");
+      return row;
+    });
+    const [nearRow, farRow] = rows;
+    assert.ok(nearRow && farRow && today);
+    const expected = (row: PricedStructure) => {
+      const years = calendarDaysBetween(today!.date, row.spec.expiry) / 365;
+      const iv = row.legs[0]?.iv;
+      assert.ok(iv != null && years > 0);
+      if (iv == null) throw new Error("unreachable");
+      return bsmGreeks({ right: "C", spot: 100, strike: 100, years, rate: 0, dividendYield: 0, vol: iv }).delta * 100;
+    };
+    const nearDelta = sampleStructureDelta(ev, nearRow.spec.id, today.id, 100, "shares", "delta");
+    const farDelta = sampleStructureDelta(ev, farRow.spec.id, today.id, 100, "shares", "delta");
+    assert.ok(nearDelta != null && farDelta != null);
+    assert.ok(Math.abs(nearDelta - expected(nearRow)) < 1e-6);
+    assert.ok(Math.abs(farDelta - expected(farRow)) < 1e-6);
+    assert.notEqual(calendarDaysBetween(today.date, nearRow.spec.expiry), calendarDaysBetween(today.date, farRow.spec.expiry));
+
+    const expiryCurves = visibleCurves(ev, setChartMode(initialChartSelection(ev), "expiry"));
+    assert.equal(expiryCurves.length, 2);
+    const ownSettlement = (row: PricedStructure) => ev.horizons.find((horizon) => horizon.settlement && horizon.structureId === row.spec.id);
+    for (const row of rows) {
+      const horizon = ownSettlement(row);
+      assert.ok(horizon);
+      const curve = expiryCurves.find((item) => item.structureId === row.spec.id);
+      assert.equal(curve?.horizonId, horizon?.id);
+      assert.match(curve?.name ?? "", /expiry/);
+      assert.match(curve?.name ?? "", new RegExp(formatExpiryLabel(row.spec.expiry).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    }
+
+    const focus = ownSettlement(nearRow);
+    assert.ok(focus);
+    const sharedExpiry = visibleCurves(ev, setFocusHorizon(setChartMode(initialChartSelection(ev), "structure"), focus!.id));
+    assert.equal(sharedExpiry.length, 2);
+    for (const row of rows) {
+      const horizon = ownSettlement(row);
+      const curve = sharedExpiry.find((item) => item.structureId === row.spec.id);
+      assert.equal(curve?.horizonId, horizon?.id);
+      assert.match(curve?.name ?? "", new RegExp(formatExpiryLabel(row.spec.expiry)));
+    }
   });
 });

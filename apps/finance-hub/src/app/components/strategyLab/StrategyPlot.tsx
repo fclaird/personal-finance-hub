@@ -34,7 +34,7 @@ import {
   type ChartView,
 } from "@/lib/strategyLab/chartView";
 import { capitalExpiryPnl, type ExpiryBoard, type ExpiryZone, type LabEvaluation, type PricedStructure } from "@/lib/strategyLab/lab";
-import { LAB_PALETTE } from "@/lib/strategyLab/palette";
+import { LAB_PALETTE, seriesColor } from "@/lib/strategyLab/palette";
 
 export type ChartRow = { spot: number; stock?: number } & Record<string, number | undefined>;
 
@@ -56,10 +56,6 @@ type PlotDrag = {
 function money(n: number | undefined | null, mask: boolean): string {
   if (n == null || !Number.isFinite(n)) return "—";
   return formatSignedUsd2(n, { mask });
-}
-
-function seriesColor(slot: number): string {
-  return LAB_PALETTE.series[slot] ?? LAB_PALETTE.series[0];
 }
 
 function spotText(n: number): string {
@@ -97,10 +93,15 @@ function ChartTip({
 }) {
   if (!active || !payload?.length) return null;
   const spot = payload[0]?.payload?.spot;
+  const rows = [...payload].sort((a, b) => {
+    const left = typeof a.value === "number" && Number.isFinite(a.value) ? a.value : Number.NEGATIVE_INFINITY;
+    const right = typeof b.value === "number" && Number.isFinite(b.value) ? b.value : Number.NEGATIVE_INFINITY;
+    return right - left;
+  });
   return (
     <div className="max-w-xs rounded-md border border-zinc-500 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-100 shadow-lg">
       <div className="tabular-nums text-zinc-50">Spot {spot != null ? spot.toFixed(2) : ""}</div>
-      {payload.map((item) => (
+      {rows.map((item) => (
         <div key={String(item.name)} className="tabular-nums" style={{ color: item.color }}>
           {item.name} {money(typeof item.value === "number" ? item.value : undefined, mask)}
         </div>

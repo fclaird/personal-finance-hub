@@ -1,14 +1,5 @@
 import { isoDate, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
-import type {
-  Basis,
-  EntryBasis,
-  HorizonSpec,
-  LabScenario,
-  LegSpec,
-  SpotWindow,
-  StructureSpec,
-  StructureSlot,
-} from "@/lib/strategyLab/lab";
+import { LAB_LIMITS, type Basis, type EntryBasis, type HorizonSpec, type LabScenario, type LegSpec, type SpotWindow, type StructureSpec, type StructureSlot } from "@/lib/strategyLab/lab";
 import type { Assumptions } from "@/lib/strategyLab/internal/pricing";
 import type { StrikeTarget, TemplateRequest } from "@/lib/strategyLab/internal/templates";
 
@@ -144,7 +135,7 @@ function parseStructure(raw: unknown, seenSlots: Set<number>, seenIds: Set<strin
   if (typeof raw.id !== "string" || raw.id.length < 1 || raw.id.length > 40 || seenIds.has(raw.id)) return null;
   if (typeof raw.label !== "string" || raw.label.trim().length < 1 || raw.label.length > 40) return null;
   const slot = finite(raw.slot);
-  if (slot == null || !Number.isInteger(slot) || slot < 0 || slot > 3 || seenSlots.has(slot)) return null;
+  if (slot == null || !Number.isInteger(slot) || slot < 0 || slot >= LAB_LIMITS.structures || seenSlots.has(slot)) return null;
   const expiry = dateOf(raw.expiry);
   if (!expiry) return null;
   let snappedFrom: IsoDate | null = null;
@@ -251,7 +242,7 @@ export function parseScenario(raw: unknown): LabScenario | null {
     if (!parsed) return null;
     horizons.push(parsed);
   }
-  if (!Array.isArray(raw.structures) || raw.structures.length > 4) return null;
+  if (!Array.isArray(raw.structures) || raw.structures.length > LAB_LIMITS.structures) return null;
   const structures: StructureSpec[] = [];
   const seenSlots = new Set<number>();
   const seenIds = new Set<string>();

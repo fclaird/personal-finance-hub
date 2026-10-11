@@ -12,7 +12,7 @@ import {
   type LabEvaluation,
   type PricedStructure,
 } from "@/lib/strategyLab/lab";
-import { LAB_PALETTE, labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
+import { LAB_PALETTE, labCard, labControl, labLabel, seriesColor } from "@/lib/strategyLab/palette";
 
 function money(n: number | null, mask: boolean): string {
   if (n == null) return "—";
@@ -183,7 +183,7 @@ export function ExpirySummary({
                       label={row.spec.label}
                       pnl={capitalExpiryPnl(row, whatIfSpot)}
                       winner={zone?.bestId === row.spec.id && !zone.tied}
-                      color={LAB_PALETTE.series[row.spec.slot] ?? LAB_PALETTE.series[0]}
+                      color={seriesColor(row.spec.slot)}
                       mask={masked}
                     />
                   ))}

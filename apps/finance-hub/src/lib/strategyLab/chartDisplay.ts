@@ -3,6 +3,7 @@
  * Pure and instant: the page never refetches when Chris changes mode, dates, or structures.
  */
 
+import { calendarDaysBetween, formatExpiryLabel } from "@/lib/optionChain/chain";
 import {
   crossoverText,
   type ExpiryCrossover,
@@ -10,7 +11,7 @@ import {
   type LabEvaluation,
   type PricedStructure,
 } from "@/lib/strategyLab/lab";
-import { LAB_PALETTE } from "@/lib/strategyLab/palette";
+import { seriesColor } from "@/lib/strategyLab/palette";
 
 export const CHART_MODES = [
   { id: "structure", label: "By structure" },
@@ -257,7 +258,7 @@ function paintMode(evaluation: LabEvaluation, selection: ChartSelection): CurveV
         if (!expiry) continue;
         const [curve] = paint(row, [expiry], "palette");
         if (!curve) continue;
-        curves.push({ ...curve, name: `${row.spec.label} · expiry`, dash: "8 4", width: 3.5 });
+        curves.push({ ...curve, name: `${row.spec.label} · expiry ${formatExpiryLabel(row.spec.expiry)}`, dash: "8 4", width: 3.5 });
       }
       return curves;
     }
@@ -291,7 +292,7 @@ export function applyCurveLook(curves: readonly CurveView[], look: CurveLook, ev
     const color =
       look.colorMode === "rainbow"
         ? rainbowColor(curves.length <= 1 ? 1 : index / (curves.length - 1))
-        : (LAB_PALETTE.series[slot] ?? LAB_PALETTE.series[0]);
+        : seriesColor(slot);
     return {
       ...curve,
       color,
@@ -317,8 +318,7 @@ function curvesOnFocusDate(evaluation: LabEvaluation, selection: ChartSelection)
     null;
   if (!horizonId) return [];
   return structures.flatMap((row) => {
-    const horizons = structureHorizons(evaluation, row);
-    const chosen = horizons.find((horizon) => horizon.id === horizonId) ?? horizons[0];
+    const chosen = horizonForStructure(evaluation, row, horizonId);
     return chosen ? paint(row, [chosen], "palette") : [];
   });
 }
@@ -418,7 +418,7 @@ function paint(row: PricedStructure, horizons: readonly HorizonView[], kind: "ra
       key: `${row.spec.id}@@${horizon.id}`,
       structureId: row.spec.id,
       horizonId: horizon.id,
-      name: many ? `${row.spec.label} · ${shortHorizon(horizon.label)}` : row.spec.label,
+      name: curveName(row, horizon, many),
       ...look,
     };
   });
@@ -436,7 +436,7 @@ function lookOf(
     const t = total <= 1 ? 1 : index / (total - 1);
     return { color: rainbowColor(t), width: expiry ? 4 : 2.75 };
   }
-  const color = LAB_PALETTE.series[row.spec.slot] ?? LAB_PALETTE.series[0];
+  const color = seriesColor(row.spec.slot);
   if (total <= 1) return { color, width: horizon.settlement ? 4 : 3.5 };
   if (horizon.settlement) return { color, width: 4 };
   return { color, width: 2.75, dash: DATE_DASH[index % DATE_DASH.length] };
@@ -472,6 +472,29 @@ function selectedStructures(evaluation: LabEvaluation, selection: ChartSelection
 function structureHorizons(evaluation: LabEvaluation, row: PricedStructure): HorizonView[] {
   const ids = new Set(row.curves.map((curve) => curve.horizonId));
   return evaluation.horizons.filter((horizon) => ids.has(horizon.id)).sort(byDate);
+}
+
+/**
+ * A shared date uses that calendar day and each structure's own time to expiry.
+ * A shared expiry pick uses each structure's own settlement, even when the expiries differ.
+ */
+function horizonForStructure(evaluation: LabEvaluation, row: PricedStructure, horizonId: string | null): HorizonView | null {
+  const horizons = structureHorizons(evaluation, row);
+  if (horizons.length === 0) return null;
+  if (!horizonId) return horizons[0] ?? null;
+  const exact = horizons.find((horizon) => horizon.id === horizonId);
+  if (exact) return exact;
+  const focus = evaluation.horizons.find((horizon) => horizon.id === horizonId);
+  if (!focus) return horizons[0] ?? null;
+  if (focus.settlement) return horizons.find((horizon) => horizon.settlement) ?? null;
+  return horizons.find((horizon) => horizon.date === focus.date && !horizon.settlement) ?? horizons.find((horizon) => horizon.date === focus.date) ?? null;
+}
+
+function curveName(row: PricedStructure, horizon: HorizonView, many: boolean): string {
+  if (horizon.settlement || calendarDaysBetween(horizon.date, row.spec.expiry) <= 0) {
+    return `${row.spec.label} · expiry ${formatExpiryLabel(row.spec.expiry)}`;
+  }
+  return many ? `${row.spec.label} · ${shortHorizon(horizon.label)}` : row.spec.label;
 }
 
 function isToday(evaluation: LabEvaluation, horizon: HorizonView): boolean {

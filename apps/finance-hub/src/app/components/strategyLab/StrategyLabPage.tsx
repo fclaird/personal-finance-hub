@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { ChainGrid } from "@/app/components/strategyLab/ChainGrid";
@@ -11,7 +11,7 @@ import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/Strik
 import { TargetSection } from "@/app/components/strategyLab/TargetBoard";
 import { DEFAULT_LEVERAGE_BASIS, type LeverageBasis } from "@/lib/strategyLab/targetMetrics";
 import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
-import { TEMPLATE_CATALOG, type HorizonSpec, type TemplateRequest } from "@/lib/strategyLab/lab";
+import { LAB_LIMITS, TEMPLATE_CATALOG, type HorizonSpec, type TemplateRequest } from "@/lib/strategyLab/lab";
 import { formatModelDelta, nearestDeltaStrike, strikeDeltas } from "@/lib/strategyLab/strikeDelta";
 import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
 import { useStrategyLab } from "@/lib/strategyLab/useStrategyLab";
@@ -184,6 +184,11 @@ export function StrategyLabPage() {
   const [customMonths, setCustomMonths] = useState("9");
   const [longDeltaTarget, setLongDeltaTarget] = useState("75");
   const [shortDeltaTarget, setShortDeltaTarget] = useState("50");
+  const [deltaPlotted, setDeltaPlotted] = useState<readonly string[] | null>(null);
+  const toggleDelta = useRef<(id: string) => void>(() => {});
+  const bindDeltaToggle = useCallback((toggle: (id: string) => void) => {
+    toggleDelta.current = toggle;
+  }, []);
 
   const expiry = (expiryPick || chain?.expiries.at(-1)?.date || "") as IsoDate | "";
   const callStrikes = useMemo(() => {
@@ -287,7 +292,7 @@ export function StrategyLabPage() {
       edit({ kind: "addLeg", id: open.id, right, strike, ratio });
       return;
     }
-    if (lab.structures.length >= 4) return;
+    if (lab.structures.length >= LAB_LIMITS.structures) return;
     edit({
       kind: "addStructure",
       expiry: expiryDate,
@@ -565,7 +570,7 @@ export function StrategyLabPage() {
               <button
                 type="button"
                 onClick={addStructure}
-                disabled={lab.structures.length >= 4}
+                disabled={lab.structures.length >= LAB_LIMITS.structures}
                 className="rounded bg-zinc-950 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-black"
               >
                 Add
@@ -629,6 +634,8 @@ export function StrategyLabPage() {
             leverageBasis={leverageBasis}
             onLeverageBasis={setLeverageBasis}
             masked={privacy.masked}
+            plotted={(id) => deltaPlotted == null || deltaPlotted.includes(id)}
+            onPlot={(id) => toggleDelta.current(id)}
             onEdit={edit}
           />
 
@@ -646,6 +653,8 @@ export function StrategyLabPage() {
               masked={privacy.masked}
               whatIfSpot={whatIf && whatIf.symbol === chain.symbol ? whatIf.spot : chain.spot}
               onEdit={edit}
+              onDeltaPlot={setDeltaPlotted}
+              bindDeltaToggle={bindDeltaToggle}
             />
           </div>
         </>

@@ -58,9 +58,8 @@ export {
 } from "@/lib/strategyLab/strikeDelta";
 export type { TemplateRequest };
 
-export const LAB_LIMITS = { structures: 4, horizons: 24, legs: 6 } as const;
-export const STRUCTURE_SLOTS = [0, 1, 2, 3] as const;
-export type StructureSlot = (typeof STRUCTURE_SLOTS)[number];
+export const LAB_LIMITS = { structures: 12, horizons: 24, legs: 6 } as const;
+export type StructureSlot = number;
 
 export const DEFAULT_RATE = 0.04;
 
@@ -241,7 +240,7 @@ export type LabEvaluation = {
   };
 };
 
-const LETTERS = ["A", "B", "C", "D"] as const;
+const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 export function createLab(chain: OptionChain): LabScenario {
   return {
@@ -296,14 +295,20 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
     case "addStructure": {
       if (lab.structures.length >= LAB_LIMITS.structures) return lab;
       const used = new Set(lab.structures.map((s) => s.slot));
-      const slot = STRUCTURE_SLOTS.find((s) => !used.has(s));
+      let slot: number | null = null;
+      for (let candidate = 0; candidate < LAB_LIMITS.structures; candidate++) {
+        if (!used.has(candidate)) {
+          slot = candidate;
+          break;
+        }
+      }
       if (slot == null) return lab;
       const listed = nearestExpiry(chain, edit.expiry);
       if (!listed) return lab;
       const id = `s${lab.seq}`;
       const blank: StructureSpec = {
         id,
-        label: edit.label?.trim() || LETTERS[slot],
+        label: edit.label?.trim() || LETTERS[slot] || "S",
         expiry: listed,
         snappedFrom: listed === edit.expiry ? null : edit.expiry,
         legs: [],

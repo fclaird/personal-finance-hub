@@ -17,7 +17,7 @@ import {
   type LeverageQuote,
   type TargetRead,
 } from "@/lib/strategyLab/targetMetrics";
-import { LAB_PALETTE, labControl, labLabel } from "@/lib/strategyLab/palette";
+import { labControl, labLabel, seriesColor } from "@/lib/strategyLab/palette";
 import {
   formatModelDelta,
   nearestDeltaStrike,
@@ -168,6 +168,8 @@ export function StructureCard({
   target,
   leverage,
   leverageBasis,
+  plotted = true,
+  onPlot,
   onEdit,
 }: {
   chain: OptionChain;
@@ -178,10 +180,12 @@ export function StructureCard({
   target: TargetRead | null;
   leverage: readonly LeverageQuote[] | null;
   leverageBasis: LeverageBasis;
+  plotted?: boolean;
+  onPlot?: () => void;
   onEdit: (edit: LabEdit | readonly LabEdit[]) => void;
 }) {
   const spec = row.spec;
-  const color = LAB_PALETTE.series[spec.slot] ?? LAB_PALETTE.series[0];
+  const color = seriesColor(spec.slot);
   const [longTarget, setLongTarget] = useState("75");
   const [shortTarget, setShortTarget] = useState("50");
   const boards = useMemo(() => {
@@ -214,13 +218,26 @@ export function StructureCard({
             style={{ borderColor: color }}
           />
         </div>
-        <button
-          type="button"
-          onClick={() => onEdit({ kind: "removeStructure", id: spec.id })}
-          className="text-xs font-medium text-zinc-600 hover:text-rose-500 dark:text-zinc-300"
-        >
-          Remove
-        </button>
+        <div className="flex shrink-0 items-center gap-3">
+          <label className="inline-flex items-center gap-1.5 text-xs font-semibold" style={{ color }}>
+            <input
+              type="checkbox"
+              checked={plotted}
+              onChange={() => onPlot?.()}
+              aria-label={`Plot ${spec.label || "structure"} on delta chart`}
+              className="h-4 w-4"
+              style={{ accentColor: color }}
+            />
+            Plot on delta chart
+          </label>
+          <button
+            type="button"
+            onClick={() => onEdit({ kind: "removeStructure", id: spec.id })}
+            className="text-xs font-medium text-zinc-600 hover:text-rose-500 dark:text-zinc-300"
+          >
+            Remove
+          </button>
+        </div>
       </div>
       <p className="mb-3 border-l-4 pl-2 text-xs font-semibold text-zinc-800 dark:text-zinc-100" style={{ borderColor: color }}>
         {bestWhen}

@@ -54,6 +54,8 @@ export function TargetSection({
   leverageBasis,
   onLeverageBasis,
   masked,
+  plotted,
+  onPlot,
   onEdit,
 }: {
   evaluation: LabEvaluation;
@@ -66,6 +68,8 @@ export function TargetSection({
   leverageBasis: LeverageBasis;
   onLeverageBasis: (basis: LeverageBasis) => void;
   masked: boolean;
+  plotted?: (id: string) => boolean;
+  onPlot?: (id: string) => void;
   onEdit: (edit: LabEdit | readonly LabEdit[]) => void;
 }) {
   const typed = Number(targetText);
@@ -103,6 +107,8 @@ export function TargetSection({
             target={row.status === "priced" ? (reads.get(row.spec.id) ?? null) : null}
             leverage={row.status === "priced" ? (quotes.get(row.spec.id) ?? null) : null}
             leverageBasis={leverageBasis}
+            plotted={plotted ? plotted(row.spec.id) : true}
+            onPlot={onPlot ? () => onPlot(row.spec.id) : undefined}
             onEdit={onEdit}
           />
         ))}

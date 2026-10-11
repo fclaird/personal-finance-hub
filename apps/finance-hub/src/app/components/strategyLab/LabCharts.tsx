@@ -23,7 +23,6 @@ import {
   setStructures,
   shortHorizon,
   toggleHorizon,
-  toggleStructure,
   visibleCurves,
   writeChartSettings,
   type ChartChrome,
@@ -41,8 +40,9 @@ import {
   type DeltaMeasure,
   type DeltaScale,
 } from "@/lib/strategyLab/deltaCurves";
-import { packageCostOf, zeroPackageNotice, type LabEdit, type LabEvaluation, type PricedStructure } from "@/lib/strategyLab/lab";
-import { LAB_PALETTE, labControl, labLabel } from "@/lib/strategyLab/palette";
+import { packageCostOf, zeroPackageNotice, type LabEdit, type LabEvaluation, type PricedStructure, type StructureEval } from "@/lib/strategyLab/lab";
+import { applyPlotAction, type PlotAction, type PlotChart } from "@/lib/strategyLab/plotSelection";
+import { labControl, labLabel, seriesColor } from "@/lib/strategyLab/palette";
 
 const MODE_HINT: Record<ChartMode, string> = {
   structure: "Every selected structure on the date you pick, on one large chart. Drag to pan, scroll or pinch to zoom.",
@@ -55,10 +55,6 @@ const MODE_HINT: Record<ChartMode, string> = {
   custom: "Any dates and any structures. Changes apply on this chart only.",
 };
 
-
-function seriesColor(slot: number): string {
-  return LAB_PALETTE.series[slot] ?? LAB_PALETTE.series[0];
-}
 
 function spotText(n: number): string {
   return String(Math.round(n * 100) / 100);
@@ -75,11 +71,15 @@ export function LabCharts({
   masked,
   whatIfSpot,
   onEdit,
+  onDeltaPlot,
+  bindDeltaToggle,
 }: {
   evaluation: LabEvaluation;
   masked: boolean;
   whatIfSpot: number | null;
   onEdit: (edit: LabEdit) => void;
+  onDeltaPlot?: (ids: readonly string[]) => void;
+  bindDeltaToggle?: (toggle: (id: string) => void) => void;
 }) {
   const priced = pricedOf(evaluation);
   const [selection, setSelection] = useState<ChartSelection>(() => initialChartSelection(evaluation));
@@ -101,10 +101,13 @@ export function LabCharts({
   const [deltaFocus, setDeltaFocus] = useState<string | null>(null);
   const [deltaYMinDraft, setDeltaYMinDraft] = useState<string | null>(null);
   const [deltaYMaxDraft, setDeltaYMaxDraft] = useState<string | null>(null);
+  const [linkPlots, setLinkPlots] = useState(true);
+  const [deltaIds, setDeltaIds] = useState<readonly string[] | null>(null);
   const hydrated = useRef(false);
   const pnlHomeRef = useRef<ChartView | null>(null);
   const deltaHomeRef = useRef<ChartView | null>(null);
   const pendingDeltaX = useRef<{ xMin: number; xMax: number } | null>(null);
+  const linkPlotsRef = useRef(true);
   const knownStructures = useRef<string[] | null>(null);
   const knownHorizons = useRef<string[] | null>(null);
   const liveStructures = priced.map((row) => row.spec.id);
@@ -124,6 +127,12 @@ export function LabCharts({
       const next = reconcileChartSelection(prev, { structures, horizons }, { structures: prevStructures, horizons: prevHorizons });
       if (prev.horizonPolicy.kind === "picked") return next;
       return { ...next, horizonIds: applyHorizonPolicy(evaluation.horizons, prev.horizonPolicy, next.focusHorizonId) };
+    });
+    setDeltaIds((prev) => {
+      if (linkPlotsRef.current || prev == null) return prev;
+      const kept = prev.filter((id) => structures.includes(id));
+      const newcomers = structures.filter((id) => !prevStructures.includes(id) && !kept.includes(id));
+      return [...kept, ...newcomers];
     });
     // evaluation is the render that produced structureKey / horizonKey.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -166,25 +175,57 @@ export function LabCharts({
     persist(selection, next);
   };
 
-  const curves = useMemo(() => {
-    const painted =
-      selection.mode === "structure" ? combinedDateCurves(evaluation, selection) : visibleCurves(evaluation, selection);
-    if (selection.mode === "waterfall") {
-      return painted.map((curve) => {
-        const expiry = evaluation.horizons.some((horizon) => horizon.id === curve.horizonId && horizon.settlement);
-        return {
-          ...curve,
-          width: chrome.thickness + (expiry ? 1 : 0),
-          dash: chrome.stroke === "dashed" && !expiry ? (curve.dash ?? "6 3") : curve.dash,
-        };
-      });
-    }
-    return applyCurveLook(
-      painted,
-      { colorMode: chrome.colorMode, stroke: chrome.stroke, thickness: chrome.thickness },
-      evaluation,
-    );
-  }, [evaluation, selection, chrome.colorMode, chrome.stroke, chrome.thickness]);
+  const paintCurves = useCallback(
+    (sel: ChartSelection) => {
+      const painted = sel.mode === "structure" ? combinedDateCurves(evaluation, sel) : visibleCurves(evaluation, sel);
+      if (sel.mode === "waterfall") {
+        return painted.map((curve) => {
+          const expiry = evaluation.horizons.some((horizon) => horizon.id === curve.horizonId && horizon.settlement);
+          return {
+            ...curve,
+            width: chrome.thickness + (expiry ? 1 : 0),
+            dash: chrome.stroke === "dashed" && !expiry ? (curve.dash ?? "6 3") : curve.dash,
+          };
+        });
+      }
+      return applyCurveLook(painted, { colorMode: chrome.colorMode, stroke: chrome.stroke, thickness: chrome.thickness }, evaluation);
+    },
+    [evaluation, chrome.colorMode, chrome.stroke, chrome.thickness],
+  );
+  const pnlCurves = useMemo(() => paintCurves(selection), [paintCurves, selection]);
+  const activeDelta = linkPlots || deltaIds == null ? selection.structureIds : deltaIds;
+  const deltaSelection = useMemo(
+    () => (linkPlots ? selection : { ...selection, structureIds: activeDelta }),
+    [linkPlots, selection, activeDelta],
+  );
+  const deltaCurves = useMemo(() => paintCurves(deltaSelection), [paintCurves, deltaSelection]);
+  const tileIds = evaluation.structures.map((row) => row.spec.id);
+  const commitPlot = useCallback(
+    (action: PlotAction) => {
+      const next = applyPlotAction({ link: linkPlots, pnl: selection.structureIds, delta: activeDelta }, action);
+      setLinkPlots(next.link);
+      setDeltaIds(next.link ? null : next.delta);
+      if (next.pnl.join("\n") === selection.structureIds.join("\n")) return;
+      let updated = setStructures(selection, [...next.pnl]);
+      if (action.kind === "toggle" && !selection.structureIds.includes(action.id) && next.pnl.includes(action.id)) {
+        updated = { ...updated, focusStructureId: action.id };
+      }
+      setSelection(updated);
+      persist(updated, chrome);
+    },
+    [linkPlots, selection, activeDelta, chrome],
+  );
+  const commitRef = useRef(commitPlot);
+  useLayoutEffect(() => {
+    linkPlotsRef.current = linkPlots;
+    commitRef.current = commitPlot;
+  }, [linkPlots, commitPlot]);
+  useEffect(() => {
+    onDeltaPlot?.(activeDelta);
+  }, [onDeltaPlot, activeDelta]);
+  useEffect(() => {
+    bindDeltaToggle?.((id) => commitRef.current({ kind: "toggle", chart: "delta", id }));
+  }, [bindDeltaToggle]);
   const onHome = useCallback((next: ChartView) => {
     setHome((prev) => (sameView(prev, next) ? prev : next));
   }, [setHome]);
@@ -230,7 +271,7 @@ export function LabCharts({
     const spots = evaluation.axis.length > 0 ? [...evaluation.axis] : [];
     return spots.map((spot) => {
       const row: ChartRow = { spot };
-      for (const curve of curves) {
+      for (const curve of deltaCurves) {
         const value = sampleStructureDelta(evaluation, curve.structureId, curve.horizonId, spot, deltaScale, deltaMeasure);
         if (value != null) row[curve.key] = value;
       }
@@ -240,27 +281,27 @@ export function LabCharts({
       }
       return row;
     });
-  }, [evaluation, curves, deltaScale, deltaMeasure, chrome.showStock]);
+  }, [evaluation, deltaCurves, deltaScale, deltaMeasure, chrome.showStock]);
   const stepKeys = useMemo(() => {
     const keys = new Set<string>();
-    for (const curve of curves) {
+    for (const curve of deltaCurves) {
       if (isExpiryCurve(evaluation, curve.structureId, curve.horizonId)) keys.add(curve.key);
     }
     return keys;
-  }, [curves, evaluation]);
+  }, [deltaCurves, evaluation]);
   const deltaGuides = useMemo(() => {
     if (!showHundred || deltaMeasure !== "delta") return [];
     const counts = priced.flatMap((row) =>
-      curves.some((curve) => curve.structureId === row.spec.id) && row.sizing.status !== "needsCapitalOverride"
+      deltaCurves.some((curve) => curve.structureId === row.spec.id) && row.sizing.status !== "needsCapitalOverride"
         ? [row.sizing.packages]
         : [],
     );
     return hundredLines(deltaScale, counts).map((line) => ({ key: `hundred-${line.label}`, y: line.y, label: line.label }));
-  }, [showHundred, deltaMeasure, deltaScale, priced, curves]);
+  }, [showHundred, deltaMeasure, deltaScale, priced, deltaCurves]);
   const peakLines = useMemo(() => {
     if (!showPeak || deltaMeasure !== "delta") return [];
     const byId = new Map<string, { x: number; value: number; color: string }>();
-    for (const curve of curves) {
+    for (const curve of deltaCurves) {
       const peak = peakDelta(
         deltaRows.map((row) => {
           const raw = row[curve.key];
@@ -280,7 +321,7 @@ export function LabCharts({
         label: `${name} max delta at $${peak.x.toFixed(2)}`,
       };
     });
-  }, [showPeak, deltaMeasure, curves, deltaRows, priced]);
+  }, [showPeak, deltaMeasure, deltaCurves, deltaRows, priced]);
   const shown = view ?? home;
   const quiet = evaluation.structures.filter(
     (row): row is PricedStructure => row.status === "priced" && row.sizing.status === "sized" && row.sizing.packages === 0,
@@ -340,14 +381,6 @@ export function LabCharts({
         ))}
       </div>
       <p className="text-xs text-zinc-700 dark:text-zinc-300">{MODE_HINT[selection.mode]}</p>
-
-      <StructurePicker
-        mode={selection.mode}
-        priced={priced}
-        selection={selection}
-        onToggle={(id) => choose(toggleStructure(selection, id))}
-        onSet={(ids) => choose(setStructures(selection, ids))}
-      />
 
       {multiDates || (singleDate && singleChoices.length > 0) ? (
         <DatePicker
@@ -437,6 +470,11 @@ export function LabCharts({
           }}
           label="Link price zoom"
         />
+        <Toggle
+          on={linkPlots}
+          onClick={() => commitPlot({ kind: "link", on: !linkPlots, universe: tileIds })}
+          label="Link selection"
+        />
         <p className="pb-1 text-xs text-zinc-700 dark:text-zinc-300">
           {view && shown
             ? `Zoomed. Visible price ${spotText(shown.xMin)}–${spotText(shown.xMax)}.`
@@ -482,7 +520,7 @@ export function LabCharts({
         </p>
       ))}
 
-      {curves.length === 0 ? (
+      {pnlCurves.length === 0 && deltaCurves.length === 0 ? (
         <p className="text-sm text-zinc-700 dark:text-zinc-300">
           {quiet.length > 0 ? "That curve stays off the chart until a package fits." : "Select a structure and a date to draw P&L."}
         </p>
@@ -493,7 +531,7 @@ export function LabCharts({
             metric={chartMetric}
             evaluation={evaluation}
             priced={priced}
-            curves={curves}
+            curves={pnlCurves}
             chrome={chrome}
             masked={masked}
             whatIfSpot={whatIfSpot}
@@ -504,14 +542,24 @@ export function LabCharts({
             onFocus={(key) => restyle({ ...chrome, focusedCurveKey: key })}
             useLook={useLook}
             role="pnl"
+            header={
+              <PlotChips
+                chart="pnl"
+                mode={selection.mode}
+                structures={evaluation.structures}
+                ids={selection.structureIds}
+                focusId={selection.focusStructureId}
+                onAction={commitPlot}
+              />
+            }
           />
           <StrategyPlot
             title="Position delta vs underlying price"
             metric=""
-            subtitle="Sticky entry IV on every date and price. Share-equivalents = contract delta × 100 × signed ratio × packages."
+            subtitle="Sticky entry IV on every date and price. Each date uses that structure's own time to expiry. Expiry draws each structure at its own expiry."
             evaluation={evaluation}
             priced={priced}
-            curves={curves}
+            curves={deltaCurves}
             chrome={{ ...chrome, yAxis: deltaY, focusedCurveKey: deltaFocus }}
             masked={masked}
             whatIfSpot={whatIfSpot}
@@ -528,6 +576,15 @@ export function LabCharts({
             yLines={deltaGuides}
             xLines={peakLines}
             header={
+              <div className="space-y-2">
+              <PlotChips
+                chart="delta"
+                mode={selection.mode}
+                structures={evaluation.structures}
+                ids={activeDelta}
+                focusId={selection.focusStructureId}
+                onAction={commitPlot}
+              />
               <DeltaScaleBar
                 scale={deltaScale}
                 measure={deltaMeasure}
@@ -565,6 +622,7 @@ export function LabCharts({
                   setDeltaYMaxDraft(null);
                 }}
               />
+              </div>
             }
             footer={
               <div className="mt-3 border-t border-zinc-700 pt-2">
@@ -572,21 +630,24 @@ export function LabCharts({
                   {deltaUnit(deltaScale, deltaMeasure)} if spot is {(whatIfSpot ?? evaluation.spot).toFixed(2)}
                 </p>
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-                  {curves.map((curve) => {
-                    const value = sampleStructureDelta(
-                      evaluation,
-                      curve.structureId,
-                      curve.horizonId,
-                      whatIfSpot ?? evaluation.spot,
-                      deltaScale,
-                      deltaMeasure,
-                    );
-                    return (
+                  {[...deltaCurves]
+                    .map((curve) => ({
+                      curve,
+                      value: sampleStructureDelta(
+                        evaluation,
+                        curve.structureId,
+                        curve.horizonId,
+                        whatIfSpot ?? evaluation.spot,
+                        deltaScale,
+                        deltaMeasure,
+                      ),
+                    }))
+                    .sort((a, b) => (b.value ?? Number.NEGATIVE_INFINITY) - (a.value ?? Number.NEGATIVE_INFINITY))
+                    .map(({ curve, value }) => (
                       <span key={curve.key} className="text-sm font-semibold tabular-nums" style={{ color: curve.color }}>
                         {curve.name} {formatDeltaValue(value ?? undefined, deltaScale, deltaMeasure, masked)}
                       </span>
-                    );
-                  })}
+                    ))}
                 </div>
               </div>
             }
@@ -608,75 +669,72 @@ function yAxisDiffers(current: ChartChrome["yAxis"], next: ChartChrome["yAxis"])
 }
 
 
-function StructurePicker({
+function PlotChips({
+  chart,
   mode,
-  priced,
-  selection,
-  onToggle,
-  onSet,
+  structures,
+  ids,
+  focusId,
+  onAction,
 }: {
+  chart: PlotChart;
   mode: ChartMode;
-  priced: readonly PricedStructure[];
-  selection: ChartSelection;
-  onToggle: (id: string) => void;
-  onSet: (ids: string[]) => void;
+  structures: readonly StructureEval[];
+  ids: readonly string[];
+  focusId: string | null;
+  onAction: (action: PlotAction) => void;
 }) {
-  const ids = priced.map((row) => row.spec.id);
+  const universe = structures.map((row) => row.spec.id);
+  const noun = chart === "delta" ? "delta chart" : "P&L chart";
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Structures</span>
-        <TextButton onClick={() => onSet(ids)}>Select all</TextButton>
-        <TextButton onClick={() => onSet([])}>Clear</TextButton>
+        <span className="text-xs font-semibold text-zinc-100">Plot on {noun}</span>
+        <button
+          type="button"
+          onClick={() => onAction({ kind: "all", chart, universe })}
+          className="text-xs font-semibold text-zinc-100 underline decoration-zinc-500 underline-offset-2"
+        >
+          Select all
+        </button>
+        <button type="button" onClick={() => onAction({ kind: "none", chart })} className="text-xs font-semibold text-zinc-100 underline decoration-zinc-500 underline-offset-2">
+          None
+        </button>
+        <button
+          type="button"
+          onClick={() => onAction({ kind: "invert", chart, universe })}
+          className="text-xs font-semibold text-zinc-100 underline decoration-zinc-500 underline-offset-2"
+        >
+          Invert
+        </button>
       </div>
-      {mode === "custom" ? (
-        <ul className="flex flex-wrap gap-x-4 gap-y-1">
-          {priced.map((row) => {
-            const color = seriesColor(row.spec.slot);
-            const on = selection.structureIds.includes(row.spec.id);
-            return (
-              <li key={row.spec.id}>
-                <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    onChange={() => onToggle(row.spec.id)}
-                    className="accent-zinc-100"
-                    style={{ accentColor: color }}
-                  />
-                  <span style={{ color }}>{row.spec.label}</span>
-                </label>
-              </li>
-            );
-          })}
-        </ul>
-      ) : (
-        <div className="flex flex-wrap gap-1.5">
-          {priced.map((row) => {
-            const color = seriesColor(row.spec.slot);
-            const on = selection.structureIds.includes(row.spec.id);
-            const focus = mode === "waterfall" && on && row.spec.id === selection.focusStructureId;
-            return (
-              <button
-                key={row.spec.id}
-                type="button"
-                aria-pressed={on}
-                onClick={() => onToggle(row.spec.id)}
-                className="rounded-full px-3 py-1 text-xs font-semibold text-zinc-950"
-                style={{
-                  backgroundColor: on ? color : "transparent",
-                  color: on ? "#09090b" : color,
-                  border: `1px solid ${color}`,
-                  boxShadow: focus ? `0 0 0 2px #09090b, 0 0 0 4px ${color}` : undefined,
-                }}
-              >
-                {row.spec.label}
-                {focus ? " · rainbow" : ""}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      <div className="flex flex-wrap gap-1.5">
+        {structures.map((row) => {
+          const color = seriesColor(row.spec.slot);
+          const on = ids.includes(row.spec.id);
+          const focus = mode === "waterfall" && on && row.spec.id === focusId;
+          const label = row.spec.label || "Structure";
+          return (
+            <button
+              key={row.spec.id}
+              type="button"
+              aria-pressed={on}
+              aria-label={`Plot ${label} on ${noun}`}
+              onClick={() => onAction({ kind: "toggle", chart, id: row.spec.id })}
+              className="rounded-full px-3 py-1 text-xs font-semibold"
+              style={{
+                backgroundColor: on ? color : "transparent",
+                color: on ? "#09090b" : color,
+                border: `1px solid ${color}`,
+                boxShadow: focus ? `0 0 0 2px #09090b, 0 0 0 4px ${color}` : undefined,
+              }}
+            >
+              {label}
+              {focus ? " · rainbow" : ""}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -923,12 +981,17 @@ function DeltaTip({
 }) {
   if (!active || !payload?.length) return null;
   const spot = payload[0]?.payload?.spot;
+  const rows = [...payload].sort((a, b) => {
+    const left = typeof a.value === "number" && Number.isFinite(a.value) ? a.value : Number.NEGATIVE_INFINITY;
+    const right = typeof b.value === "number" && Number.isFinite(b.value) ? b.value : Number.NEGATIVE_INFINITY;
+    return right - left;
+  });
   return (
     <div className="max-w-sm rounded-md border border-zinc-500 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-100 shadow-lg">
       <div className="tabular-nums text-zinc-50">
         Spot {spot != null ? spot.toFixed(2) : ""} · {unit}
       </div>
-      {payload.map((item) => (
+      {rows.map((item) => (
         <div key={String(item.name)} className="tabular-nums" style={{ color: item.color }}>
           {item.name} {formatValue(typeof item.value === "number" ? item.value : undefined)}
         </div>
