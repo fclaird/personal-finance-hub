@@ -43,7 +43,7 @@ export function ChainGrid({
   }, [assumptions, chain, expiry]);
 
   return (
-    <section className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
+    <section className="box-border min-w-0 max-w-full rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
       <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
         <div>
           <h2 className="text-sm font-semibold text-zinc-50">Chain</h2>
@@ -67,7 +67,7 @@ export function ChainGrid({
           </select>
         </label>
       </div>
-      <div className="max-h-96 overflow-auto rounded-lg border border-zinc-700">
+      <div className="max-h-96 min-w-0 max-w-full overflow-auto rounded-lg border border-zinc-700">
         <table className="w-full min-w-[64rem] border-collapse text-left text-xs">
           <thead className="sticky top-0 z-10 bg-zinc-900 text-zinc-300">
             <tr>

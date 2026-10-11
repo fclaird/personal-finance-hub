@@ -201,9 +201,16 @@ describe("NOW Jan 19 2029 acceptance", () => {
     assert.equal(b.sizing.idleCash, 120);
     assert.equal(c.sizing.packages, 1);
     assert.equal(c.sizing.idleCash, 1530);
-    near(a.sizing.leverage ?? NaN, 1.35, 0.02, "A leverage");
-    near(b.sizing.leverage ?? NaN, 1.46, 0.02, "B leverage");
-    near(c.sizing.leverage ?? NaN, 1.39, 0.02, "C leverage");
+    for (const row of [a, b, c]) {
+      assert.ok(row.greeks);
+      const invested = row.sizing.invested;
+      const byCapital = (row.greeks.delta * row.sizing.packages * chain.spot) / 10_000;
+      const byInvested = (row.greeks.delta * row.sizing.packages * chain.spot) / invested;
+      near(row.sizing.leverage ?? NaN, byInvested, 1e-9, `${row.spec.label} exposure / invested`);
+      assert.ok(invested < 10_000);
+      assert.ok(Math.abs((row.sizing.leverage ?? 0) - byCapital) > 0.01);
+      near(row.sizing.pnlPerPercent ?? NaN, row.greeks.delta * row.sizing.packages * chain.spot * 0.01, 1e-6, `${row.spec.label} 1% move`);
+    }
   });
 
   it("pins solved IVs, package greeks, and expiry dollars", () => {
@@ -281,6 +288,7 @@ describe("NOW Feb 19 2027", () => {
     const lab = editLab(
       createLab(chain),
       [
+        { kind: "setBasis", basis: { kind: "equalCapital", capital: 10_000, units: "whole" } },
         {
           kind: "addStructure",
           label: "A",

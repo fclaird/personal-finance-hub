@@ -12,7 +12,7 @@ import {
   type LabEvaluation,
   type PricedStructure,
 } from "@/lib/strategyLab/lab";
-import { LAB_PALETTE, labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
+import { LAB_PALETTE, labCard, labControl, labLabel, seriesColor } from "@/lib/strategyLab/palette";
 
 function money(n: number | null, mask: boolean): string {
   if (n == null) return "—";
@@ -84,7 +84,7 @@ export function ExpirySummary({
   const capital = evaluation.basis.kind === "equalCapital" ? evaluation.basis.capital : evaluation.spot * 100;
 
   return (
-    <section className={`${labCard} p-4`}>
+    <section className={`${labCard} box-border min-w-0 max-w-full p-4`}>
       <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">At expiry, best strategy by price</h2>
       <p className={`mt-1 ${labLabel}`}>{evaluation.metric}</p>
       <div className="mt-3 space-y-3">
@@ -137,8 +137,14 @@ export function ExpirySummary({
             type="number"
             min={1}
             step={100}
-            value={evaluation.basis.kind === "equalCapital" ? evaluation.basis.capital : capital}
+            readOnly={evaluation.basis.kind === "matchExpensive"}
+            value={
+              evaluation.basis.kind === "equalCapital"
+                ? evaluation.basis.capital
+                : (evaluation.match?.capital ?? capital)
+            }
             onChange={(e) => {
+              if (evaluation.basis.kind === "matchExpensive") return;
               const next = Number(e.target.value);
               if (!Number.isFinite(next) || next <= 0) return;
               const units = evaluation.basis.kind === "equalCapital" ? evaluation.basis.units : "whole";
@@ -177,7 +183,7 @@ export function ExpirySummary({
                       label={row.spec.label}
                       pnl={capitalExpiryPnl(row, whatIfSpot)}
                       winner={zone?.bestId === row.spec.id && !zone.tied}
-                      color={LAB_PALETTE.series[row.spec.slot] ?? LAB_PALETTE.series[0]}
+                      color={seriesColor(row.spec.slot)}
                       mask={masked}
                     />
                   ))}
