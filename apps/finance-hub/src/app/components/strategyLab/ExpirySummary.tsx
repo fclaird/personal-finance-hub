@@ -84,7 +84,7 @@ export function ExpirySummary({
   const capital = evaluation.basis.kind === "equalCapital" ? evaluation.basis.capital : evaluation.spot * 100;
 
   return (
-    <section className={`${labCard} p-4`}>
+    <section className={`${labCard} box-border min-w-0 max-w-full p-4`}>
       <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">At expiry, best strategy by price</h2>
       <p className={`mt-1 ${labLabel}`}>{evaluation.metric}</p>
       <div className="mt-3 space-y-3">

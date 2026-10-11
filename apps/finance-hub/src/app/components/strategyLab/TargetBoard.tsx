@@ -95,7 +95,7 @@ export function TargetSection({
         onLeverageBasis={onLeverageBasis}
         masked={masked}
       />
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid min-w-0 max-w-full gap-4 lg:grid-cols-3 [&>*]:min-w-0 [&>*]:max-w-full">
         {evaluation.structures.map((row) => (
           <StructureCard
             key={row.spec.id}
@@ -143,7 +143,7 @@ function TargetBoard({
   const dates = evaluation.horizons.filter((horizon) => horizon.shared && !horizon.settlement);
   const priced = evaluation.structures.filter((row): row is PricedStructure => row.status === "priced");
   return (
-    <section id="if-target-reached" className={`${labCard} p-4`}>
+    <section id="if-target-reached" className={`${labCard} box-border min-w-0 max-w-full p-4`}>
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">If the target is reached</h2>
@@ -185,7 +185,7 @@ function TargetBoard({
           <HorizonChip key={horizon.id} on={horizonId === horizon.id} onClick={() => onHorizon(horizon.id)} label={horizon.label.split(" · ")[0] ?? horizon.label} />
         ))}
       </div>
-      <div className="mt-3 overflow-x-auto">
+      <div className="mt-3 min-w-0 max-w-full overflow-x-auto">
         <table className="w-full min-w-[46rem] text-left text-sm text-zinc-900 dark:text-zinc-100">
           <thead>
             <tr className="text-[11px] uppercase tracking-wide text-zinc-600 dark:text-zinc-300">

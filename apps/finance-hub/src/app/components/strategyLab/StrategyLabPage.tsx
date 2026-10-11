@@ -302,7 +302,7 @@ export function StrategyLabPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6">
+    <div className="mx-auto box-border flex w-full min-w-0 max-w-6xl flex-col gap-6 overflow-x-clip px-4 py-6 sm:px-6 [&>*]:box-border [&>*]:min-w-0 [&>*]:max-w-full">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Strategy Lab</h1>
@@ -639,7 +639,7 @@ export function StrategyLabPage() {
             onEdit={edit}
           />
 
-          <div id="charts" className="space-y-4">
+          <div id="charts" className="box-border w-full min-w-0 max-w-full space-y-4">
             <ExpirySummary
               evaluation={evaluation}
               masked={privacy.masked}

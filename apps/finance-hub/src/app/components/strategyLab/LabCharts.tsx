@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { formatNum, formatSignedUsd2 } from "@/lib/format";
-import { StrategyPlot, type ChartRow } from "@/app/components/strategyLab/StrategyPlot";
+import { StrategyPlot, type ChartRow, type ChartSize } from "@/app/components/strategyLab/StrategyPlot";
 import {
   applyHorizonPolicy,
   CHART_MODES,
@@ -102,6 +102,7 @@ export function LabCharts({
   const [deltaYMinDraft, setDeltaYMinDraft] = useState<string | null>(null);
   const [deltaYMaxDraft, setDeltaYMaxDraft] = useState<string | null>(null);
   const [linkPlots, setLinkPlots] = useState(true);
+  const [chartSize, setChartSize] = useState<ChartSize>("fit");
   const [deltaIds, setDeltaIds] = useState<readonly string[] | null>(null);
   const hydrated = useRef(false);
   const pnlHomeRef = useRef<ChartView | null>(null);
@@ -358,7 +359,7 @@ export function LabCharts({
   const chartMetric = selection.mode === "structure" ? evaluation.metric : "";
 
   return (
-    <div className="relative left-1/2 w-screen max-w-[100vw] -translate-x-1/2 space-y-3 px-4 sm:px-6" data-chart-mode={selection.mode}>
+    <div className="box-border w-full min-w-0 max-w-full space-y-3" data-chart-mode={selection.mode}>
       <div id="chart-display" role="group" aria-label="Chart display" className="flex flex-wrap gap-1.5">
         {CHART_MODES.map((mode) => (
           <button
@@ -525,7 +526,7 @@ export function LabCharts({
           {quiet.length > 0 ? "That curve stays off the chart until a package fits." : "Select a structure and a date to draw P&L."}
         </p>
       ) : (
-        <div className="space-y-4">
+        <div className="box-border w-full min-w-0 max-w-full space-y-4">
           <StrategyPlot
             title={chartTitle}
             metric={chartMetric}
@@ -542,6 +543,8 @@ export function LabCharts({
             onFocus={(key) => restyle({ ...chrome, focusedCurveKey: key })}
             useLook={useLook}
             role="pnl"
+            chartSize={chartSize}
+            onChartSize={setChartSize}
             header={
               <PlotChips
                 chart="pnl"
@@ -655,6 +658,8 @@ export function LabCharts({
             forceStrikes
             stockName="Stock"
             role="delta"
+            chartSize={chartSize}
+            onChartSize={setChartSize}
           />
         </div>
       )}

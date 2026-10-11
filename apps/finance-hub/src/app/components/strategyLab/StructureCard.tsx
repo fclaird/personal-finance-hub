@@ -202,10 +202,10 @@ export function StructureCard({
   const zebra = isZebra(row);
 
   return (
-    <article className="rounded-xl border-2 bg-white p-4 dark:bg-zinc-950" style={{ borderColor: color }}>
+    <article className="box-border min-w-0 max-w-full rounded-xl border-2 bg-white p-4 dark:bg-zinc-950" style={{ borderColor: color }}>
       <div className="mb-3 h-1.5 rounded-full" style={{ backgroundColor: color }} />
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
+      <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="inline-block h-4 w-4 shrink-0 rounded-sm border border-zinc-950" style={{ backgroundColor: color }} aria-hidden />
           <span className="rounded-full px-2 py-0.5 text-xs font-bold text-zinc-950" style={{ backgroundColor: color }}>
             {spec.label || "Structure"}
@@ -214,12 +214,12 @@ export function StructureCard({
             aria-label={`${spec.label} name`}
             value={spec.label}
             onChange={(e) => onEdit({ kind: "setLabel", id: spec.id, label: e.target.value })}
-            className="w-28 border-2 bg-transparent px-2 py-1 text-sm font-semibold text-zinc-950 dark:text-zinc-50"
+            className="w-28 min-w-0 max-w-full border-2 bg-transparent px-2 py-1 text-sm font-semibold text-zinc-950 dark:text-zinc-50"
             style={{ borderColor: color }}
           />
         </div>
-        <div className="flex shrink-0 items-center gap-3">
-          <label className="inline-flex items-center gap-1.5 text-xs font-semibold" style={{ color }}>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          <label className="inline-flex min-w-0 items-center gap-1.5 text-xs font-semibold" style={{ color }}>
             <input
               type="checkbox"
               checked={plotted}
@@ -260,7 +260,7 @@ export function StructureCard({
       </label>
 
       {spec.legs.map((leg, index) => (
-        <div key={`${spec.id}-${index}`} className="mb-2 flex items-end gap-2">
+        <div key={`${spec.id}-${index}`} className="mb-2 flex min-w-0 flex-wrap items-end gap-2">
           <StrikeSelect
             label={`${leg.ratio > 0 ? "Long" : "Short"} ${Math.abs(leg.ratio)}× ${leg.right === "C" ? "call" : "put"}`}
             ariaLabel={`${spec.label} leg ${index + 1} strike`}

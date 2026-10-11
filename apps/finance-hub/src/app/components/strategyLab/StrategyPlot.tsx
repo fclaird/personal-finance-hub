@@ -8,7 +8,6 @@ import {
   ReferenceArea,
   ReferenceDot,
   ReferenceLine,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -41,7 +40,25 @@ export type ChartRow = { spot: number; stock?: number } & Record<string, number 
 export type PlotYLine = { readonly key: string; readonly y: number; readonly label: string };
 export type PlotXLine = { readonly key: string; readonly x: number; readonly label: string; readonly color?: string };
 
-const CHART_HEIGHT = "h-[75vh] min-h-[42rem]";
+export type ChartSize = "fit" | "large" | "huge";
+
+/** Plot box only. Fit stays inside a laptop viewport; Large and Huge stay capped. */
+export const CHART_SIZE_HEIGHT: Record<ChartSize, string> = {
+  fit: "clamp(420px, 70vh, 900px)",
+  large: "clamp(520px, 85vh, 1100px)",
+  huge: "clamp(640px, 100vh, 1400px)",
+};
+
+const SIZE_LABEL: Record<ChartSize, string> = { fit: "Fit", large: "Large", huge: "Huge" };
+
+export const CHART_ENGAGE_HINT = "Scroll to zoom, drag to pan, Esc or click outside to release";
+
+const CHART_BOX_STYLE = {
+  width: "100%",
+  maxWidth: "100%",
+  minWidth: 0,
+  boxSizing: "border-box" as const,
+};
 
 type PlotDrag = {
   kind: "hand" | "box";
@@ -172,6 +189,8 @@ export function StrategyPlot({
   forceStrikes = false,
   stockName,
   role = "pnl",
+  chartSize = "fit",
+  onChartSize,
 }: {
   title: string;
   metric: string;
@@ -200,6 +219,8 @@ export function StrategyPlot({
   forceStrikes?: boolean;
   stockName?: string;
   role?: "pnl" | "delta";
+  chartSize?: ChartSize;
+  onChartSize?: (size: ChartSize) => void;
 }) {
   const rows = useMemo(
     () => rowsOverride ?? buildChartRows(evaluation, curves, chrome.showStock),
@@ -223,15 +244,32 @@ export function StrategyPlot({
     onViewRef.current = onView;
   }, [shown, frame.limits, onView]);
   const plotRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
   const dragRef = useRef<PlotDrag | null>(null);
   const [tool, setTool] = useState<"hand" | "box">("hand");
   const [dragging, setDragging] = useState(false);
   const [box, setBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [engaged, setEngaged] = useState(false);
+  const [plotPx, setPlotPx] = useState({ width: 0, height: 0 });
   const plotReady = rows.length > 0 && curves.length > 0;
+
+  useLayoutEffect(() => {
+    const node = plotRef.current;
+    if (!node) return;
+    const measure = () => {
+      const width = Math.floor(node.clientWidth);
+      const height = Math.floor(node.clientHeight);
+      setPlotPx((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [plotReady, chartSize]);
 
   useEffect(() => {
     const node = plotRef.current;
-    if (!node) return;
+    if (!node || !engaged) return;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const geometry = plotGeometry(node);
@@ -246,7 +284,28 @@ export function StrategyPlot({
     };
     node.addEventListener("wheel", onWheel, { passive: false });
     return () => node.removeEventListener("wheel", onWheel);
-  }, [plotReady]);
+  }, [plotReady, engaged]);
+
+  useEffect(() => {
+    if (!engaged) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const root = sectionRef.current;
+      if (!root || !(event.target instanceof Node) || root.contains(event.target)) return;
+      setEngaged(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const tag = (event.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      setEngaged(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [engaged]);
 
   const readoutSpot = whatIfSpot ?? evaluation.spot;
   const marked = priced.filter((row) => curves.some((curve) => curve.structureId === row.spec.id));
@@ -282,7 +341,7 @@ export function StrategyPlot({
   };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
+    if (!engaged || event.button !== 0) return;
     const node = plotRef.current;
     const geometry = node ? plotGeometry(node) : null;
     if (!geometry) return;
@@ -340,7 +399,7 @@ export function StrategyPlot({
 
   if (!plotReady) {
     return (
-      <section className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-sm text-zinc-300" data-chart-role={role}>
+      <section className="box-border w-full min-w-0 max-w-full overflow-hidden rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-sm text-zinc-300" style={CHART_BOX_STYLE} data-chart-role={role}>
         {title ? <p className="text-base font-semibold text-zinc-100">{title}</p> : null}
         <p className="mt-2">Nothing to draw until a package fits and a date is on.</p>
       </section>
@@ -348,33 +407,72 @@ export function StrategyPlot({
   }
 
   return (
-    <section className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100" data-chart-layout="single" data-chart-role={role} aria-label={title}>
-      <div className="mb-2 flex flex-wrap items-center gap-1.5" role="toolbar" aria-label="Chart navigation">
+    <section
+      ref={sectionRef}
+      className={`box-border w-full min-w-0 max-w-full overflow-hidden rounded-xl bg-zinc-950 p-3 text-zinc-100 ${
+        engaged ? "border-2 border-cyan-300" : "border border-zinc-600"
+      }`}
+      style={CHART_BOX_STYLE}
+      data-chart-layout="single"
+      data-chart-role={role}
+      data-chart-size={chartSize}
+      data-chart-engaged={engaged ? "true" : "false"}
+      aria-label={title}
+    >
+      <div className="mb-2 flex min-w-0 flex-wrap items-center gap-1.5" role="toolbar" aria-label="Chart navigation">
+        <NavButton label="Interact" pressed={engaged} onClick={() => setEngaged((on) => !on)} />
         <NavButton label="Hand" pressed={tool === "hand"} onClick={() => setTool("hand")} />
         <NavButton label="Box zoom" pressed={tool === "box"} onClick={() => setTool("box")} />
         <NavButton label="Zoom in" onClick={() => zoomBy(1.25)} />
         <NavButton label="Zoom out" onClick={() => zoomBy(0.8)} />
         <NavButton label="Reset view" onClick={() => onView(null)} />
+        {onChartSize ? (
+          <div className="flex gap-1" role="group" aria-label="Chart size">
+            {(Object.keys(SIZE_LABEL) as ChartSize[]).map((size) => (
+              <NavButton key={size} label={SIZE_LABEL[size]} pressed={chartSize === size} onClick={() => onChartSize(size)} />
+            ))}
+          </div>
+        ) : null}
         <span className="text-xs tabular-nums text-zinc-300">
           Visible price {spotText(shown.xMin)}–{spotText(shown.xMax)}
         </span>
       </div>
+      <p className={`mb-2 text-xs ${engaged ? "font-semibold text-cyan-200" : "text-zinc-400"}`} data-chart-hint={engaged ? "active" : "idle"}>
+        {engaged ? CHART_ENGAGE_HINT : "Wheel and touch scroll the page. Click the chart or Interact to zoom."}
+      </p>
       {title ? <p className="mb-1 text-base font-semibold text-zinc-100">{title}</p> : null}
       {metric ? <p className="mb-2 text-sm text-zinc-300">{metric}</p> : null}
       {subtitle ? <p className="mb-2 text-xs text-zinc-300">{subtitle}</p> : null}
       {header ? <div className="mb-2">{header}</div> : null}
       <div
         ref={plotRef}
-        className={`relative ${CHART_HEIGHT} w-full select-none overscroll-contain ${
-          tool === "box" ? "cursor-crosshair" : dragging ? "cursor-grabbing" : "cursor-grab"
+        data-chart-plot=""
+        className={`relative box-border w-full min-w-0 max-w-full overflow-hidden select-none ${
+          !engaged ? "cursor-pointer" : tool === "box" ? "cursor-crosshair" : dragging ? "cursor-grabbing" : "cursor-grab"
         }`}
+        style={{
+          ...CHART_BOX_STYLE,
+          height: CHART_SIZE_HEIGHT[chartSize],
+          touchAction: engaged ? "none" : "auto",
+          overscrollBehavior: engaged ? "contain" : "auto",
+        }}
+        onClick={() => {
+          if (!engaged) setEngaged(true);
+        }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
       >
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={rows as ChartRow[]} margin={{ top: 16, right: 16, left: 8, bottom: 8 }}>
+        {plotPx.width > 0 && plotPx.height > 0 ? (
+          <div className="absolute inset-0 overflow-hidden" style={{ width: plotPx.width, height: plotPx.height, maxWidth: "100%" }}>
+          <ComposedChart
+            data={rows as ChartRow[]}
+            width={plotPx.width}
+            height={plotPx.height}
+            style={{ width: plotPx.width, height: plotPx.height, maxWidth: "100%", boxSizing: "border-box" }}
+            margin={{ top: 16, right: 16, left: 8, bottom: 8 }}
+          >
             <CartesianGrid strokeDasharray="3 3" stroke={LAB_PALETTE.grid} />
             <XAxis
               dataKey="spot"
@@ -499,7 +597,8 @@ export function StrategyPlot({
               />
             ) : null}
           </ComposedChart>
-        </ResponsiveContainer>
+          </div>
+        ) : null}
         {box && box.width > 0 && box.height > 0 ? (
           <div
             className="pointer-events-none absolute z-20 border border-zinc-100 bg-zinc-100/15"
