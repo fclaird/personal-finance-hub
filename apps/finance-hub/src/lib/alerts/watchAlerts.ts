@@ -4,7 +4,7 @@ export type WatchAlertKind = "price" | "iv-spike" | "profit-target";
 
 export type PriceAlertConfig = { direction: "above" | "below"; level: number };
 export type IvSpikeConfig = { minRankPct: number };
-export type ProfitTargetConfig = { targetPnl: number };
+export type ProfitTargetConfig = { targetPnl: number; expiry?: string };
 
 export type WatchAlert = {
   id: string;
@@ -22,6 +22,12 @@ export type WatchQuote = {
 
 export type SymbolPnl = {
   symbol: string;
+  pnl: number | null;
+};
+
+export type SpreadPnl = {
+  symbol: string;
+  expiry: string;
   pnl: number | null;
 };
 
@@ -54,9 +60,11 @@ export function evaluateWatchAlerts(
   alerts: readonly WatchAlert[],
   quotes: readonly WatchQuote[],
   pnls: readonly SymbolPnl[],
+  spreads: readonly SpreadPnl[] = [],
 ): WatchFiring[] {
   const quoteBySymbol = new Map(quotes.map((quote) => [symbolKey(quote.symbol), quote]));
   const pnlBySymbol = new Map(pnls.map((row) => [symbolKey(row.symbol), row.pnl]));
+  const spreadByKey = new Map(spreads.map((row) => [`${symbolKey(row.symbol)}|${row.expiry}`, row.pnl]));
   const firings: WatchFiring[] = [];
   for (const alert of alerts) {
     if (!alert.enabled) continue;
@@ -89,14 +97,16 @@ export function evaluateWatchAlerts(
       });
     }
     if (alert.kind === "profit-target" && isProfit(alert.config)) {
-      const pnl = pnlBySymbol.get(symbol) ?? null;
+      const expiry = alert.config.expiry;
+      const pnl = expiry ? (spreadByKey.get(`${symbol}|${expiry}`) ?? null) : (pnlBySymbol.get(symbol) ?? null);
       if (pnl == null || !(pnl >= alert.config.targetPnl)) continue;
+      const scope = expiry ? `${expiry} spread` : "open";
       firings.push({
         alertId: alert.id,
         symbol,
         severity: "warning",
-        title: `${symbol} open P&L ${pnl.toFixed(2)} reached ${alert.config.targetPnl}`,
-        details: { kind: alert.kind, pnl, targetPnl: alert.config.targetPnl },
+        title: `${symbol} ${scope} P&L ${pnl.toFixed(2)} reached ${alert.config.targetPnl}`,
+        details: { kind: alert.kind, pnl, targetPnl: alert.config.targetPnl, expiry: expiry ?? null },
       });
     }
   }
@@ -110,6 +120,7 @@ export type PnlPosition = {
   averagePrice: number | null;
   marketValue: number | null;
   quote: number | null;
+  expiry?: string | null;
 };
 
 /** Equity P&L uses the live quote. Option P&L uses Schwab average price and position market value. */
@@ -135,4 +146,29 @@ export function pnlByUnderlying(rows: readonly PnlPosition[]): SymbolPnl[] {
     totals.set(symbol, { pnl: prev.pnl + pnl, priced: true });
   }
   return [...totals.entries()].map(([symbol, row]) => ({ symbol, pnl: row.priced ? row.pnl : null }));
+}
+
+/** Option legs that share an underlying and an expiry are one spread. Equity rows are left out. */
+export function pnlBySpread(rows: readonly PnlPosition[]): SpreadPnl[] {
+  const groups = new Map<string, { symbol: string; expiry: string; pnl: number; priced: boolean }>();
+  for (const row of rows) {
+    if (row.securityType !== "option") continue;
+    const symbol = symbolKey(row.underlying);
+    const expiry = (row.expiry ?? "").slice(0, 10);
+    if (!symbol || !/^\d{4}-\d{2}-\d{2}$/.test(expiry)) continue;
+    let pnl: number | null = null;
+    if (row.averagePrice != null && row.marketValue != null) {
+      pnl = row.marketValue - row.averagePrice * row.quantity * 100;
+    }
+    const key = `${symbol}|${expiry}`;
+    const prev = groups.get(key) ?? { symbol, expiry, pnl: 0, priced: false };
+    if (pnl == null) {
+      groups.set(key, prev);
+      continue;
+    }
+    groups.set(key, { symbol, expiry, pnl: prev.pnl + pnl, priced: true });
+  }
+  return [...groups.values()]
+    .map((row) => ({ symbol: row.symbol, expiry: row.expiry, pnl: row.priced ? row.pnl : null }))
+    .sort((a, b) => a.expiry.localeCompare(b.expiry) || a.symbol.localeCompare(b.symbol));
 }

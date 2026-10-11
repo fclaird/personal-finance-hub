@@ -23,6 +23,8 @@ type Move = {
   strike: number;
   moveDollars: number;
   movePct: number;
+  ivMoveDollars: number | null;
+  ivMovePct: number | null;
   source: string;
   delayed: boolean;
   servedFrom: string;
@@ -91,7 +93,7 @@ export default function EventsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Events</h1>
           <p className="mt-1 max-w-3xl text-sm text-zinc-700 dark:text-zinc-300">
-            Upcoming earnings, ex-dividend dates, and FOMC decisions for names you hold and an optional watchlist. Expected move is the nearest-expiry at-the-money straddle. Nothing here places an order.
+            Upcoming earnings, ex-dividend dates, and FOMC decisions for names you hold and an optional watchlist. Expected move is the nearest-expiry at-the-money straddle, with an IV move beside it. Nothing here places an order.
           </p>
         </div>
         <Link href="/earnings" className="text-sm font-medium text-zinc-900 underline-offset-4 hover:underline dark:text-zinc-100">
@@ -212,9 +214,16 @@ export default function EventsPage() {
               <p className="text-base font-semibold">
                 <SymbolLink symbol={move.symbol} />
               </p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums">
+              <p className="mt-1 text-xs font-medium uppercase tracking-wide text-zinc-600 dark:text-zinc-300">Straddle</p>
+              <p className="text-2xl font-semibold tabular-nums">
                 {formatUsd2(move.moveDollars, { mask: masked })}{" "}
                 <span className="text-base font-medium text-zinc-600 dark:text-zinc-300">{(move.movePct * 100).toFixed(1)}%</span>
+              </p>
+              <p className="mt-2 text-sm tabular-nums text-zinc-800 dark:text-zinc-200">
+                IV move{" "}
+                {move.ivMoveDollars == null || move.ivMovePct == null
+                  ? "—"
+                  : `${formatUsd2(move.ivMoveDollars, { mask: masked })} ${(move.ivMovePct * 100).toFixed(1)}%`}
               </p>
               <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
                 {move.source}

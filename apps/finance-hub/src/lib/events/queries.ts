@@ -178,7 +178,8 @@ export function pnlPositions(db: Database.Database, snapshotIds: readonly string
         p.quantity AS quantity,
         p.price AS price,
         p.market_value AS marketValue,
-        p.metadata_json AS metadataJson
+        p.metadata_json AS metadataJson,
+        s.expiration_date AS expiry
       FROM positions p
       JOIN securities s ON s.id = p.security_id
       LEFT JOIN securities us ON us.id = s.underlying_security_id
@@ -194,10 +195,12 @@ export function pnlPositions(db: Database.Database, snapshotIds: readonly string
     price: number | null;
     marketValue: number | null;
     metadataJson: string | null;
+    expiry: string | null;
   }>;
   return rows.flatMap((row) => {
     const underlying = norm(row.underlying ?? "");
     if (!underlying) return [];
+    const expiry = row.expiry ? row.expiry.slice(0, 10) : null;
     return [
       {
         underlying,
@@ -206,6 +209,7 @@ export function pnlPositions(db: Database.Database, snapshotIds: readonly string
         averagePrice: resolvePositionAveragePrice(row.price, row.metadataJson),
         marketValue: row.marketValue,
         quote: quotes.get(underlying) ?? null,
+        expiry: expiry && /^\d{4}-\d{2}-\d{2}$/.test(expiry) ? expiry : null,
       },
     ];
   });

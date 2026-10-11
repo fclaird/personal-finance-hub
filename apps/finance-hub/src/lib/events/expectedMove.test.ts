@@ -48,6 +48,11 @@ describe("expected move from the ATM straddle", () => {
     assert.equal(move.moveDollars, 5);
     assert.equal(move.movePct, 0.05);
     assert.equal(move.atmIv, 0.38);
+    assert.equal(move.days, 5);
+    const ivMove = 100 * 0.38 * Math.sqrt(5 / 365);
+    assert.ok(move.ivMoveDollars != null);
+    assert.ok(Math.abs(move.ivMoveDollars - ivMove) < 1e-9);
+    assert.ok(move.ivMovePct != null && Math.abs(move.ivMovePct - ivMove / 100) < 1e-12);
     assert.equal(move.source, "schwab");
   });
 
@@ -61,6 +66,7 @@ describe("expected move from the ATM straddle", () => {
     );
     assert.equal(move?.expiry, isoDate("2026-11-20"));
     assert.equal(move?.moveDollars, 7.4);
+    assert.equal(move?.ivMoveDollars, null);
   });
 
   it("returns null when no straddle is listed", () => {
