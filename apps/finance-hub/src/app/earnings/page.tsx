@@ -205,7 +205,11 @@ export default function EarningsPage() {
             <EditablePageHeading pageId="earnings" defaultTitle="Earnings opportunities" />
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Rank names with upcoming earnings by <span className="font-medium text-zinc-800 dark:text-zinc-200">IV vs its 52-week range</span>{" "}
+            The{" "}
+            <Link href="/events" className="font-medium underline-offset-4 hover:underline">
+              event calendar
+            </Link>{" "}
+            lists dates and the option-implied expected move. Rank names here by <span className="font-medium text-zinc-800 dark:text-zinc-200">IV vs its 52-week range</span>{" "}
             (elevated = more “event” premium) and{" "}
             <span className="font-medium text-zinc-800 dark:text-zinc-200">typical dollar liquidity</span> (20-day average share volume × close — how tradable the name is vs
             most stocks, not a short-term volume spike). Schwab can supply IV later; Finnhub fills liquidity from daily candles when configured.
