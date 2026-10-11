@@ -11,6 +11,11 @@ export type ChartPoint = { readonly x: number; readonly y: number };
 
 const MIN_SPAN_RATIO = 0.01;
 
+/** Copy the price window and leave the target chart's vertical scale alone. */
+export function sharePriceWindow(source: ChartView, target: ChartView): ChartView {
+  return { xMin: source.xMin, xMax: source.xMax, yMin: target.yMin, yMax: target.yMax };
+}
+
 export function sameView(a: ChartView | null, b: ChartView | null): boolean {
   if (a == null || b == null) return a === b;
   return a.xMin === b.xMin && a.xMax === b.xMax && a.yMin === b.yMin && a.yMax === b.yMax;

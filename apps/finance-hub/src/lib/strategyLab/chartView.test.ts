@@ -7,6 +7,7 @@ import {
   fitView,
   panView,
   resetView,
+  sharePriceWindow,
   ySpanForX,
   zoomAroundCursor,
   type ChartView,
@@ -89,5 +90,11 @@ describe("chart view transforms", () => {
     assert.ok(collapsed.xMax > collapsed.xMin);
     assert.ok(collapsed.yMax > collapsed.yMin);
     assert.ok(collapsed.xMin >= limits.xMin && collapsed.xMax <= limits.xMax);
+  });
+
+  it("shares the price window and keeps the other chart's vertical scale", () => {
+    const source: ChartView = { xMin: 10, xMax: 20, yMin: 100, yMax: 200 };
+    const target: ChartView = { xMin: 1, xMax: 9, yMin: 3, yMax: 4 };
+    assert.deepEqual(sharePriceWindow(source, target), { xMin: 10, xMax: 20, yMin: 3, yMax: 4 });
   });
 });

@@ -164,7 +164,7 @@ export function settledShareDelta(
 
 /** Model share-equivalent delta at an arbitrary spot. IV stays the entry IV. Expired dates use the settled slope. */
 export function packageShareDelta(
-  legs: readonly PricedLeg[],
+  legs: readonly { right: OptionRight; strike: number; ratio: number; iv: number | null }[],
   assumptions: Assumptions,
   spot: number,
   years: number,

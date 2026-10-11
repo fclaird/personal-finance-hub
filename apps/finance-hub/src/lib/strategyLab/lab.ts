@@ -218,6 +218,8 @@ export type StructureEval = PricedStructure | { readonly status: "blocked"; read
 export type LabEvaluation = {
   readonly entryDate: IsoDate;
   readonly spot: number;
+  /** Rate, dividend yield, and IV source. Each leg keeps its solved entry IV across the price axis. */
+  readonly assumptions: Assumptions;
   readonly anchorExpiry: IsoDate | null;
   readonly axis: readonly number[];
   readonly horizons: readonly HorizonView[];
@@ -863,6 +865,7 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
   return {
     entryDate: chain.tradeDate,
     spot: chain.spot,
+    assumptions: lab.assumptions,
     anchorExpiry: anchor,
     axis,
     horizons,
