@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { runWatchAlerts } from "@/lib/alerts/watchAlertStore";
-import { pnlByUnderlying } from "@/lib/alerts/watchAlerts";
+import { pnlBySpread, pnlByUnderlying } from "@/lib/alerts/watchAlerts";
 import { latestIvRank, pnlPositions, watchlistSymbols, heldSymbols } from "@/lib/events/queries";
 import { getDb } from "@/lib/db";
 import { getAlertEvents } from "@/lib/alerts";
@@ -43,10 +43,17 @@ export async function POST(req: Request) {
         }
       }
     }
-    const pnls = pnlByUnderlying(pnlPositions(db, snapshots, marks));
-    const result = runWatchAlerts(db, quotes, pnls);
+    const positions = pnlPositions(db, snapshots, marks);
+    const result = runWatchAlerts(db, quotes, pnlByUnderlying(positions), pnlBySpread(positions));
     const events = getAlertEvents(20).filter((event) => event.rule_type === "watch");
-    return NextResponse.json({ ok: true, created: result.created, firings: result.firings, events, quoteNote });
+    return NextResponse.json({
+      ok: true,
+      created: result.created,
+      firings: result.firings,
+      stored: result.stored,
+      events,
+      quoteNote,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

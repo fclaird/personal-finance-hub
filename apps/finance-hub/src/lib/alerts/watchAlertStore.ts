@@ -6,6 +6,7 @@ import {
   type IvSpikeConfig,
   type PriceAlertConfig,
   type ProfitTargetConfig,
+  type SpreadPnl,
   type SymbolPnl,
   type WatchAlert,
   type WatchAlertKind,
@@ -65,7 +66,8 @@ function parseConfig(kind: WatchAlertKind, raw: unknown): WatchAlert["config"] |
   }
   const targetPnl = typeof record.targetPnl === "number" && Number.isFinite(record.targetPnl) ? record.targetPnl : null;
   if (targetPnl == null) return null;
-  return { targetPnl };
+  const expiry = typeof record.expiry === "string" && /^\d{4}-\d{2}-\d{2}$/.test(record.expiry) ? record.expiry : null;
+  return expiry ? { targetPnl, expiry } : { targetPnl };
 }
 
 export function listWatchAlerts(db: Database.Database): WatchAlert[] {
@@ -148,11 +150,13 @@ export function runWatchAlerts(
   db: Database.Database,
   quotes: readonly WatchQuote[],
   pnls: readonly SymbolPnl[],
-): { created: number; firings: WatchFiring[] } {
+  spreads: readonly SpreadPnl[] = [],
+): { created: number; firings: WatchFiring[]; stored: WatchFiring[] } {
   ensureWatchTables(db);
   ensureWatchRule(db);
-  const firings = evaluateWatchAlerts(listWatchAlerts(db), quotes, pnls);
+  const firings = evaluateWatchAlerts(listWatchAlerts(db), quotes, pnls, spreads);
   let created = 0;
+  const stored: WatchFiring[] = [];
   const insert = db.prepare(
     `
     INSERT INTO alert_events (id, rule_id, occurred_at, severity, title, details_json)
@@ -163,7 +167,8 @@ export function runWatchAlerts(
     if (alreadyFiredToday(db, firing.title)) continue;
     insert.run(newId("alert"), WATCH_RULE_ID, firing.severity, firing.title, JSON.stringify(firing.details));
     emitAlertNotice({ title: firing.title, severity: firing.severity, body: firing.symbol });
+    stored.push(firing);
     created += 1;
   }
-  return { created, firings };
+  return { created, firings, stored };
 }

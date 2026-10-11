@@ -4,7 +4,8 @@ import { describe, it } from "node:test";
 import Database from "better-sqlite3";
 
 import { onAlertNotice } from "@/lib/alerts/notify";
-import { evaluateWatchAlerts, pnlByUnderlying, type WatchAlert } from "@/lib/alerts/watchAlerts";
+import { localNoticeCopy } from "@/lib/alerts/localNotice";
+import { evaluateWatchAlerts, pnlBySpread, pnlByUnderlying, type WatchAlert } from "@/lib/alerts/watchAlerts";
 import { insertWatchAlert, listWatchAlerts, runWatchAlerts } from "@/lib/alerts/watchAlertStore";
 import { assembleMonitorRows } from "@/lib/alerts/watchMonitor";
 
@@ -47,6 +48,33 @@ describe("watch alerts", () => {
     const now = rows.find((row) => row.symbol === "NOW");
     assert.equal(now?.pnl, 10 * 10 + (800 - 500));
     assert.equal(rows.find((row) => row.symbol === "XYZ")?.pnl, null);
+  });
+
+  it("prices a spread from the legs that share an expiry and ignores the rest of the name", () => {
+    const spreads = pnlBySpread([
+      { underlying: "NOW", securityType: "option", quantity: 1, averagePrice: 2, marketValue: 450, quote: null, expiry: "2026-11-20" },
+      { underlying: "NOW", securityType: "option", quantity: -1, averagePrice: 1, marketValue: -80, quote: null, expiry: "2026-11-20" },
+      { underlying: "NOW", securityType: "option", quantity: 1, averagePrice: 4, marketValue: 900, quote: null, expiry: "2027-01-15" },
+      { underlying: "NOW", securityType: "equity", quantity: 10, averagePrice: 100, marketValue: 1200, quote: 110, expiry: null },
+    ]);
+    assert.deepEqual(
+      spreads.map((row) => [row.expiry, row.pnl]),
+      [
+        ["2026-11-20", 450 - 200 + (-80 - -100)],
+        ["2027-01-15", 900 - 400],
+      ],
+    );
+    const titles = evaluateWatchAlerts(
+      [
+        { id: "s1", kind: "profit-target", symbol: "NOW", enabled: true, config: { targetPnl: 200, expiry: "2026-11-20" } },
+        { id: "s2", kind: "profit-target", symbol: "NOW", enabled: true, config: { targetPnl: 200, expiry: "2027-06-18" } },
+      ],
+      [],
+      [{ symbol: "NOW", pnl: 5000 }],
+      spreads,
+    ).map((row) => row.title);
+    assert.deepEqual(titles, ["NOW 2026-11-20 spread P&L 270.00 reached 200"]);
+    assert.equal(localNoticeCopy({ title: titles[0]!, symbol: "NOW" }).body, "NOW · Financial Bridge");
   });
 
   it("stores an alert, writes one in-app event per day, and calls the notice hook", () => {

@@ -77,7 +77,7 @@ export async function GET(req: Request) {
         exDividend: "Local dividend cashflows (ex_date) and saved dividend fundamentals (next_ex_date). Not a live dividend calendar.",
         fomc: "Federal Reserve published FOMC calendar, kept in the app. 2027 dates are tentative.",
         expectedMove:
-          "Nearest listed expiry at-the-money straddle: call mid plus put mid, divided by spot. Schwab chain first, Cboe delayed quotes if Schwab has none.",
+          "Nearest listed expiry at-the-money straddle: call mid plus put mid. The IV move is spot times the average ATM feed IV times the square root of calendar days over 365. Schwab chain first, Cboe delayed quotes if Schwab has none.",
         positions: "Latest holding snapshots for this flavor. An option is flagged when an event date is on or before its expiry.",
       },
       gaps,

@@ -1,4 +1,4 @@
-import type { ContractQuote, OptionChain } from "@/lib/optionChain/chain";
+import { calendarDaysBetween, type ContractQuote, type OptionChain } from "@/lib/optionChain/chain";
 
 /** Dollar and percent move implied by the nearest-expiry at-the-money straddle. */
 export type ExpectedMove = {
@@ -10,8 +10,13 @@ export type ExpectedMove = {
   putMid: number;
   moveDollars: number;
   movePct: number;
+  /** Calendar days from the chain trade date to the straddle expiry. */
+  days: number;
   /** Average of the call and put feed IVs, when the chain printed them. Decimal, not a rank. */
   atmIv: number | null;
+  /** spot × ATM IV × sqrt(days/365). Null when the chain did not print an IV. */
+  ivMoveDollars: number | null;
+  ivMovePct: number | null;
   source: OptionChain["provenance"]["source"];
   servedFrom: OptionChain["provenance"]["servedFrom"];
   delayed: boolean;
@@ -51,6 +56,8 @@ export function expectedMoveFromChain(chain: OptionChain): ExpectedMove | null {
       }
     }
     if (!best) continue;
+    const days = Math.max(0, calendarDaysBetween(chain.tradeDate, expiry.date));
+    const ivMoveDollars = best.iv != null && days > 0 ? chain.spot * best.iv * Math.sqrt(days / 365) : null;
     return {
       symbol: chain.symbol,
       spot: chain.spot,
@@ -60,7 +67,10 @@ export function expectedMoveFromChain(chain: OptionChain): ExpectedMove | null {
       putMid: best.put,
       moveDollars: best.call + best.put,
       movePct: (best.call + best.put) / chain.spot,
+      days,
       atmIv: best.iv,
+      ivMoveDollars,
+      ivMovePct: ivMoveDollars == null ? null : ivMoveDollars / chain.spot,
       source: chain.provenance.source,
       servedFrom: chain.provenance.servedFrom,
       delayed: chain.provenance.delayed,

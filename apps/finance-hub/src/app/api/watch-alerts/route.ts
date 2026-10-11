@@ -27,6 +27,7 @@ export async function POST(req: Request) {
     level?: number;
     minRankPct?: number;
     targetPnl?: number;
+    expiry?: string;
   } | null;
   if (!body) return NextResponse.json({ ok: false, error: "Missing body" }, { status: 400 });
   const db = getDb();
@@ -50,7 +51,10 @@ export async function POST(req: Request) {
         : insertWatchAlert(db, {
             kind: "profit-target",
             symbol: body.symbol,
-            config: { targetPnl: Number(body.targetPnl) } satisfies ProfitTargetConfig,
+            config: {
+              targetPnl: Number(body.targetPnl),
+              ...(typeof body.expiry === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.expiry) ? { expiry: body.expiry } : {}),
+            } satisfies ProfitTargetConfig,
           });
   if (!saved) return NextResponse.json({ ok: false, error: "Check the symbol and the threshold." }, { status: 400 });
   return NextResponse.json({ ok: true, alert: saved, alerts: listWatchAlerts(db) });

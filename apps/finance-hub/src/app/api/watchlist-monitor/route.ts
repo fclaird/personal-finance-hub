@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { assembleMonitorRows } from "@/lib/alerts/watchMonitor";
 import { listWatchAlerts } from "@/lib/alerts/watchAlertStore";
-import { pnlByUnderlying } from "@/lib/alerts/watchAlerts";
+import { pnlBySpread, pnlByUnderlying } from "@/lib/alerts/watchAlerts";
 import { expectedMoveFromChain } from "@/lib/events/expectedMove";
 import { heldSymbols, latestIvRank, pnlPositions, watchlistSymbols } from "@/lib/events/queries";
 import { getDb } from "@/lib/db";
@@ -77,17 +77,20 @@ export async function GET(req: Request) {
       }
     }
     const rows = assembleMonitorRows(symbols, quotes, ranks, atm);
-    const pnls = pnlByUnderlying(pnlPositions(db, snapshots, quoteMarks));
+    const positions = pnlPositions(db, snapshots, quoteMarks);
+    const pnls = pnlByUnderlying(positions);
+    const spreads = pnlBySpread(positions);
     return NextResponse.json({
       ok: true,
       rows,
       pnls,
+      spreads,
       alerts: listWatchAlerts(db),
       sources: {
         quotes: "Schwab /quotes (last, day change, volume). No Yahoo fallback on this board.",
         ivRank: "Stored earnings_opp_metrics.iv_rank_pct (0–100). The Schwab IV enrich route is still a stub.",
         atmIv: "Optional. Average feed IV of the nearest-expiry ATM straddle from the Schwab chain, Cboe if Schwab has none. This is not IV rank.",
-        pnl: "Open positions in the latest snapshots. Equity uses the live quote minus average price. Options use average price and position market value.",
+        pnl: "Open positions in the latest snapshots. Equity uses the live quote minus average price. A spread is the option legs that share an underlying and an expiry, marked from average price and position market value.",
       },
       gaps,
     });

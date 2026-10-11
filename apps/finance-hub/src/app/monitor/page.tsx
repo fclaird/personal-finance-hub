@@ -5,7 +5,10 @@ import { useCallback, useEffect, useState } from "react";
 
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { SymbolLink } from "@/app/components/SymbolLink";
+import { localNoticeCopy } from "@/lib/alerts/localNotice";
+import { formatDisplayDate } from "@/lib/formatDate";
 import { formatInt, formatSignedUsd2, formatUsd2 } from "@/lib/format";
+import { enableBrowserNotices, postBrowserNotice } from "@/app/monitor/browserNotice";
 
 const FRAME =
   "box-border flex w-full min-w-0 max-w-none flex-1 flex-col gap-6 overflow-x-clip py-6 pl-4 pr-5 sm:py-8 sm:pl-6 sm:pr-8 [&>*]:min-w-0 [&>*]:max-w-full";
@@ -28,15 +31,18 @@ type AlertRow = {
   kind: "price" | "iv-spike" | "profit-target";
   symbol: string;
   enabled: boolean;
-  config: { direction?: "above" | "below"; level?: number; minRankPct?: number; targetPnl?: number };
+  config: { direction?: "above" | "below"; level?: number; minRankPct?: number; targetPnl?: number; expiry?: string };
 };
+type SpreadRow = { symbol: string; expiry: string; pnl: number | null };
+type StoredNotice = { title: string; symbol: string };
 type EventRow = { id: string; title: string; severity: string; occurred_at: string; rule_type: string };
-type Board = { ok: boolean; error?: string; rows?: Row[]; gaps?: string[]; sources?: Record<string, string> };
+type Board = { ok: boolean; error?: string; rows?: Row[]; spreads?: SpreadRow[]; gaps?: string[]; sources?: Record<string, string> };
 
 function alertText(alert: AlertRow): string {
   if (alert.kind === "price") return `${alert.config.direction === "below" ? "At or below" : "At or above"} ${alert.config.level}`;
   if (alert.kind === "iv-spike") return `IV rank at least ${alert.config.minRankPct}%`;
-  return `Open P&L at least ${alert.config.targetPnl}`;
+  const when = alert.config.expiry ? `${alert.config.expiry} spread P&L` : "Open P&L";
+  return `${when} at least ${alert.config.targetPnl}`;
 }
 
 export default function MonitorPage() {
@@ -54,6 +60,9 @@ export default function MonitorPage() {
   const [level, setLevel] = useState("");
   const [minRankPct, setMinRankPct] = useState("80");
   const [targetPnl, setTargetPnl] = useState("500");
+  const [expiry, setExpiry] = useState("");
+  const [toasts, setToasts] = useState<StoredNotice[]>([]);
+  const [noticesOn, setNoticesOn] = useState(false);
 
   const loadEvents = useCallback(async () => {
     const resp = await fetch("/api/alerts/events?limit=40", { cache: "no-store" });
@@ -103,7 +112,7 @@ export default function MonitorPage() {
         ? { kind, symbol, direction, level: Number(level) }
         : kind === "iv-spike"
           ? { kind, symbol, minRankPct: Number(minRankPct) }
-          : { kind, symbol, targetPnl: Number(targetPnl) };
+          : { kind, symbol, targetPnl: Number(targetPnl), expiry };
     const resp = await fetch("/api/watch-alerts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -122,12 +131,20 @@ export default function MonitorPage() {
     setError(null);
     const params = watchlistId ? `?watchlistId=${encodeURIComponent(watchlistId)}` : "";
     const resp = await fetch(`/api/watch-alerts/run${params}`, { method: "POST" });
-    const json = (await resp.json()) as { ok: boolean; error?: string; quoteNote?: string | null };
+    const json = (await resp.json()) as { ok: boolean; error?: string; quoteNote?: string | null; stored?: StoredNotice[] };
     if (!json.ok) {
       setError(json.error ?? "Could not run alerts");
       return;
     }
     if (json.quoteNote) setError(json.quoteNote);
+    const fresh = json.stored ?? [];
+    if (fresh.length > 0) {
+      setToasts(fresh);
+      for (const notice of fresh) {
+        const copy = localNoticeCopy(notice);
+        postBrowserNotice(copy.title, copy.body);
+      }
+    }
     await loadEvents();
   }
 
@@ -217,6 +234,30 @@ export default function MonitorPage() {
         </div>
       </section>
 
+      {(board?.spreads ?? []).length > 0 ? (
+        <section className={CARD}>
+          <h2 className="border-b border-zinc-200 px-4 py-3 text-sm font-semibold dark:border-white/10">Open spreads</h2>
+          <ul className="grid gap-2 px-4 py-3 text-sm sm:grid-cols-2">
+            {board?.spreads?.map((spread) => (
+              <li key={`${spread.symbol}-${spread.expiry}`} className="flex items-baseline justify-between gap-3">
+                <button
+                  type="button"
+                  className="text-left font-medium underline-offset-2 hover:underline"
+                  onClick={() => {
+                    setKind("profit-target");
+                    setSymbol(spread.symbol);
+                    setExpiry(spread.expiry);
+                  }}
+                >
+                  {spread.symbol} · {formatDisplayDate(spread.expiry)}
+                </button>
+                <span className="tabular-nums">{formatSignedUsd2(spread.pnl, { mask: masked })}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <div className={CARD_GRID}>
         <section className={`${CARD} px-4 py-3`}>
           <h2 className="text-sm font-semibold">New alert</h2>
@@ -255,10 +296,17 @@ export default function MonitorPage() {
               </label>
             ) : null}
             {kind === "profit-target" ? (
-              <label className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
-                Open P&L at least
-                <input aria-label="Profit target" type="number" value={targetPnl} onChange={(event) => setTargetPnl(event.target.value)} className={FIELD} />
-              </label>
+              <div className="grid gap-3">
+                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
+                  Open P&L at least
+                  <input aria-label="Profit target" type="number" value={targetPnl} onChange={(event) => setTargetPnl(event.target.value)} className={FIELD} />
+                </label>
+                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
+                  Spread expiry
+                  <input aria-label="Spread expiry" type="date" value={expiry} onChange={(event) => setExpiry(event.target.value)} className={FIELD} />
+                </label>
+                <p className="text-xs text-zinc-600 dark:text-zinc-300">Leave the date empty to use the whole name. A date uses only the option legs that expire that day.</p>
+              </div>
             ) : null}
             <button type="button" onClick={() => void addAlert()} className="rounded bg-zinc-950 px-3 py-1.5 text-sm font-semibold text-white dark:bg-zinc-100 dark:text-zinc-950">
               Save alert
@@ -284,14 +332,23 @@ export default function MonitorPage() {
           </ul>
         </section>
         <section className={`${CARD} px-4 py-3`}>
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold">In-app alerts</h2>
-            <button type="button" onClick={() => void runAlerts()} className="rounded-full border border-zinc-400 px-3 py-1 text-xs font-semibold dark:border-zinc-400">
-              Check now
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void enableBrowserNotices().then(setNoticesOn)}
+                className="rounded-full border border-zinc-400 px-3 py-1 text-xs font-semibold dark:border-zinc-400"
+              >
+                {noticesOn ? "Browser notices on" : "Allow browser notices"}
+              </button>
+              <button type="button" onClick={() => void runAlerts()} className="rounded-full border border-zinc-400 px-3 py-1 text-xs font-semibold dark:border-zinc-400">
+                Check now
+              </button>
+            </div>
           </div>
           <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">
-            Check now compares saved lines with Schwab quotes and open P&L, then stores a row for today. There is an in-process notice hook and no email or push channel.
+            Check now stores a row for today and raises a notice in this browser when you allow it. There is no email or phone push.
           </p>
           <ul className="mt-3 space-y-2 text-sm">
             {events.length === 0 ? <li className="text-zinc-600 dark:text-zinc-300">No watch alerts yet.</li> : null}
@@ -309,6 +366,15 @@ export default function MonitorPage() {
           </ul>
         </section>
       </div>
+      {toasts.length > 0 ? (
+        <div className="fixed bottom-4 right-4 z-40 grid w-[min(100%-2rem,22rem)] gap-2">
+          {toasts.map((toast) => (
+            <p key={toast.title} className="rounded-xl border border-amber-300 bg-zinc-950 px-3 py-2 text-sm text-amber-100 shadow-lg">
+              {toast.title}
+            </p>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
