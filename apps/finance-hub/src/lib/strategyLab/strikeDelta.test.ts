@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { isoDate, makeOptionChain, type ChainDraft, type DraftContract } from "@/lib/optionChain/chain";
+import { bsmGreeks } from "@/lib/options/blackScholes";
+import { calendarDaysBetween, isoDate, makeOptionChain, type ChainDraft, type DraftContract } from "@/lib/optionChain/chain";
 import { createLab, editLab, evaluateLab } from "@/lib/strategyLab/lab";
 import {
   deltaHighlights,
@@ -98,7 +99,7 @@ describe("model strike delta", () => {
     assert.ok(call > 0);
   });
 
-  it("reports the zebra net delta and long/short ratio from the same mid model", () => {
+  it("reports the zebra net delta and long/short ratio from the shared model IV", () => {
     const lab = editLab(
       createLab(chain),
       {
@@ -113,7 +114,20 @@ describe("model strike delta", () => {
     const ev = evaluateLab(lab, chain);
     const row = ev.structures.find((item) => item.spec.label === "C");
     assert.ok(row && row.status === "priced" && row.greeks);
-    const summary = structureDeltaSummary(row.legs, (right, strike) => modelStrikeDelta(chain, isoDate(JAN), right, strike, ASSUMPTIONS));
+    const years = calendarDaysBetween(chain.tradeDate, isoDate(JAN)) / 365;
+    const summary = structureDeltaSummary(row.legs, (right, strike) => {
+      const leg = row.legs.find((item) => item.right === right && item.strike === strike);
+      if (!leg?.iv) return null;
+      return bsmGreeks({
+        right,
+        spot: chain.spot,
+        strike,
+        years,
+        rate: ASSUMPTIONS.rate,
+        dividendYield: ASSUMPTIONS.dividendYield,
+        vol: leg.iv,
+      }).delta;
+    });
     assert.ok(summary.net != null && summary.ratio != null);
     assert.ok(Math.abs(summary.net - row.greeks.delta) < 0.05);
     assert.ok(summary.ratio > 2 && summary.ratio < 4);

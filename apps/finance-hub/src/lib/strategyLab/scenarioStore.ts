@@ -1,9 +1,12 @@
 import { isoDate, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
 import { LAB_LIMITS, type Basis, type EntryBasis, type HorizonSpec, type LabScenario, type LegSpec, type SpotWindow, type StructureSpec, type StructureSlot } from "@/lib/strategyLab/lab";
+import { assignLegIds, legEntry, parseStoredLeg, stockFromSidecar } from "@/lib/strategyLab/legs";
+import { MODEL_DIVIDEND_YIELD, MODEL_RATE } from "@/lib/strategyLab/modelAssumptions";
 import type { Assumptions } from "@/lib/strategyLab/internal/pricing";
 import type { StrikeTarget, TemplateRequest } from "@/lib/strategyLab/internal/templates";
 
-export const SCENARIO_STORAGE_KEY = "fh.strategyLab.scenarios.v1";
+export const SCENARIO_STORAGE_KEY_V1 = "fh.strategyLab.scenarios.v1";
+export const SCENARIO_STORAGE_KEY = "fh.strategyLab.scenarios.v2";
 
 export type NamedScenario = {
   readonly name: string;
@@ -70,7 +73,7 @@ function parseTemplate(raw: unknown): TemplateRequest | null {
     return long && short ? { template: raw.template, long, short } : null;
   }
   if (raw.template === "custom") {
-    if (!Array.isArray(raw.legs) || raw.legs.length < 1 || raw.legs.length > 6) return null;
+    if (!Array.isArray(raw.legs) || raw.legs.length < 1 || raw.legs.length > 8) return null;
     const legs: { right: OptionRight; strike: number; ratio: number }[] = [];
     for (const leg of raw.legs) {
       if (!isRecord(leg)) return null;
@@ -115,19 +118,8 @@ function parseEntry(raw: unknown): EntryBasis | null {
   return null;
 }
 
-function parseLeg(raw: unknown): LegSpec | null {
-  if (!isRecord(raw)) return null;
-  const right = parseRight(raw.right);
-  const strike = finite(raw.strike);
-  const ratio = parseRatio(raw.ratio);
-  if (!right || strike == null || !(strike > 0) || ratio == null) return null;
-  let ivOverride: number | null = null;
-  if (raw.ivOverride != null) {
-    const iv = finite(raw.ivOverride);
-    if (iv == null || iv < 0) return null;
-    ivOverride = iv;
-  }
-  return { right, strike, ratio, ivOverride };
+function parseLeg(raw: unknown, expiry: IsoDate, entry: EntryBasis): LegSpec | null {
+  return parseStoredLeg(raw, expiry, legEntry(entry.kind));
 }
 
 function parseStructure(raw: unknown, seenSlots: Set<number>, seenIds: Set<string>): StructureSpec | null {
@@ -143,15 +135,19 @@ function parseStructure(raw: unknown, seenSlots: Set<number>, seenIds: Set<strin
     snappedFrom = dateOf(raw.snappedFrom);
     if (!snappedFrom) return null;
   }
-  if (!Array.isArray(raw.legs) || raw.legs.length > 6) return null;
+  if (!Array.isArray(raw.legs) || raw.legs.length > LAB_LIMITS.legs) return null;
+  const entry = parseEntry(raw.entry);
+  if (!entry) return null;
   const legs: LegSpec[] = [];
   for (const leg of raw.legs) {
-    const parsed = parseLeg(leg);
+    const parsed = parseLeg(leg, expiry, entry);
     if (!parsed) return null;
     legs.push(parsed);
   }
-  const entry = parseEntry(raw.entry);
-  if (!entry) return null;
+  if (!legs.some((leg) => leg.instrument === "stock")) {
+    const stock = stockFromSidecar(raw.stock);
+    if (stock && legs.length < LAB_LIMITS.legs) legs.push(stock);
+  }
   let capitalOverride: number | null = null;
   if (raw.capitalOverride != null) {
     const dollars = finite(raw.capitalOverride);
@@ -177,7 +173,7 @@ function parseStructure(raw: unknown, seenSlots: Set<number>, seenIds: Set<strin
     label: raw.label.trim(),
     expiry,
     snappedFrom,
-    legs,
+    legs: assignLegIds(legs),
     entry,
     capitalOverride,
     slot: slot as StructureSlot,
@@ -192,7 +188,7 @@ function parseAssumptions(raw: unknown): Assumptions | null {
   const dividendYield = finite(raw.dividendYield);
   if (rate == null || dividendYield == null || dividendYield < 0) return null;
   if (raw.ivSource !== "mid" && raw.ivSource !== "feed") return null;
-  return { rate, dividendYield, ivSource: raw.ivSource };
+  return { rate: MODEL_RATE, dividendYield: MODEL_DIVIDEND_YIELD, ivSource: raw.ivSource };
 }
 
 function parseBasis(raw: unknown): Basis | null {
@@ -273,9 +269,9 @@ function parseName(raw: unknown): string | null {
   return name;
 }
 
-/** Drop bad entries. A blob that is not a v1 library becomes an empty list. */
+/** Drop bad entries. A blob that is not a v1 or v2 library becomes an empty list. */
 export function parseLibrary(raw: unknown): NamedScenario[] {
-  if (!isRecord(raw) || raw.v !== 1 || !Array.isArray(raw.scenarios)) return [];
+  if (!isRecord(raw) || (raw.v !== 1 && raw.v !== 2) || !Array.isArray(raw.scenarios)) return [];
   const out: NamedScenario[] = [];
   const seen = new Set<string>();
   for (const item of raw.scenarios) {
@@ -305,21 +301,25 @@ export function upsertScenario(
   return [...without, next];
 }
 
-export function readLibrary(storage: Store): NamedScenario[] {
+function readKey(storage: Store, key: string): NamedScenario[] | null {
+  const text = storage.getItem(key);
+  if (!text) return null;
   try {
-    const text = storage.getItem(SCENARIO_STORAGE_KEY);
-    if (!text) return [];
     return parseLibrary(JSON.parse(text) as unknown);
   } catch {
-    return [];
+    return null;
   }
+}
+
+export function readLibrary(storage: Store): NamedScenario[] {
+  return readKey(storage, SCENARIO_STORAGE_KEY) ?? readKey(storage, SCENARIO_STORAGE_KEY_V1) ?? [];
 }
 
 /** Round-trip every scenario through the parser before it is written. */
 export function writeLibrary(storage: Store, library: readonly NamedScenario[]): void {
   const scenarios = parseLibrary({
-    v: 1,
+    v: 2,
     scenarios: library.map((item) => ({ name: item.name, savedAt: item.savedAt, scenario: item.scenario })),
   });
-  storage.setItem(SCENARIO_STORAGE_KEY, JSON.stringify({ v: 1, scenarios }));
+  storage.setItem(SCENARIO_STORAGE_KEY, JSON.stringify({ v: 2, scenarios }));
 }

@@ -4,6 +4,22 @@ import { describe, it } from "node:test";
 import { bsmGreeks, bsmPrice, impliedVol } from "@/lib/options/blackScholes";
 
 describe("blackScholes", () => {
+  it("puts and calls obey parity at 4% with no dividend", () => {
+    const spot = 140;
+    const strike = 140;
+    const years = 99 / 365;
+    const rate = 0.04;
+    const dividendYield = 0;
+    const vol = 0.3;
+    const call = bsmPrice({ right: "C", spot, strike, years, rate, dividendYield, vol });
+    const put = bsmPrice({ right: "P", spot, strike, years, rate, dividendYield, vol });
+    const parity = spot - strike * Math.exp(-rate * years);
+    assert.ok(Math.abs(call - put - parity) < 1e-8);
+    const callDelta = bsmGreeks({ right: "C", spot, strike, years, rate, dividendYield, vol }).delta;
+    const putDelta = bsmGreeks({ right: "P", spot, strike, years, rate, dividendYield, vol }).delta;
+    assert.ok(Math.abs((callDelta - putDelta) * 100 - 100) < 0.05);
+  });
+
   it("puts and calls obey parity with a dividend yield", () => {
     const spot = 100;
     const strike = 100;

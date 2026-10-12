@@ -15,6 +15,7 @@ import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate,
 import { LAB_LIMITS, TEMPLATE_CATALOG, type HorizonSpec, type LabEdit, type TemplateRequest } from "@/lib/strategyLab/lab";
 import type { SpreadCandidate } from "@/lib/strategyLab/callSpreadOptimizer";
 import { formatModelDelta, nearestDeltaStrike, strikeDeltas } from "@/lib/strategyLab/strikeDelta";
+import { modelAssumptionLabel, underlyingModelIv } from "@/lib/strategyLab/modelAssumptions";
 import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
 import { useStrategyLab } from "@/lib/strategyLab/useStrategyLab";
 
@@ -162,10 +163,6 @@ function ageOf(iso: string): string {
   const min = Math.round(sec / 60);
   if (min < 90) return `${min}m`;
   return `${Math.round(min / 60)}h`;
-}
-
-function yieldText(hint: number): string {
-  return `${(hint * 100).toFixed(2)}%`;
 }
 
 export function StrategyLabPage() {
@@ -414,9 +411,9 @@ export function StrategyLabPage() {
               Rate %
               <input
                 type="number"
-                step="0.01"
-                value={String(Math.round(lab.assumptions.rate * 10000) / 100)}
-                onChange={(e) => edit({ kind: "setAssumptions", patch: { rate: Number(e.target.value) / 100 } })}
+                readOnly
+                value="4"
+                aria-label="Rate percent"
                 className="mt-1 block w-full rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm tabular-nums"
               />
             </label>
@@ -425,18 +422,11 @@ export function StrategyLabPage() {
               <input
                 aria-label="Dividend yield percent"
                 type="number"
-                step="0.01"
-                value={String(Math.round(lab.assumptions.dividendYield * 10000) / 100)}
-                onChange={(e) =>
-                  edit({ kind: "setAssumptions", patch: { dividendYield: Number(e.target.value) / 100 || 0 } })
-                }
+                readOnly
+                value="0"
                 className="mt-1 block w-full rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm tabular-nums"
               />
-              <span className="mt-1 block text-[11px]">
-                {chain.dividendYieldHint == null
-                  ? "No yield on this feed. Typed value is used; blank stays 0."
-                  : `Schwab yield ${yieldText(chain.dividendYieldHint)}. Not applied until you type it.`}
-              </span>
+              <span className="mt-1 block text-[11px] text-zinc-700 dark:text-zinc-300">{modelAssumptionLabel(underlyingModelIv(chain))}</span>
             </label>
             <label className={labLabel}>
               IV source
