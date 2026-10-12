@@ -146,7 +146,7 @@ function TargetBoard({
         <div>
           <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">If the target is reached</h2>
           <p className="mt-1 max-w-3xl text-xs text-zinc-700 dark:text-zinc-300" title={LEVERAGE_NOW_HINT}>
-            Leverage now is today&apos;s model delta times the stock price, divided by the debit. Peak leverage is the highest of that ratio on today&apos;s price curve. Max profit and return on debit divide by the debit you paid. The delta column is a share count.
+            Leverage now is today&apos;s model delta times the stock price, divided by the debit. A credit leaves it blank. Peak leverage uses that same debit. Max profit and the return column divide by the debit, or by the package cost when the trade is a credit. The delta column is a share count.
           </p>
         </div>
         <label className={labLabel}>
@@ -180,7 +180,7 @@ function TargetBoard({
               <th className="py-1 pr-3 font-semibold" title={PEAK_LEVERAGE_HINT}>Peak leverage</th>
               <th className="py-1 pr-3 font-semibold" title={MAX_PROFIT_HINT}>Max profit</th>
               <th className="py-1 pr-3 font-semibold">P&amp;L</th>
-              <th className="py-1 font-semibold" title={RETURN_ON_DEBIT_HINT}>Return on debit</th>
+              <th className="py-1 font-semibold" title={RETURN_ON_DEBIT_HINT}>Return</th>
             </tr>
           </thead>
           <tbody>
