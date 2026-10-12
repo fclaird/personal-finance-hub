@@ -12,14 +12,34 @@ import { ScenarioBar } from "@/app/components/strategyLab/ScenarioBar";
 import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
 import { TargetSection } from "@/app/components/strategyLab/TargetBoard";
 import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
-import { LAB_LIMITS, TEMPLATE_CATALOG, type HorizonSpec, type LabEdit, type TemplateRequest } from "@/lib/strategyLab/lab";
+import { catalogRequest, LAB_LIMITS, TEMPLATE_CATALOG, type HorizonSpec, type LabEdit, type TemplateId } from "@/lib/strategyLab/lab";
 import type { SpreadCandidate } from "@/lib/strategyLab/callSpreadOptimizer";
 import { formatModelDelta, nearestDeltaStrike, strikeDeltas } from "@/lib/strategyLab/strikeDelta";
 import { modelAssumptionLabel, underlyingModelIv } from "@/lib/strategyLab/modelAssumptions";
 import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
 import { useStrategyLab } from "@/lib/strategyLab/useStrategyLab";
 
-type TemplateChoice = "callDebitSpread" | "zebra" | "zebraDelta" | "longCall" | "syntheticLong" | "shortStrangle" | "custom";
+type TemplateChoice = TemplateId | "zebraDelta";
+
+function strikeCount(template: TemplateChoice): number {
+  if (template === "ironCondor") return 4;
+  if (template === "ironButterfly" || template === "callButterfly" || template === "putButterfly") return 3;
+  if (
+    template === "longCall" ||
+    template === "longPut" ||
+    template === "cashSecuredPut" ||
+    template === "syntheticLong" ||
+    template === "syntheticShort" ||
+    template === "longStraddle" ||
+    template === "shortStraddle" ||
+    template === "coveredCall" ||
+    template === "calendar" ||
+    template === "custom"
+  ) {
+    return 1;
+  }
+  return 2;
+}
 
 function HorizonBar({
   horizons,
@@ -169,10 +189,14 @@ export function StrategyLabPage() {
   const privacy = usePrivacy();
   const { chain, lab, evaluation, loading, error, hint, load, edit, replace } = useStrategyLab();
   const [symbol, setSymbol] = useState("NOW");
-  const [template, setTemplate] = useState<TemplateChoice>("callDebitSpread");
+  const [template, setTemplate] = useState<TemplateChoice>("callDebit");
   const [expiryPick, setExpiryPick] = useState<string>("");
+  const [frontPick, setFrontPick] = useState<string>("");
+  const [right, setRight] = useState<OptionRight>("C");
   const [longStrike, setLongStrike] = useState("");
   const [shortStrike, setShortStrike] = useState("");
+  const [thirdStrike, setThirdStrike] = useState("");
+  const [fourthStrike, setFourthStrike] = useState("");
   const [limit, setLimit] = useState("");
   const [capitalDraft, setCapitalDraft] = useState("10000");
   const [targetHorizon, setTargetHorizon] = useState("expiry");
@@ -208,18 +232,46 @@ export function StrategyLabPage() {
   }, [chain, expiry, lab]);
 
   const zebraTargets = template === "zebra" || template === "zebraDelta";
-  const strangle = template === "shortStrangle";
+  const count = strikeCount(template);
+  const putSide =
+    template === "shortStrangle" ||
+    template === "longStrangle" ||
+    template === "riskReversal" ||
+    template === "collar" ||
+    template === "putDebit" ||
+    template === "putCredit" ||
+    template === "ironCondor" ||
+    template === "putButterfly" ||
+    template === "ironButterfly" ||
+    template === "longPut" ||
+    template === "cashSecuredPut";
   const zebraAuto = template === "zebraDelta" && longStrike === "" && shortStrike === "";
   const autoLong = zebraAuto ? nearestDeltaStrike(addBoard, 0.75, "lower") : null;
   const autoShort = zebraAuto ? nearestDeltaStrike(addBoard, 0.5, "higher") : null;
-  const longBoard = strangle ? putBoard : addBoard;
-  const longFallback = strangle
-    ? nearestStrike(putStrikes, (chain?.spot ?? 0) * 0.85)
-    : (autoLong ?? nearestStrike(callStrikes, chain?.spot ?? 0));
+  const longBoard = putSide ? putBoard : addBoard;
+  const secondBoard = template === "ironCondor" || template === "putDebit" || template === "putCredit" || template === "putButterfly" ? putBoard : addBoard;
+  const thirdBoard = template === "putButterfly" ? putBoard : addBoard;
+  const spot = chain?.spot ?? 0;
+  const wingList = template === "putButterfly" ? putStrikes : callStrikes;
+  const longFallback =
+    autoLong ??
+    nearestStrike(
+      putSide ? putStrikes : callStrikes,
+      template === "ironCondor" ? spot * 0.85 : template === "callButterfly" || template === "putButterfly" || template === "ironButterfly" ? spot * 0.9 : spot,
+    );
   const longValue = longStrike || (longFallback != null ? String(longFallback) : "");
-  const shortValue =
-    shortStrike ||
-    (autoShort != null ? String(autoShort) : (nearestStrike(callStrikes, (chain?.spot ?? 0) * 1.2)?.toString() ?? ""));
+  const shortFallback =
+    autoShort ??
+    nearestStrike(
+      template === "ironCondor" || template === "putButterfly" ? putStrikes : callStrikes,
+      template === "ironCondor" ? spot * 0.95 : template === "callButterfly" || template === "putButterfly" || template === "ironButterfly" ? spot : spot * 1.1,
+    );
+  const shortValue = shortStrike || (shortFallback != null ? String(shortFallback) : "");
+  const thirdFallback = nearestStrike(thirdBoard === putBoard ? putStrikes : wingList, template === "ironCondor" ? spot * 1.05 : spot * 1.1);
+  const thirdValue = thirdStrike || (thirdFallback != null ? String(thirdFallback) : "");
+  const fourthFallback = nearestStrike(callStrikes, spot * 1.15);
+  const fourthValue = fourthStrike || (fourthFallback != null ? String(fourthFallback) : "");
+  const frontExpiry = (frontPick || chain?.expiries.find((item) => item.date < expiry)?.date || chain?.expiries[0]?.date || "") as IsoDate | "";
 
   function snapAddTargets(longPct: number, shortPct: number) {
     const long = nearestDeltaStrike(addBoard, longPct / 100, "lower");
@@ -230,47 +282,23 @@ export function StrategyLabPage() {
 
   function addStructure() {
     if (!chain || !expiry) return;
-    const longN = Number(longValue);
-    const shortN = Number(shortValue);
-    let request: TemplateRequest;
-    if (template === "longCall") {
-      request = { template: "longCall", strike: { by: "strike", strike: longN } };
-    } else if (template === "syntheticLong") {
-      request = { template: "syntheticLong", strike: { by: "strike", strike: longN } };
-    } else if (template === "shortStrangle") {
-      request = {
-        template: "shortStrangle",
-        put: { by: "strike", strike: longN },
-        call: { by: "strike", strike: shortN },
-      };
-    } else if (template === "custom") {
-      request = {
-        template: "custom",
-        legs: [
-          { right: "C", strike: longN, ratio: 1 },
-          { right: "C", strike: shortN, ratio: -1 },
-        ],
-      };
-    } else if (template === "zebra" || template === "zebraDelta") {
-      request = {
-        template: "zebra",
-        long: { by: "strike", strike: longN },
-        short: { by: "strike", strike: shortN },
-      };
-    } else {
-      request = {
-        template: "callDebitSpread",
-        long: { by: "strike", strike: longN },
-        short: { by: "strike", strike: shortN },
-      };
-    }
+    const choice = template === "zebraDelta" ? "zebra" : template;
+    const built = catalogRequest({
+      template: choice,
+      expiry: isoDate(expiry),
+      front: frontExpiry ? isoDate(frontExpiry) : null,
+      right,
+      strikes: [Number(longValue), Number(shortValue), Number(thirdValue), Number(fourthValue)],
+      shortStrangleDelta: template === "shortStrangle" && longStrike === "" && shortStrike === "",
+    });
+    if ("error" in built) return;
     const limitN = Number(limit);
-    const zebra = template === "zebra" || template === "zebraDelta";
+    const label = TEMPLATE_CATALOG.find((item) => item.id === choice)?.label;
     edit({
       kind: "addStructure",
       expiry: isoDate(expiry),
-      request,
-      label: zebra ? "ZEBRA" : template === "syntheticLong" ? "Synthetic" : template === "shortStrangle" ? "Strangle" : undefined,
+      request: built,
+      label,
       entry: limit.trim() !== "" && Number.isFinite(limitN) ? { kind: "limit", netPerShare: limitN } : { kind: "mid" },
     });
     setLimit("");
@@ -278,9 +306,13 @@ export function StrategyLabPage() {
 
   const capital = lab?.basis.kind === "equalCapital" ? lab.basis.capital : Number(capitalDraft) || 10_000;
   const needsStrikes = true;
-  const needsShort = template !== "longCall" && template !== "syntheticLong";
+  const needsShort = count >= 2;
+  const needsThird = count >= 3;
+  const needsFourth = count >= 4;
+  const needsFront = template === "calendar" || template === "diagonal";
+  const needsRight = template === "calendar" || template === "diagonal";
   const pickedLong = longBoard.find((row) => String(row.strike) === longValue);
-  const pickedShort = addBoard.find((row) => String(row.strike) === shortValue);
+  const pickedShort = secondBoard.find((row) => String(row.strike) === shortValue);
 
   function addOptimizedSpread(row: SpreadCandidate): boolean {
     if (!lab) return false;
@@ -536,15 +568,56 @@ export function StrategyLabPage() {
                   }}
                   className="mt-1 block rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm"
                 >
-                  {TEMPLATE_CATALOG.filter((item) => item.id !== "zebra").map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.label}
-                    </option>
+                  {["Debit", "Credit", "Volatility", "Stock", "Calendar", "Custom"].map((group) => (
+                    <optgroup key={group} label={group}>
+                      {TEMPLATE_CATALOG.filter((item) => item.group === group && item.id !== "zebra").map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.label}
+                        </option>
+                      ))}
+                      {group === "Debit" ? (
+                        <>
+                          <option value="zebra">ZEBRA strikes</option>
+                          <option value="zebraDelta">ZEBRA 75/50</option>
+                        </>
+                      ) : null}
+                    </optgroup>
                   ))}
-                  <option value="zebra">ZEBRA strikes</option>
-                  <option value="zebraDelta">ZEBRA 75/50</option>
                 </select>
               </label>
+              {needsRight ? (
+                <label className={labLabel}>
+                  Right
+                  <select
+                    aria-label="Calendar right"
+                    value={right}
+                    onChange={(e) => setRight(e.target.value === "P" ? "P" : "C")}
+                    className={`mt-1 block rounded px-2 py-1.5 text-sm ${labControl}`}
+                  >
+                    <option value="C">Call</option>
+                    <option value="P">Put</option>
+                  </select>
+                </label>
+              ) : null}
+              {needsFront ? (
+                <label className={labLabel}>
+                  Front expiry
+                  <select
+                    aria-label="Front expiry"
+                    value={frontExpiry}
+                    onChange={(e) => setFrontPick(e.target.value)}
+                    className={`mt-1 block max-w-56 rounded px-2 py-1.5 text-sm ${labControl}`}
+                  >
+                    {chain.expiries
+                      .filter((item) => item.date < expiry)
+                      .map((item) => (
+                        <option key={item.date} value={item.date}>
+                          {formatExpiryLabel(item.date)}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              ) : null}
               <label className={labLabel}>
                 Expiry
                 <select
@@ -566,8 +639,8 @@ export function StrategyLabPage() {
               </label>
               {needsStrikes ? (
                 <StrikeSelect
-                  label={strangle ? "Put strike" : needsShort ? "Long strike" : "Strike"}
-                  ariaLabel={strangle ? "Put strike" : "Long strike"}
+                  label={count === 1 ? "Strike" : putSide ? "Put strike" : "Long strike"}
+                  ariaLabel="Long strike"
                   rows={longBoard}
                   value={longValue}
                   onChange={(strike) => setLongStrike(String(strike))}
@@ -575,11 +648,29 @@ export function StrategyLabPage() {
               ) : null}
               {needsShort ? (
                 <StrikeSelect
-                  label={strangle ? "Call strike" : "Short strike"}
-                  ariaLabel={strangle ? "Call strike" : "Short strike"}
-                  rows={addBoard}
+                  label={template === "ironCondor" ? "Short put" : "Call strike"}
+                  ariaLabel="Short strike"
+                  rows={secondBoard}
                   value={shortValue}
                   onChange={(strike) => setShortStrike(String(strike))}
+                />
+              ) : null}
+              {needsThird ? (
+                <StrikeSelect
+                  label={template === "ironCondor" ? "Short call" : "Body"}
+                  ariaLabel="Third strike"
+                  rows={thirdBoard}
+                  value={thirdValue}
+                  onChange={(strike) => setThirdStrike(String(strike))}
+                />
+              ) : null}
+              {needsFourth ? (
+                <StrikeSelect
+                  label="Long call"
+                  ariaLabel="Fourth strike"
+                  rows={addBoard}
+                  value={fourthValue}
+                  onChange={(strike) => setFourthStrike(String(strike))}
                 />
               ) : null}
               <label className={labLabel}>
@@ -606,8 +697,8 @@ export function StrategyLabPage() {
             <DeltaMarkChips rows={longBoard} />
             <p className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-300">
               Model delta from the mid, rate, dividend yield, and spot. Approximate.
-              {pickedLong?.delta != null ? ` ${strangle ? "Put" : "Long"} actual Δ ${formatModelDelta(pickedLong.delta)}.` : ""}
-              {needsShort && pickedShort?.delta != null ? ` ${strangle ? "Call" : "Short"} actual Δ ${formatModelDelta(pickedShort.delta)}.` : ""}
+              {pickedLong?.delta != null ? ` ${putSide ? "Put" : "Long"} actual Δ ${formatModelDelta(pickedLong.delta)}.` : ""}
+              {needsShort && pickedShort?.delta != null ? ` Second actual Δ ${formatModelDelta(pickedShort.delta)}.` : ""}
             </p>
             {zebraTargets ? (
               <div className="mt-2 flex flex-wrap items-end gap-2">
