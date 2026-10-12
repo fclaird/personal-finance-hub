@@ -140,6 +140,16 @@ export type LabEdit =
   | { readonly kind: "setIvOverride"; readonly id: string; readonly legIndex: number; readonly iv: number | null }
   | { readonly kind: "setCapitalOverride"; readonly id: string; readonly dollars: number | null }
   | { readonly kind: "addLeg"; readonly id: string; readonly right: OptionRight; readonly strike: number; readonly ratio: number }
+  | { readonly kind: "addBlankLeg"; readonly id: string }
+  | {
+      readonly kind: "setLeg";
+      readonly id: string;
+      readonly legIndex: number;
+      readonly instrument?: "call" | "put" | "stock";
+      readonly side?: "long" | "short";
+      readonly quantity?: number;
+      readonly expiry?: IsoDate;
+    }
   | { readonly kind: "removeLeg"; readonly id: string; readonly legIndex: number }
   | { readonly kind: "setLabel"; readonly id: string; readonly label: string }
   | { readonly kind: "retarget"; readonly id: string };
@@ -425,6 +435,53 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
         };
       });
     }
+    case "addBlankLeg":
+      return mapStructure(lab, edit.id, (spec) => {
+        if (spec.legs.length >= LAB_LIMITS.legs) return spec;
+        const strike = nearestStrike(listedStrikes(chain, spec.expiry, "C"), chain.spot);
+        if (strike == null) return spec;
+        return {
+          ...spec,
+          origin: spec.origin ? { ...spec.origin, tracking: false } : null,
+          resolveError: null,
+          legs: assignLegIds([
+            ...spec.legs,
+            optionLeg({ right: "C", strike, ratio: 1, expiry: spec.expiry, entry: legEntry("mid") }),
+          ]),
+        };
+      });
+    case "setLeg":
+      return mapStructure(lab, edit.id, (spec) => ({
+        ...spec,
+        origin: spec.origin ? { ...spec.origin, tracking: false } : null,
+        legs: spec.legs.map((leg, index) => {
+          if (index !== edit.legIndex) return leg;
+          const instrument = edit.instrument ?? leg.instrument;
+          const side = edit.side ?? leg.side;
+          const quantity = edit.quantity ?? leg.quantity;
+          const sign = side === "short" ? -1 : 1;
+          if (instrument === "stock") {
+            if (!(quantity > 0) || quantity > 1_000_000) return leg;
+            const price = leg.entry.price ?? chain.spot;
+            return { ...stockLeg(sign * quantity, price, leg.id), entry: { kind: "limit", price } };
+          }
+          if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) return leg;
+          const right: OptionRight = instrument === "put" ? "P" : "C";
+          const expiry = edit.expiry ?? leg.expiry ?? spec.expiry;
+          const listed = nearestExpiry(chain, expiry) ?? expiry;
+          const strike = nearestStrike(listedStrikes(chain, listed, right), leg.strike ?? chain.spot);
+          if (strike == null) return leg;
+          return optionLeg({
+            right,
+            strike,
+            ratio: sign * quantity,
+            expiry: listed,
+            ivOverride: leg.ivOverride,
+            entry: leg.instrument === "stock" ? legEntry(spec.entry.kind) : leg.entry,
+            id: leg.id,
+          });
+        }),
+      }));
     case "removeLeg": {
       const spec = lab.structures.find((item) => item.id === edit.id);
       if (!spec || edit.legIndex < 0 || edit.legIndex >= spec.legs.length) return lab;
