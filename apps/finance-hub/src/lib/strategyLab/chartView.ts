@@ -150,13 +150,77 @@ export function profitRegionY(
   return { min, max: max > min ? max : min + 1 };
 }
 
+type SignRun = { readonly min: number; readonly max: number; readonly positive: boolean };
+
+function signRuns(samples: readonly ChartPoint[]): SignRun[] {
+  const ordered = samples
+    .filter((sample) => Number.isFinite(sample.x) && Number.isFinite(sample.y))
+    .slice()
+    .sort((a, b) => a.x - b.x);
+  const runs: { min: number; max: number; positive: boolean }[] = [];
+  for (const sample of ordered) {
+    const positive = sample.y > 0;
+    const last = runs[runs.length - 1];
+    if (!last || last.positive !== positive) runs.push({ min: sample.x, max: sample.x, positive });
+    else last.max = sample.x;
+  }
+  return runs;
+}
+
+/**
+ * Price span for a one-structure payoff.
+ * A short strangle's profit sits between the breakevens, so that is the window.
+ * A long strangle's profit sits outside them. The two wings cover almost the whole axis,
+ * so the window is the wing nearest spot and includes spot, instead of the loss trough.
+ * One-sided payoffs return null and keep the crossover span.
+ */
+export function profitSideSpan(samples: readonly ChartPoint[], spot: number): { min: number; max: number } | null {
+  const runs = signRuns(samples);
+  if (runs.length === 0) return null;
+  const profit = runs.filter((run) => run.positive);
+  const axisLo = runs[0]!.min;
+  const axisHi = runs[runs.length - 1]!.max;
+  const axisSpan = axisHi - axisLo;
+  const outerWings = runs[0]!.positive && runs[runs.length - 1]!.positive && runs.some((run) => !run.positive);
+  if (outerWings && profit.length >= 2) {
+    let nearest = profit[0]!;
+    let best = Infinity;
+    for (const run of profit) {
+      const dist = spot < run.min ? run.min - spot : spot > run.max ? spot - run.max : 0;
+      if (dist < best) {
+        best = dist;
+        nearest = run;
+      }
+    }
+    if (best === 0) return paddedPriceSpan([nearest.min, nearest.max]);
+    const edge = Math.abs(spot - nearest.min) <= Math.abs(spot - nearest.max) ? nearest.min : nearest.max;
+    const reach = Math.max(Math.abs(edge - spot), 1);
+    const into = edge + Math.sign(edge - spot) * reach;
+    return paddedPriceSpan([Math.min(spot, into), Math.max(spot, into)]);
+  }
+  if (profit.length === 1 && axisSpan > 0) {
+    const only = profit[0]!;
+    const interior = only.min > axisLo + axisSpan * 0.02 && only.max < axisHi - axisSpan * 0.02;
+    if (interior) return paddedPriceSpan([only.min, only.max]);
+  }
+  return null;
+}
+
 /** Default chart window: first-to-last profit-side crossover on x, profit region on y. */
 export function profitCrossoverView(
   crossovers: readonly { spot: number; pnl: number }[],
   samples: readonly ChartPoint[],
   limits: ChartView,
+  spot?: number,
 ): ChartView | null {
-  const span = paddedPriceSpan(crossovers.map((crossover) => crossover.spot));
+  const interior = samples.filter((sample) => {
+    const spots = crossovers.map((crossover) => crossover.spot);
+    const lo = Math.min(...spots);
+    const hi = Math.max(...spots);
+    return sample.x > lo && sample.x < hi;
+  });
+  const interiorLoss = interior.length > 0 && interior.filter((sample) => sample.y > 0).length < interior.filter((sample) => sample.y < 0).length;
+  const span = interiorLoss && spot != null ? profitSideSpan(samples, spot) : paddedPriceSpan(crossovers.map((crossover) => crossover.spot));
   if (!span) return null;
   const y = profitRegionY(
     [...samples, ...crossovers.map((crossover) => ({ x: crossover.spot, y: crossover.pnl }))],

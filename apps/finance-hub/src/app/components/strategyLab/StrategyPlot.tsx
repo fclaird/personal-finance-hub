@@ -29,6 +29,7 @@ import {
   clampView,
   paddedPriceSpan,
   panView,
+  profitSideSpan,
   profitRegionY,
   sameView,
   ySpanForX,
@@ -36,6 +37,7 @@ import {
   type ChartPoint,
   type ChartView,
 } from "@/lib/strategyLab/chartView";
+import { comparisonCapital } from "@/lib/strategyLab/deltaCurves";
 import { capitalExpiryPnl, type ExpiryBoard, type ExpiryZone, type LabEvaluation, type PricedStructure } from "@/lib/strategyLab/lab";
 import { LAB_PALETTE, seriesColor } from "@/lib/strategyLab/palette";
 
@@ -197,6 +199,7 @@ export function StrategyPlot({
   role = "pnl",
   chartSize = "fit",
   onChartSize,
+  stockBasis = "capital",
 }: {
   title: string;
   metric: string;
@@ -230,14 +233,16 @@ export function StrategyPlot({
   role?: "pnl" | "delta";
   chartSize?: ChartSize;
   onChartSize?: (size: ChartSize) => void;
+  /** Session-only. Capital is the sized stock line. Hundred is 100 shares, the synthetic scale. */
+  stockBasis?: "capital" | "hundred";
 }) {
   const rows = useMemo(
-    () => rowsOverride ?? buildChartRows(evaluation, curves, chrome.showStock),
-    [rowsOverride, evaluation, curves, chrome.showStock],
+    () => rowsOverride ?? buildChartRows(evaluation, curves, chrome.showStock, stockBasis),
+    [rowsOverride, evaluation, curves, chrome.showStock, stockBasis],
   );
   const frame = useMemo(
-    () => chartFrame(rows, curves, evaluation.spotWindow, chrome.yAxis, profitCrossovers, role === "pnl" ? "profit" : "data"),
-    [rows, curves, evaluation.spotWindow, chrome.yAxis, profitCrossovers, role],
+    () => chartFrame(rows, curves, evaluation.spotWindow, chrome.yAxis, profitCrossovers, role === "pnl" ? "profit" : "data", evaluation.spot),
+    [rows, curves, evaluation.spotWindow, chrome.yAxis, profitCrossovers, role, evaluation.spot],
   );
   useEffect(() => {
     onHome(frame.home, frame.limits);
@@ -683,7 +688,12 @@ export function StrategyPlot({
   );
 }
 
-function buildChartRows(evaluation: LabEvaluation, curves: readonly CurveView[], showStock: boolean): ChartRow[] {
+function buildChartRows(
+  evaluation: LabEvaluation,
+  curves: readonly CurveView[],
+  showStock: boolean,
+  stockBasis: "capital" | "hundred",
+): ChartRow[] {
   const priced = evaluation.structures.filter(isPlottableStructure);
   const spots = evaluation.axis.length > 0 ? evaluation.axis : (priced[0]?.curves[0]?.points.map((point) => point.spot) ?? []);
   const stockId = showStock ? stockHorizonId(evaluation, curves) : null;
@@ -699,10 +709,18 @@ function buildChartRows(evaluation: LabEvaluation, curves: readonly CurveView[],
     }
     if (stock) {
       const pnl = samplePnl(stock.points, spot);
-      if (pnl != null) row.stock = pnl;
+      if (pnl != null) row.stock = stockBasis === "hundred" ? hundredSharePnl(pnl, evaluation) : pnl;
     }
     return row;
   });
+}
+
+function hundredSharePnl(capitalPnl: number, evaluation: LabEvaluation): number {
+  if (!(evaluation.spot > 0)) return capitalPnl;
+  const capital = comparisonCapital(evaluation);
+  const held = capital / evaluation.spot;
+  if (!(held > 0)) return capitalPnl;
+  return capitalPnl * (100 / held);
 }
 
 function chartFrame(
@@ -712,6 +730,7 @@ function chartFrame(
   yAxis: ChartChrome["yAxis"],
   profit: readonly ProfitCrossover[],
   yMode: "profit" | "data",
+  spot: number,
 ): { limits: ChartView; home: ChartView } {
   const xs = rows.map((row) => row.spot);
   let xMin = xs.length > 0 ? Math.min(...xs) : spotWindow.min;
@@ -732,7 +751,26 @@ function chartFrame(
     samples.map((sample) => sample.y),
     0.08,
   );
-  const profitX = profit.length > 0 ? paddedPriceSpan(profit.map((crossover) => crossover.spot)) : null;
+  const structureIds = new Set(curves.map((curve) => curve.structureId));
+  let wing: { min: number; max: number } | null = null;
+  if (yMode === "profit" && structureIds.size === 1) {
+    let magnitude = -1;
+    for (const curve of curves) {
+      const samples: ChartPoint[] = [];
+      for (const row of rows) {
+        const value = row[curve.key];
+        if (typeof value === "number") samples.push({ x: row.spot, y: value });
+      }
+      const span = profitSideSpan(samples, spot);
+      if (!span) continue;
+      const swing = samples.reduce((max, sample) => Math.max(max, Math.abs(sample.y)), 0);
+      if (swing > magnitude) {
+        magnitude = swing;
+        wing = span;
+      }
+    }
+  }
+  const profitX = wing ?? (profit.length > 0 ? paddedPriceSpan(profit.map((crossover) => crossover.spot)) : null);
   const homeX = profitX ?? { min: spotWindow.min, max: Math.max(spotWindow.max, spotWindow.min + 1e-6) };
   const profitY =
     yMode === "profit" && profitX

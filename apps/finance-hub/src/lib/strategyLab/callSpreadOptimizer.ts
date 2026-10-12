@@ -9,6 +9,7 @@ import {
   type OptionChain,
 } from "@/lib/optionChain/chain";
 import { packageExpiryDelta } from "@/lib/strategyLab/deltaCurves";
+import { packageShareDelta } from "@/lib/strategyLab/internal/pricing";
 import { MODEL_DIVIDEND_YIELD, MODEL_RATE, underlyingModelIv } from "@/lib/strategyLab/modelAssumptions";
 
 export type DurationId = "3m" | "6m" | "leaps" | "custom";
@@ -147,9 +148,13 @@ export function spreadShareDelta(
   iv: number,
 ): number {
   if (!(years > 1e-8)) return packageExpiryDelta(CALL_LEGS(longStrike, shortStrike), spot);
-  const long = contractDelta(longStrike, spot, years, iv);
-  const short = contractDelta(shortStrike, spot, years, iv);
-  return (long - short) * 100;
+  const delta = packageShareDelta(
+    CALL_LEGS(longStrike, shortStrike).map((leg) => ({ ...leg, iv })),
+    { rate: MODEL_RATE, dividendYield: MODEL_DIVIDEND_YIELD, ivSource: "mid" },
+    spot,
+    years,
+  );
+  return delta ?? 0;
 }
 
 export const READOUT_MOVES = [-0.2, -0.1, -0.05, 0, 0.05, 0.1, 0.2] as const;
@@ -305,10 +310,6 @@ function expiryPackageValue(longStrike: number, shortStrike: number, spot: numbe
 
 function modelPrice(strike: number, spot: number, years: number, iv: number): number {
   return bsmGreeks(greeksInput(strike, spot, years, iv)).price;
-}
-
-function contractDelta(strike: number, spot: number, years: number, iv: number): number {
-  return bsmGreeks(greeksInput(strike, spot, years, iv)).delta;
 }
 
 function greeksInput(strike: number, spot: number, years: number, iv: number) {

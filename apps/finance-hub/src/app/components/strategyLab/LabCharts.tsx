@@ -105,6 +105,7 @@ export function LabCharts({
   const [deltaYMaxDraft, setDeltaYMaxDraft] = useState<string | null>(null);
   const [linkPlots, setLinkPlots] = useState(true);
   const [chartSize, setChartSize] = useState<ChartSize>("fit");
+  const [hundredShareStock, setHundredShareStock] = useState(false);
   const [deltaIds, setDeltaIds] = useState<readonly string[] | null>(null);
   const hydrated = useRef(false);
   const pnlHomeRef = useRef<ChartView | null>(null);
@@ -431,6 +432,7 @@ export function LabCharts({
           }}
           label="Stock"
         />
+        <Toggle on={hundredShareStock} onClick={() => setHundredShareStock((on) => !on)} label="100 shares" />
         <label className={labLabel}>
           Min spot
           <input
@@ -573,6 +575,7 @@ export function LabCharts({
             role="pnl"
             chartSize={chartSize}
             onChartSize={setChartSize}
+            stockBasis={hundredShareStock ? "hundred" : "capital"}
             header={
               <PlotChips
                 chart="pnl"

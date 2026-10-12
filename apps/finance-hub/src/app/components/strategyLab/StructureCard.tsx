@@ -19,7 +19,7 @@ import {
   formatLeverage,
   formatMaxProfitMultiple,
   formatPeakLeverage,
-  shortCallStrike,
+  targetStrike,
   type TargetRead,
   type TileMetrics,
 } from "@/lib/strategyLab/targetMetrics";
@@ -383,7 +383,7 @@ export function StructureCard({
           <Stat headline label="Max profit" hint={MAX_PROFIT_HINT} value={formatMaxProfitMultiple(metrics)} />
           <Stat
             headline
-            label="Return on debit at target"
+            label={metrics?.returnBasis === "risk" ? "Return on risk at target" : "Return on debit at target"}
             hint={RETURN_ON_DEBIT_HINT}
             value={formatLeverage(metrics?.returnOnDebit ?? null)}
           />
@@ -444,8 +444,8 @@ export function StructureCard({
             value={masked ? "XXXXX" : row.risk.slopeAbove === 0 ? "Flat" : `${row.risk.slopeAbove > 0 ? "+" : ""}$${row.risk.slopeAbove}`}
           />
         </div>
-        {row.status === "priced" && shortCallStrike(row.legs) == null && target == null ? (
-          <p className="mt-3 text-sm text-zinc-700 dark:text-zinc-300">Set a target price. This structure has no short call.</p>
+        {row.status === "priced" && targetStrike(row.legs) == null && target == null ? (
+          <p className="mt-3 text-sm text-zinc-700 dark:text-zinc-300">Set a target price. This structure has no single short strike.</p>
         ) : null}
         </>
       )}
