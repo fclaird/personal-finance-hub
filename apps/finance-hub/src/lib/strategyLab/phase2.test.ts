@@ -127,8 +127,10 @@ describe("phase 2 templates", () => {
     assert.equal(strangle.sizing.status, "sized");
     if (synthetic.sizing.status === "sized") assert.equal(synthetic.sizing.packages, 5);
     if (strangle.sizing.status === "sized") {
-      assert.equal(strangle.sizing.packages, 4);
-      assert.equal(strangle.sizing.idleCash, 0);
+      assert.equal(strangle.putProxy, 12_000);
+      assert.equal(strangle.packageCost, 14_500);
+      assert.equal(strangle.sizing.packages, 0);
+      assert.equal(strangle.sizing.idleCash, 10_000);
     }
     assert.equal(editLab(lab, { kind: "setCapitalOverride", id: lab.structures[1]!.id, dollars: -10 }, chain).structures[1]!.capitalOverride, null);
   });
@@ -276,7 +278,7 @@ describe("phase 2 csv", () => {
     assert.ok(syntheticLine?.includes(`1C 140 / -1P 140,mid,${synthetic.debit},`));
     assert.match(syntheticLine ?? "", /unbounded/);
     assert.ok(synthetic.sizing.status === "sized" && synthetic.sizing.packages > 0);
-    assert.match(strangleLine ?? "", /,unbounded,.*,4,0,/);
+    assert.match(strangleLine ?? "", /,unbounded,540,0,10000,/);
     assert.ok(strangleLine?.endsWith(",2500"));
   });
 });
