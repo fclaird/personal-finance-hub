@@ -6,6 +6,8 @@ import {
   type OptionChain,
   type OptionRight,
 } from "@/lib/optionChain/chain";
+import type { Leg } from "@/lib/strategyLab/legs";
+import { MODEL_DIVIDEND_YIELD, MODEL_RATE } from "@/lib/strategyLab/modelAssumptions";
 
 export type Assumptions = {
   readonly rate: number;
@@ -14,18 +16,26 @@ export type Assumptions = {
 };
 
 export type PricedLeg = {
-  readonly right: OptionRight;
-  readonly strike: number;
+  readonly id: string;
+  readonly instrument: Leg["instrument"];
+  readonly side: Leg["side"];
+  readonly quantity: number;
+  readonly expiry: IsoDate | null;
+  readonly right: OptionRight | null;
+  readonly strike: number | null;
   readonly ratio: number;
   readonly bid: number | null;
   readonly ask: number | null;
   readonly mid: number | null;
+  /** Vol used for greeks and pre-expiry marks. Shared model IV, unless the leg pinned an override. */
   readonly iv: number | null;
+  /** Solved from this leg's own mid. Display only. */
+  readonly quoteIv: number | null;
   readonly feedIv: number | null;
-  readonly ivFrom: "override" | "mid" | "feed" | null;
+  readonly ivFrom: "override" | "model" | "quote" | "feed" | null;
 };
 
-type LegIn = { readonly right: OptionRight; readonly strike: number; readonly ratio: number; readonly ivOverride: number | null };
+type LegIn = Leg;
 
 function intrinsic(right: OptionRight, strike: number, spot: number): number {
   return right === "C" ? Math.max(spot - strike, 0) : Math.max(strike - spot, 0);
@@ -37,38 +47,63 @@ function yearsBetween(chain: OptionChain, expiry: IsoDate): number {
 
 export function priceLegs(
   chain: OptionChain,
-  expiry: IsoDate,
   legs: readonly LegIn[],
   assumptions: Assumptions,
+  modelIv: number | null,
 ): { readonly legs: PricedLeg[]; readonly ivFallback: boolean } | { readonly error: string } {
-  const years = yearsBetween(chain, expiry);
   const out: PricedLeg[] = [];
   let ivFallback = false;
   for (const leg of legs) {
-    const quote = findQuote(chain, expiry, leg.right, leg.strike);
+    if (leg.instrument === "stock") {
+      out.push({
+        id: leg.id,
+        instrument: "stock",
+        side: leg.side,
+        quantity: leg.quantity,
+        expiry: null,
+        right: null,
+        strike: null,
+        ratio: leg.ratio,
+        bid: null,
+        ask: null,
+        mid: leg.entry.price,
+        iv: null,
+        quoteIv: null,
+        feedIv: null,
+        ivFrom: null,
+      });
+      continue;
+    }
+    if (leg.right == null || leg.strike == null || leg.expiry == null) return { error: "An option leg needs a right, strike, and expiry." };
+    const years = yearsBetween(chain, leg.expiry);
+    const quote = findQuote(chain, leg.expiry, leg.right, leg.strike);
     if (!quote) return { error: `No quote for the ${leg.strike} ${leg.right}.` };
     const fromMid = (): number | null => {
       if (quote.mid == null || !(years > 1e-8)) return null;
       const solved = impliedVol({
-        right: leg.right,
+        right: leg.right!,
         spot: chain.spot,
-        strike: leg.strike,
+        strike: leg.strike!,
         years,
-        rate: assumptions.rate,
-        dividendYield: assumptions.dividendYield,
+        rate: MODEL_RATE,
+        dividendYield: MODEL_DIVIDEND_YIELD,
         price: quote.mid,
       });
       return solved.ok ? solved.vol : null;
     };
+    const quoteIv = fromMid();
     const fromFeed = () => quote.feedIv;
     let iv: number | null = null;
     let ivFrom: PricedLeg["ivFrom"] = null;
     if (leg.ivOverride != null && leg.ivOverride > 0) {
       iv = leg.ivOverride;
       ivFrom = "override";
+    } else if (modelIv != null && modelIv > 0) {
+      iv = modelIv;
+      ivFrom = "model";
     } else if (assumptions.ivSource === "mid") {
-      iv = fromMid();
-      ivFrom = iv != null ? "mid" : null;
+      iv = quoteIv;
+      ivFrom = iv != null ? "quote" : null;
       if (iv == null && fromFeed() != null) {
         iv = fromFeed();
         ivFrom = "feed";
@@ -78,14 +113,19 @@ export function priceLegs(
       iv = fromFeed();
       ivFrom = iv != null ? "feed" : null;
       if (iv == null) {
-        iv = fromMid();
+        iv = quoteIv;
         if (iv != null) {
-          ivFrom = "mid";
+          ivFrom = "quote";
           ivFallback = true;
         }
       }
     }
     out.push({
+      id: leg.id,
+      instrument: leg.instrument,
+      side: leg.side,
+      quantity: leg.quantity,
+      expiry: leg.expiry,
       right: leg.right,
       strike: leg.strike,
       ratio: leg.ratio,
@@ -93,6 +133,7 @@ export function priceLegs(
       ask: quote.ask,
       mid: quote.mid,
       iv,
+      quoteIv,
       feedIv: quote.feedIv,
       ivFrom,
     });
@@ -102,10 +143,23 @@ export function priceLegs(
 
 export function netFromLegs(legs: readonly PricedLeg[], pick: "mid" | "natural"): number | null {
   let sum = 0;
+  let any = false;
   for (const leg of legs) {
+    if (leg.instrument === "stock") continue;
     const px = pick === "mid" ? leg.mid : leg.ratio > 0 ? leg.ask : leg.bid;
     if (px == null) return null;
     sum += px * leg.ratio;
+    any = true;
+  }
+  return any ? sum : null;
+}
+
+/** Signed stock dollars at the leg's average price. Options are not included. */
+export function stockEntryDollars(legs: readonly Leg[]): number {
+  let sum = 0;
+  for (const leg of legs) {
+    if (leg.instrument !== "stock" || leg.entry.price == null) continue;
+    sum += leg.ratio * leg.entry.price;
   }
   return sum;
 }
@@ -114,14 +168,18 @@ export function entryDollars(netPerShare: number): number {
   return Math.round(netPerShare * 100);
 }
 
-export function packageGreeks(chain: OptionChain, expiry: IsoDate, legs: readonly PricedLeg[], assumptions: Assumptions) {
-  const years = yearsBetween(chain, expiry);
+export function packageGreeks(chain: OptionChain, legs: readonly PricedLeg[], assumptions: Assumptions) {
   let delta = 0;
   let gamma = 0;
   let theta = 0;
   let vega = 0;
   for (const leg of legs) {
-    if (leg.iv == null) return null;
+    if (leg.instrument === "stock") {
+      delta += leg.ratio;
+      continue;
+    }
+    if (leg.iv == null || leg.right == null || leg.strike == null || leg.expiry == null) return null;
+    const years = yearsBetween(chain, leg.expiry);
     const g = bsmGreeks({
       right: leg.right,
       spot: chain.spot,
@@ -139,14 +197,28 @@ export function packageGreeks(chain: OptionChain, expiry: IsoDate, legs: readonl
   return { delta, gamma, theta, vega };
 }
 
-/** Intrinsic package value in dollars, before subtracting the debit. */
-export function expiryValue(legs: readonly { right: OptionRight; strike: number; ratio: number }[], spot: number): number {
+type ValueLeg = {
+  readonly right?: OptionRight | null;
+  readonly strike?: number | null;
+  readonly ratio: number;
+  readonly instrument?: Leg["instrument"];
+};
+
+/** Intrinsic package value in dollars, before subtracting the debit. Stock is marked at spot. */
+export function expiryValue(legs: readonly ValueLeg[], spot: number): number {
   let sum = 0;
-  for (const leg of legs) sum += intrinsic(leg.right, leg.strike, spot) * leg.ratio * 100;
+  for (const leg of legs) {
+    if (leg.instrument === "stock") {
+      sum += leg.ratio * spot;
+      continue;
+    }
+    if (leg.right == null || leg.strike == null) continue;
+    sum += intrinsic(leg.right, leg.strike, spot) * leg.ratio * 100;
+  }
   return sum;
 }
 
-export function expiryPnl(legs: readonly { right: OptionRight; strike: number; ratio: number }[], debit: number, spot: number): number {
+export function expiryPnl(legs: readonly ValueLeg[], debit: number, spot: number): number {
   return expiryValue(legs, spot) - debit;
 }
 
@@ -155,16 +227,13 @@ export function expiryPnl(legs: readonly { right: OptionRight; strike: number; r
  * Starting on a strike counts the region just through it: a call spread is flat above
  * its short strike, and a ZEBRA is long 100 shares once that short call is reached.
  */
-export function settledShareDelta(
-  legs: readonly { right: OptionRight; strike: number; ratio: number }[],
-  spot: number,
-): number {
+export function settledShareDelta(legs: readonly ValueLeg[], spot: number): number {
   return expiryValue(legs, spot + 1) - expiryValue(legs, spot);
 }
 
 /** Model share-equivalent delta at an arbitrary spot. IV stays the entry IV. Expired dates use the settled slope. */
 export function packageShareDelta(
-  legs: readonly { right: OptionRight; strike: number; ratio: number; iv: number | null }[],
+  legs: readonly (ValueLeg & { readonly iv?: number | null })[],
   assumptions: Assumptions,
   spot: number,
   years: number,
@@ -172,7 +241,11 @@ export function packageShareDelta(
   if (!(years > 1e-8)) return settledShareDelta(legs, spot);
   let delta = 0;
   for (const leg of legs) {
-    if (leg.iv == null) return null;
+    if (leg.instrument === "stock") {
+      delta += leg.ratio;
+      continue;
+    }
+    if (leg.iv == null || leg.right == null || leg.strike == null) return null;
     delta +=
       bsmGreeks({
         right: leg.right,
@@ -199,12 +272,8 @@ export type ExpiryRisk = {
   readonly extrinsic: number;
 };
 
-export function expiryRisk(
-  legs: readonly { right: OptionRight; strike: number; ratio: number }[],
-  debit: number,
-  spot: number,
-): ExpiryRisk {
-  const strikes = [...new Set(legs.map((l) => l.strike))].sort((a, b) => a - b);
+export function expiryRisk(legs: readonly ValueLeg[], debit: number, spot: number): ExpiryRisk {
+  const strikes = [...new Set(legs.map((l) => l.strike).filter((strike): strike is number => strike != null))].sort((a, b) => a - b);
   const knots = [0, ...strikes];
   const pnlAt = (s: number) => expiryPnl(legs, debit, s);
   const pnls = knots.map(pnlAt);
@@ -247,15 +316,21 @@ export function markAt(
   spot: number,
   date: IsoDate,
 ): number | null {
-  const settled = calendarDaysBetween(date, expiry) <= 0;
   let sum = 0;
   for (const leg of legs) {
+    if (leg.instrument === "stock") {
+      sum += leg.ratio * spot;
+      continue;
+    }
+    if (leg.right == null || leg.strike == null) return null;
+    const legExpiry = leg.expiry ?? expiry;
+    const settled = calendarDaysBetween(date, legExpiry) <= 0;
     if (settled) {
       sum += intrinsic(leg.right, leg.strike, spot) * leg.ratio * 100;
       continue;
     }
     if (leg.iv == null) return null;
-    const years = calendarDaysBetween(date, expiry) / 365;
+    const years = calendarDaysBetween(date, legExpiry) / 365;
     const px = bsmPrice({
       right: leg.right,
       spot,

@@ -19,12 +19,15 @@ import {
   netFromLegs,
   packageGreeks,
   priceLegs,
+  stockEntryDollars,
   type Assumptions,
   type ExpiryRisk,
   type PricedLeg,
 } from "@/lib/strategyLab/internal/pricing";
 
 export type { Assumptions };
+import { assignLegIds, legEntry, optionLeg, parityPackageDebit, syntheticShape, type Leg } from "@/lib/strategyLab/legs";
+import { MODEL_DIVIDEND_YIELD, MODEL_RATE, underlyingModelIv } from "@/lib/strategyLab/modelAssumptions";
 import { resolveTemplate, TEMPLATE_CATALOG, type TemplateRequest } from "@/lib/strategyLab/internal/templates";
 import {
   basisMetric,
@@ -58,19 +61,14 @@ export {
 } from "@/lib/strategyLab/strikeDelta";
 export type { TemplateRequest };
 
-export const LAB_LIMITS = { structures: 12, horizons: 24, legs: 6 } as const;
+export const LAB_LIMITS = { structures: 12, horizons: 24, legs: 8 } as const;
 export type StructureSlot = number;
 
 export const DEFAULT_RATE = 0.04;
 
 export type EntryBasis = { readonly kind: "mid" } | { readonly kind: "natural" } | { readonly kind: "limit"; readonly netPerShare: number };
 
-export type LegSpec = {
-  readonly right: OptionRight;
-  readonly strike: number;
-  readonly ratio: number;
-  readonly ivOverride: number | null;
-};
+export type LegSpec = Leg;
 
 export type StructureSpec = {
   readonly id: string;
@@ -206,6 +204,10 @@ export type PricedStructure = {
   readonly naturalPerShare: number | null;
   readonly usedPerShare: number;
   readonly debit: number;
+  /** Quoted option net, before a synthetic is restated at parity. */
+  readonly quotedDebit: number;
+  /** Parity debit when the structure is a synthetic. Null otherwise. */
+  readonly parityDebit: number | null;
   readonly risk: ExpiryRisk;
   readonly greeks: { readonly delta: number; readonly gamma: number; readonly theta: number; readonly vega: number } | null;
   readonly sizing: Sizing;
@@ -245,7 +247,7 @@ const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 export function createLab(chain: OptionChain): LabScenario {
   return {
     symbol: chain.symbol,
-    assumptions: { rate: DEFAULT_RATE, dividendYield: 0, ivSource: "mid" },
+    assumptions: { rate: MODEL_RATE, dividendYield: MODEL_DIVIDEND_YIELD, ivSource: "mid" },
     basis: { kind: "matchExpensive" },
     horizons: [{ kind: "quartersToAnchor" }],
     structures: [],
@@ -269,7 +271,7 @@ function withLegs(chain: OptionChain, lab: LabScenario, spec: StructureSpec, req
   return {
     ...spec,
     expiry,
-    legs: resolved.legs.map((leg) => ({ ...leg, ivOverride: null })),
+    legs: assignLegIds(resolved.legs.map((leg) => optionLeg({ right: leg.right, strike: leg.strike, ratio: leg.ratio, expiry, entry: legEntry(spec.entry.kind) }))),
     origin: { request, tracking },
     resolveError: null,
   };
@@ -278,7 +280,15 @@ function withLegs(chain: OptionChain, lab: LabScenario, spec: StructureSpec, req
 function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScenario {
   switch (edit.kind) {
     case "setAssumptions":
-      return { ...lab, assumptions: { ...lab.assumptions, ...edit.patch } };
+      return {
+        ...lab,
+        assumptions: {
+          ...lab.assumptions,
+          ...edit.patch,
+          rate: MODEL_RATE,
+          dividendYield: MODEL_DIVIDEND_YIELD,
+        },
+      };
     case "setBasis":
       return { ...lab, basis: edit.basis };
     case "setHorizons":
@@ -335,8 +345,9 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
           expiry: listed,
           snappedFrom,
           legs: spec.legs.map((leg) => {
+            if (leg.right == null || leg.strike == null) return leg;
             const snapped = nearestStrike(listedStrikes(chain, listed, leg.right), leg.strike);
-            return snapped == null ? leg : { ...leg, strike: snapped };
+            return snapped == null ? { ...leg, expiry: listed } : { ...leg, strike: snapped, expiry: listed };
           }),
         };
       });
@@ -346,7 +357,8 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
         origin: spec.origin ? { ...spec.origin, tracking: false } : null,
         legs: spec.legs.map((leg, i) => {
           if (i !== edit.legIndex) return leg;
-          const snapped = nearestStrike(listedStrikes(chain, spec.expiry, leg.right), edit.strike);
+          if (leg.right == null || leg.expiry == null) return leg;
+          const snapped = nearestStrike(listedStrikes(chain, leg.expiry, leg.right), edit.strike);
           return snapped == null ? leg : { ...leg, strike: snapped };
         }),
       }));
@@ -356,14 +368,19 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
         origin: spec.origin ? { ...spec.origin, tracking: false } : null,
         legs: spec.legs.map((leg, i) => {
           if (i !== edit.legIndex) return leg;
-          const strikes = listedStrikes(chain, spec.expiry, leg.right);
-          const idx = strikes.findIndex((s) => Math.round(s * 1000) === Math.round(leg.strike * 1000));
+          if (leg.right == null || leg.strike == null || leg.expiry == null) return leg;
+          const strikes = listedStrikes(chain, leg.expiry, leg.right);
+          const idx = strikes.findIndex((s) => Math.round(s * 1000) === Math.round(leg.strike! * 1000));
           const next = strikes[idx + edit.steps];
           return next == null ? leg : { ...leg, strike: next };
         }),
       }));
     case "setEntry":
-      return mapStructure(lab, edit.id, (spec) => ({ ...spec, entry: edit.entry }));
+      return mapStructure(lab, edit.id, (spec) => ({
+        ...spec,
+        entry: edit.entry,
+        legs: spec.legs.map((leg) => (leg.instrument === "stock" ? leg : { ...leg, entry: legEntry(edit.entry.kind) })),
+      }));
     case "setIvOverride":
       return mapStructure(lab, edit.id, (spec) => ({
         ...spec,
@@ -384,7 +401,16 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
           ...spec,
           origin: spec.origin ? { ...spec.origin, tracking: false } : null,
           resolveError: null,
-          legs: [...spec.legs, { right: edit.right, strike: snapped, ratio: edit.ratio, ivOverride: null }],
+          legs: assignLegIds([
+            ...spec.legs,
+            optionLeg({
+              right: edit.right,
+              strike: snapped,
+              ratio: edit.ratio,
+              expiry: spec.expiry,
+              entry: legEntry(spec.entry.kind),
+            }),
+          ]),
         };
       });
     }
@@ -618,7 +644,14 @@ function attachCurves(
         const settled = calendarDaysBetween(h.date, structure.spec.expiry) <= 0;
         if (!settled && structure.legs.some((leg) => leg.iv == null)) return null;
         const points = axis.map((spot) => {
-          const value = markAt(chain, structure.spec.expiry, structure.legs, lab.assumptions, spot, h.date);
+          const value = markAt(
+            chain,
+            structure.spec.expiry,
+            structure.legs,
+            { rate: MODEL_RATE, dividendYield: MODEL_DIVIDEND_YIELD, ivSource: lab.assumptions.ivSource },
+            spot,
+            h.date,
+          );
           const per = (value ?? 0) - structure.debit;
           return { spot, pnl: per * packages };
         });
@@ -690,6 +723,7 @@ function sizeOf(
   spot: number,
   matched: MatchedBasis | null,
   debit: number,
+  sizeOnDebit = false,
 ): Sizing {
   if (basis.kind === "matchExpensive") {
     const cost = packageOutlay(debit, maxLoss, override);
@@ -697,7 +731,7 @@ function sizeOf(
     const packages = matched.capital / cost;
     return { status: "sized", packages, invested: matched.capital, idleCash: 0, ...exposureStats(packages, matched.capital, delta, spot) };
   }
-  const capitalPer = override ?? (typeof maxLoss === "number" ? maxLoss : null);
+  const capitalPer = override ?? (sizeOnDebit ? debit : typeof maxLoss === "number" ? maxLoss : null);
   if (basis.kind === "perPackage") {
     const invested = capitalPer ?? 0;
     return { status: "perPackage", packages: 1, invested, idleCash: 0, ...exposureStats(1, invested, delta, spot) };
@@ -744,7 +778,8 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
       issues.push({ severity: "block", structureId: spec.id, code: "unresolved", message: spec.resolveError ?? "No legs." });
       continue;
     }
-    const quoted = priceLegs(chain, spec.expiry, spec.legs, lab.assumptions);
+    const modelAssumptions = { rate: MODEL_RATE, dividendYield: MODEL_DIVIDEND_YIELD, ivSource: lab.assumptions.ivSource };
+    const quoted = priceLegs(chain, spec.legs, modelAssumptions, underlyingModelIv(chain));
     if ("error" in quoted) {
       blocked.push({ status: "blocked", spec, reason: quoted.error });
       issues.push({ severity: "block", structureId: spec.id, code: "no-quote", message: quoted.error });
@@ -775,11 +810,20 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
       issues.push({ severity: "block", structureId: spec.id, code: "no-entry", message: "No entry price." });
       continue;
     }
-    const debit = entryDollars(usedPerShare);
+    const quotedDebit = entryDollars(usedPerShare) + Math.round(stockEntryDollars(spec.legs));
+    const shape = syntheticShape(spec.legs);
+    const call = spec.legs.find((leg) => leg.instrument === "call");
+    const years =
+      call?.expiry == null ? 0 : calendarDaysBetween(chain.tradeDate, call.expiry) / 365;
+    const parityDebit =
+      shape && call?.strike != null && spec.entry.kind !== "limit"
+        ? parityPackageDebit(chain.spot, call.strike, years, call.quantity, shape)
+        : null;
+    const debit = parityDebit ?? quotedDebit;
     const risk = expiryRisk(quoted.legs, debit, chain.spot);
-    const greeks = packageGreeks(chain, spec.expiry, quoted.legs, lab.assumptions);
+    const greeks = packageGreeks(chain, quoted.legs, modelAssumptions);
     for (const b of risk.breakevens) axisExtras.push(b);
-    for (const leg of quoted.legs) axisExtras.push(leg.strike);
+    for (const leg of quoted.legs) if (leg.strike != null) axisExtras.push(leg.strike);
     const days = calendarDaysBetween(chain.tradeDate, spec.expiry);
     priced.push({
       status: "priced",
@@ -791,6 +835,8 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
       naturalPerShare,
       usedPerShare,
       debit,
+      quotedDebit,
+      parityDebit,
       risk,
       greeks,
       sizing: { status: "needsCapitalOverride" },
@@ -800,7 +846,16 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
 
   const match = matchedBasis(lab.basis, priced);
   const sized = priced.map((row) => {
-    const sizing = sizeOf(lab.basis, row.risk.maxLoss, row.spec.capitalOverride, row.greeks?.delta ?? null, chain.spot, match, row.debit);
+    const sizing = sizeOf(
+      lab.basis,
+      row.risk.maxLoss,
+      row.spec.capitalOverride,
+      row.greeks?.delta ?? null,
+      chain.spot,
+      match,
+      row.debit,
+      syntheticShape(row.spec.legs) === "long" && row.debit > 0,
+    );
     if (sizing.status === "needsCapitalOverride") {
       issues.push({
         severity: "warn",
@@ -825,7 +880,10 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
   const whole = Math.round(createdRatio);
   if (whole >= 2 && Math.abs(createdRatio - whole) / whole < 0.04) {
     const missing = lab.structures.some((s) =>
-      s.legs.some((leg) => !listedStrikes(chain, s.expiry, leg.right).some((k) => Math.round(k * 1000) === Math.round(leg.strike * 1000))),
+      s.legs.some((leg) => {
+        if (leg.right == null || leg.strike == null) return false;
+        return !listedStrikes(chain, leg.expiry ?? s.expiry, leg.right).some((k) => Math.round(k * 1000) === Math.round(leg.strike! * 1000));
+      }),
     );
     if (missing) {
       issues.push({
@@ -894,7 +952,7 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
 function zoneSeriesOf(row: PricedStructure): ZoneSeries | null {
   if (row.sizing.status === "needsCapitalOverride" || !(row.sizing.packages > 0)) return null;
   const packages = row.sizing.packages;
-  const strikes = [...new Set(row.legs.map((leg) => leg.strike))].sort((a, b) => a - b);
+  const strikes = [...new Set(row.legs.map((leg) => leg.strike).filter((strike): strike is number => strike != null))].sort((a, b) => a - b);
   const last = strikes[strikes.length - 1] ?? 0;
   const slope =
     last > 0 ? (expiryPnl(row.legs, row.debit, last + 1) - expiryPnl(row.legs, row.debit, last)) * packages : 0;
