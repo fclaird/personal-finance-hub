@@ -411,6 +411,7 @@ export default function DiversificationPage() {
           },
           chart: {
             title: chartTitle,
+            span: "full",
             bodyClassName: "p-4",
             children: (
           <div className="flex min-w-0 flex-col gap-3">

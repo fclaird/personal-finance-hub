@@ -507,6 +507,7 @@ export function DividendsWorkspace() {
           },
           workspace: {
             title: "Overview & holdings",
+            span: "full",
             visible: hasSchwabSnapshots,
             bodyClassName: "p-6 sm:p-7",
             children: (
@@ -656,6 +657,7 @@ export function DividendsWorkspace() {
           },
           "live-chart": {
             title: "Live forward chart",
+            span: "full",
             bodyClassName: "p-6 sm:p-7",
             children: (
               <>

@@ -1,6 +1,6 @@
 "use client";
 
-import { PAGE_FRAME } from "@/app/components/pageFrame";
+import { PAGE_FRAME, TILE_STACK } from "@/app/components/pageFrame";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
@@ -808,10 +808,12 @@ export default function AllocationPage() {
 
       <DraggableTileLayout
         storageKey="fh.allocation.tiles.v1"
+        className={TILE_STACK}
         defaultOrder={["exposure-table", "weighting", "asset-class", "by-account"]}
         tiles={{
           "exposure-table": {
             title: "Exposure by underlying",
+            span: "full",
             children: (
               <>
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
@@ -875,6 +877,7 @@ export default function AllocationPage() {
           },
           weighting: {
             title: "Weighting (pie & bars)",
+            span: "full",
             bodyClassName: "p-4 sm:p-6",
             children: (
               <>

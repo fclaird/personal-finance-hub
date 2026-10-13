@@ -1,6 +1,6 @@
 "use client";
 
-import { CARD_GRID, PAGE_FRAME } from "@/app/components/pageFrame";
+import { CARD_GRID, PAGE_FRAME, TILE_STACK } from "@/app/components/pageFrame";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Line, LineChart, ResponsiveContainer } from "recharts";
@@ -1114,6 +1114,7 @@ export default function TerminalPage() {
 
       <DraggableTileLayout
         storageKey="fh.terminal.tiles.v1"
+        className={TILE_STACK}
         defaultOrder={["quick-glance", "futures", "watchlist"]}
         tiles={{
           "quick-glance": {
@@ -1182,6 +1183,7 @@ export default function TerminalPage() {
             children: (
         <DraggableTileLayout
           storageKey="fh.terminal.watchlist.tiles.v1"
+          className={TILE_STACK}
           hint={null}
           defaultOrder={["watchlist-controls", "heatmap", "treemap", "news", "quotes-table", "market-sidebar"]}
           tiles={{
@@ -1300,6 +1302,7 @@ export default function TerminalPage() {
             },
             "quotes-table": {
               title: "Quotes",
+              span: "full",
               bodyClassName: "p-0",
               children: (
             <div className="min-w-0 overflow-x-auto">

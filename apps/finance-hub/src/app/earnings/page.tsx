@@ -286,6 +286,7 @@ export default function EarningsPage() {
           },
           ranked: {
             title: "Ranked upcoming",
+            span: "full",
             children: (
               <>
         <p className="text-sm text-zinc-600 dark:text-zinc-400">

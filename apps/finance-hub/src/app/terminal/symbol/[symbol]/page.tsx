@@ -495,6 +495,7 @@ export default function TerminalSymbolPage() {
         tiles={{
           overview: {
             title: "Quote & research",
+            span: "full",
             children: (
               <>
         <div className="grid min-w-0 gap-4 lg:grid-cols-3">

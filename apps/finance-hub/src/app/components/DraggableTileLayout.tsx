@@ -19,7 +19,7 @@ export type DraggableTileDef = {
 };
 
 const TILE_SHELL =
-  "min-w-0 overflow-hidden rounded-2xl border border-zinc-300 bg-white shadow-sm dark:border-white/20 dark:bg-zinc-950";
+  "min-w-0 max-w-full overflow-hidden rounded-2xl border border-zinc-300 bg-white shadow-sm dark:border-white/20 dark:bg-zinc-950";
 const TILE_HEADER = "flex select-none items-stretch";
 const TILE_HEADER_EXPANDED = "border-b border-zinc-200 dark:border-white/10";
 const DRAG_HANDLE =
@@ -28,8 +28,10 @@ const TITLE_BTN =
   "flex min-w-0 flex-1 items-center gap-2 px-1 py-2.5 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-100/80 dark:text-zinc-200 dark:hover:bg-white/5";
 
 /**
- * Page tiles in a wrapping grid. Drag the ⠿ handle to reorder; click the title to collapse/expand.
- * Order and collapse state persist in localStorage. A tile with span "full" takes the whole row.
+ * Draggable panels. The default grid keeps each panel at least 420px wide and wraps the rest
+ * onto the next row. Pass TILE_STACK when this layout is a page section that already has its
+ * own panels inside — auto-fit must not wrap those inner sections. A tile with span "full"
+ * takes the whole row. Drag the ⠿ handle to reorder; click the title to collapse.
  */
 export function DraggableTileLayout({
   storageKey,
@@ -131,7 +133,9 @@ export function DraggableTileLayout({
               )}
             </div>
             {!collapsed ? (
-              <div className={tile.bodyClassName ?? "p-4 sm:p-6"}>{tile.children}</div>
+              <div className={`min-w-0 max-w-full overflow-x-auto ${tile.bodyClassName ?? "p-4 sm:p-6"} [&_table]:w-full [&_table]:min-w-max`}>
+                {tile.children}
+              </div>
             ) : null}
           </div>
         );

@@ -354,6 +354,7 @@ export default function PosterityPage() {
           },
           diversification: {
             title: "Diversification (Posterity)",
+            span: "full",
             children: (
               <>
         <p className="text-sm text-zinc-600 dark:text-zinc-400">Same views as Diversification, scoped to this account.</p>
@@ -427,6 +428,7 @@ export default function PosterityPage() {
           },
           positions: {
             title: "Positions (Posterity)",
+            span: "full",
             children: (
               <>
         <p className="text-sm text-zinc-600 dark:text-zinc-400">Latest snapshot for the selected posterity account.</p>

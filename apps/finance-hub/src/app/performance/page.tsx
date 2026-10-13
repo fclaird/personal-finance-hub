@@ -535,6 +535,7 @@ export default function PerformancePage() {
           },
           chart: {
             title: view === "internal" ? "Internal performance" : "Relative performance",
+            span: "full",
             children: view === "internal" ? (
               <InternalPerformancePanel
                 loading={internalLoading}

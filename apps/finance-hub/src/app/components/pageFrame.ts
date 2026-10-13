@@ -5,9 +5,16 @@
 export const PAGE_FRAME =
   "box-border flex w-full min-w-0 max-w-none flex-1 flex-col gap-6 overflow-x-clip py-6 pl-4 pr-5 sm:py-8 sm:pl-6 sm:pr-8 [&>*]:min-w-0 [&>*]:max-w-full";
 
-/** Page tiles. Two across from about 1280, then more as the window grows. */
+/**
+ * Draggable page panels. Each panel stays at least 420px and takes a share of the row.
+ * A fixed minimum (not min(100%, …)) is what makes extra panels wrap instead of shrinking
+ * until the page clips them. A layout nested inside one of these panels must use TILE_STACK.
+ */
 export const TILE_GRID =
-  "grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,26rem),1fr))] items-start gap-6 [&>*]:min-w-0";
+  "grid w-full min-w-0 grid-cols-[repeat(auto-fit,minmax(420px,1fr))] items-start gap-6 [&>*]:min-w-0 [&>*]:max-w-full";
+
+/** Major page sections stacked at the full window width. Use this outside a nested panel grid. */
+export const TILE_STACK = "flex w-full min-w-0 flex-col gap-6";
 
 /** Structure tiles and similar cards. */
 export const CARD_GRID =
