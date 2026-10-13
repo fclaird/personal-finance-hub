@@ -10,11 +10,40 @@ import {
 import type { Leg } from "@/lib/strategyLab/legs";
 import { MODEL_DIVIDEND_YIELD, MODEL_RATE } from "@/lib/strategyLab/modelAssumptions";
 
+/** Vol points are additive (5 → IV + 0.05). Percent is of that leg's own IV (10 → IV × 1.10). */
+export type VolShift = {
+  readonly mode: "points" | "pct";
+  readonly amount: number;
+};
+
+export const NO_VOL_SHIFT: VolShift = { mode: "points", amount: 0 };
+
 export type Assumptions = {
   readonly rate: number;
   readonly dividendYield: number;
   readonly ivSource: "mid" | "feed";
+  readonly volShift?: VolShift;
 };
+
+export function volShiftActive(shift: VolShift | null | undefined): boolean {
+  return shift != null && Number.isFinite(shift.amount) && shift.amount !== 0;
+}
+
+/** Decimal IV after the assumption. Non-positive results stay a hair above zero so the pricer still runs. */
+export function applyVolShift(iv: number, shift: VolShift | null | undefined): number {
+  if (!volShiftActive(shift) || shift == null) return iv;
+  const next = shift.mode === "pct" ? iv * (1 + shift.amount / 100) : iv + shift.amount / 100;
+  return next > 1e-6 ? next : 1e-6;
+}
+
+export function describeVolShift(shift: VolShift | null | undefined): string | null {
+  if (!volShiftActive(shift) || shift == null) return null;
+  const magnitude = Number.isInteger(shift.amount) ? String(Math.abs(shift.amount)) : String(Math.round(Math.abs(shift.amount) * 100) / 100);
+  const sign = shift.amount > 0 ? "+" : "-";
+  if (shift.mode === "pct") return `IV shift applied · ${sign}${magnitude}% of IV`;
+  const plural = Math.abs(shift.amount) === 1 ? "" : "s";
+  return `IV shift applied · ${sign}${magnitude} vol point${plural}`;
+}
 
 export type PricedLeg = {
   readonly id: string;
@@ -386,6 +415,7 @@ export function markAt(
     }
     if (leg.iv == null) return null;
     const years = calendarDaysBetween(date, legExpiry) / 365;
+    const future = calendarDaysBetween(chain.tradeDate, date) > 0;
     const px = bsmPrice({
       right: leg.right,
       spot,
@@ -393,7 +423,7 @@ export function markAt(
       years,
       rate: assumptions.rate,
       dividendYield: assumptions.dividendYield,
-      vol: leg.iv,
+      vol: future ? applyVolShift(leg.iv, assumptions.volShift) : leg.iv,
     });
     sum += px * leg.ratio * 100;
   }

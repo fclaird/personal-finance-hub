@@ -24,6 +24,7 @@ Base: `https://127.0.0.1:3000` (or Electron `3049`). When `FINANCE_HUB_API_KEY` 
 | `/api/health` | Liveness |
 | `/api/real-estate` | Owned-property values, loan, equity, and the Main-flavor net-worth strip |
 | `/api/strategy-lab/chain` | Full option chain for Strategy Lab (`?symbol=&refresh=1`). Schwab, then Cboe delayed. Read only |
+| `/api/strategy-lab/snapshots` | List saved lab snapshots for a symbol (`?symbol=`). One row (`?id=`) includes the scenario, compact quotes, and provenance. The id is stable so a future journal entry can cite it. Local SQLite only. Not on the MCP allowlist |
 
 Other `GET /api/*` pages (terminal, dividends, earnings, taxonomy, …) are also read-only.
 
@@ -47,6 +48,8 @@ These change **local** data or pull **reads** from Schwab. They do **not** place
 | `DELETE /api/real-estate/loan-payments` | Delete one logged payment by id |
 | `POST /api/real-estate/loan-balances` | Save a mortgage statement balance |
 | `POST /api/real-estate/refresh` | Download the FHFA house-price index and rebuild official values |
+| `POST /api/strategy-lab/snapshots` | Save a Strategy Lab scenario after the localStorage parser accepts it, plus compact quotes and provenance. Local SQLite only. Not on the MCP allowlist |
+| `DELETE /api/strategy-lab/snapshots?id=` | Delete one snapshot by its stable id |
 
 `POST /api/real-estate/valuations` accepts one reading or a batch. Auth matches other hub routes: open on localhost, or `Authorization: Bearer <FINANCE_HUB_API_KEY>` / `x-finance-hub-key` when that key is set. No flavor cookie is required (the route defaults to Main). A `fh_flavor` cookie of `rorie` or `peyton` returns 404. These POSTs are local SQLite writes. They are not on the read-only MCP allowlist.
 

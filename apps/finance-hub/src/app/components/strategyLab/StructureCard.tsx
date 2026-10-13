@@ -209,6 +209,13 @@ export function StructureCard({
           </label>
           <button
             type="button"
+            onClick={() => onEdit({ kind: "duplicateStructure", id: spec.id })}
+            className="text-xs font-medium text-zinc-700 dark:text-zinc-200"
+          >
+            Copy
+          </button>
+          <button
+            type="button"
             onClick={() => onEdit({ kind: "removeStructure", id: spec.id })}
             className="text-xs font-medium text-zinc-600 hover:text-rose-500 dark:text-zinc-300"
           >
