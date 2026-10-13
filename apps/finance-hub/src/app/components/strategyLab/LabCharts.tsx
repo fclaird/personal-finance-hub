@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { formatNum, formatSignedUsd2 } from "@/lib/format";
+import { peakReadout } from "@/lib/strategyLab/chartLabels";
 import { seriesReactKey, structureDisplayNames } from "@/lib/strategyLab/displayNames";
 import { StrategyPlot, type ChartRow, type ChartSize } from "@/app/components/strategyLab/StrategyPlot";
 import {
@@ -338,15 +339,18 @@ export function LabCharts({
       if (!prev || peak.value > prev.value) byId.set(curve.structureId, { x: peak.spot, value: peak.value, color: curve.color });
     }
     return [...byId.entries()].map(([id, peak]) => {
-      const name = displayNames.get(id) ?? "max";
+      const name = displayNames.get(id) ?? "Structure";
+      const deltaText = formatDeltaValue(peak.value, deltaScale, deltaMeasure, masked);
       return {
         key: `peak-${id}`,
         x: peak.x,
+        y: peak.value,
         color: peak.color,
-        label: `${name} max delta at $${peak.x.toFixed(2)}`,
+        label: name,
+        readout: peakReadout(name, deltaText, peak.x),
       };
     });
-  }, [showPeak, deltaMeasure, deltaCurves, deltaRows, displayNames]);
+  }, [showPeak, deltaMeasure, deltaScale, deltaCurves, deltaRows, displayNames, masked]);
   const shown = view ?? home;
   const profit = useMemo(
     () => (evaluation.spotWindow.source === "fit" ? positiveCrossovers(evaluation, pnlCurves) : []),

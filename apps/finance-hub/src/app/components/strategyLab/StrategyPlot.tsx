@@ -14,6 +14,7 @@ import {
 } from "recharts";
 
 import { formatSignedUsd2 } from "@/lib/format";
+import { assignLabelLanes, breakevenReadout } from "@/lib/strategyLab/chartLabels";
 import { seriesReactKey, structureDisplayNames } from "@/lib/strategyLab/displayNames";
 import {
   crossoverCallouts,
@@ -45,7 +46,15 @@ import { LAB_PALETTE, seriesColor } from "@/lib/strategyLab/palette";
 export type ChartRow = { spot: number; stock?: number } & Record<string, number | undefined>;
 
 export type PlotYLine = { readonly key: string; readonly y: number; readonly label: string };
-export type PlotXLine = { readonly key: string; readonly x: number; readonly label: string; readonly color?: string };
+export type PlotXLine = {
+  readonly key: string;
+  readonly x: number;
+  readonly label: string;
+  readonly color?: string;
+  /** Peak value. Drawn as a dot. `readout` is listed under the chart instead of on the line. */
+  readonly y?: number;
+  readonly readout?: string;
+};
 
 export type ChartSize = "fit" | "large" | "huge";
 
@@ -355,6 +364,60 @@ export function StrategyPlot({
     stockName ?? (stockId ? `Stock · ${shortHorizon(evaluation.horizons.find((horizon) => horizon.id === stockId)?.label ?? "Stock")}` : "Stock");
   const yTicks = niceAxis(shown.yMin, shown.yMax).ticks.filter((tick) => tick >= shown.yMin - 1e-6 && tick <= shown.yMax + 1e-6);
   const formatTick = (value: number) => (formatY ? formatY(value) : masked ? "XXXXX" : formatSignedUsd2(value));
+  const xSpan = shown.xMax - shown.xMin;
+  const ySpan = shown.yMax - shown.yMin;
+  const xToPx = (x: number) => (plotPx.width > 0 && xSpan > 0 ? ((x - shown.xMin) / xSpan) * plotPx.width : 0);
+  const yToPx = (y: number) => (plotPx.height > 0 && ySpan > 0 ? ((shown.yMax - y) / ySpan) * plotPx.height : 0);
+  const pxToY = plotPx.height > 0 && ySpan > 0 ? ySpan / plotPx.height : 0;
+  const textWidth = (text: string) => Math.max(36, text.length * 7.2);
+  const topLabels = xLines
+    .filter((line) => inX(line.x) && line.readout == null)
+    .map((line) => ({ id: line.key, x: line.x, text: line.label, color: line.color ?? LAB_PALETTE.axis }));
+  if (inX(evaluation.spot)) topLabels.push({ id: "spot", x: evaluation.spot, text: "Spot", color: LAB_PALETTE.spot });
+  if (whatIfSpot != null && Math.abs(whatIfSpot - evaluation.spot) > 0.05 && inX(whatIfSpot)) {
+    topLabels.push({ id: "what-if", x: whatIfSpot, text: "What-if", color: LAB_PALETTE.whatIf });
+  }
+  const topPlace = new Map(
+    assignLabelLanes(
+      topLabels.map((item) => {
+        const left = xToPx(item.x);
+        return { id: item.id, left, right: left + textWidth(item.text), top: 0, bottom: 16, shift: 16 };
+      }),
+      5,
+    ).map((item) => [item.id, item]),
+  );
+  const calloutPlace = new Map(
+    assignLabelLanes(
+      callouts.map((callout) => {
+        const y = calloutY(priced, curves, callout.horizonId, callout.structureId, callout.spot) ?? shown.yMin;
+        const cx = xToPx(callout.spot);
+        const cy = yToPx(y);
+        return { id: `${callout.horizonId}-${callout.n}`, left: cx - 12, right: cx + 12, top: cy - 12, bottom: cy + 12, shift: -16 };
+      }),
+      5,
+    ).map((item) => [item.id, item]),
+  );
+  const breakevenPlace = new Map(
+    assignLabelLanes(
+      breakevens.map((mark) => {
+        const cx = xToPx(mark.spot);
+        const cy = yToPx(0);
+        return { id: `${mark.id}@${mark.spot}`, left: cx - 7, right: cx + 7, top: cy - 7, bottom: cy + 7, shift: -12 };
+      }),
+      8,
+    ).map((item) => [item.id, item]),
+  );
+  const yPlace = new Map(
+    assignLabelLanes(
+      yLines.filter((line) => inY(line.y)).map((line) => {
+        const cy = yToPx(line.y);
+        const width = textWidth(line.label);
+        const right = plotPx.width > 0 ? plotPx.width : width;
+        return { id: line.key, left: right - width, right, top: cy - 16, bottom: cy, shift: 16 };
+      }),
+      4,
+    ).map((item) => [item.id, item]),
+  );
 
   const zoomBy = (factor: number) => {
     const cursor = { x: (shown.xMin + shown.xMax) / 2, y: (shown.yMin + shown.yMax) / 2 };
@@ -527,25 +590,26 @@ export function StrategyPlot({
             {strikeSpots.map((strike) => (
               <ReferenceLine key={strike} x={strike} stroke={LAB_PALETTE.strike} strokeWidth={1} strokeDasharray="3 3" />
             ))}
-            {xLines.filter((line) => inX(line.x)).map((line, index) => (
-              <ReferenceLine
-                key={line.key}
-                x={line.x}
-                stroke={line.color ?? LAB_PALETTE.axis}
-                strokeWidth={1.5}
-                strokeDasharray="2 3"
-                label={{
-                  value: line.label,
-                  fill: line.color ?? LAB_PALETTE.axis,
-                  fontSize: 11,
-                  position: (["insideTopLeft", "insideBottomLeft", "insideTopRight"] as const)[index % 3],
-                }}
-              />
-            ))}
+            {xLines
+              .filter((line) => inX(line.x) && line.readout == null)
+              .map((line) => {
+                const place = topPlace.get(line.key);
+                return (
+                  <ReferenceLine
+                    key={line.key}
+                    x={line.x}
+                    stroke={line.color ?? LAB_PALETTE.axis}
+                    strokeWidth={1.5}
+                    strokeDasharray="2 3"
+                    label={place?.hidden ? undefined : topLaneLabel(line.label, line.color ?? LAB_PALETTE.axis, place?.lane ?? 0)}
+                  />
+                );
+              })}
             {callouts.map((callout) => {
               const y = calloutY(priced, curves, callout.horizonId, callout.structureId, callout.spot);
               if (y == null) return null;
               const color = curves.find((curve) => curve.structureId === callout.structureId && curve.horizonId === callout.horizonId)?.color ?? LAB_PALETTE.axis;
+              const place = calloutPlace.get(`${callout.horizonId}-${callout.n}`);
               return (
                 <ReferenceDot
                   key={`${callout.horizonId}-${callout.n}`}
@@ -555,31 +619,46 @@ export function StrategyPlot({
                   fill={color}
                   stroke={LAB_PALETTE.dotStroke}
                   strokeWidth={1.5}
-                  label={{ value: String(callout.n), position: "center", fill: "#09090b", fontSize: 11, fontWeight: 700 }}
+                  label={place?.hidden ? undefined : calloutLaneLabel(String(callout.n), color, place?.lane ?? 0)}
                 />
               );
             })}
-            {breakevens.map((mark) => (
-              <ReferenceDot key={`${mark.id}-${mark.spot}`} x={mark.spot} y={0} r={4} fill={mark.color} stroke={LAB_PALETTE.dotStroke} strokeWidth={1} />
-            ))}
+            {breakevens.map((mark) => {
+              const place = breakevenPlace.get(`${mark.id}@${mark.spot}`);
+              if (place?.hidden) return null;
+              return (
+                <ReferenceDot
+                  key={`${mark.id}-${mark.spot}`}
+                  x={mark.spot}
+                  y={(place?.lane ?? 0) * 12 * pxToY}
+                  r={4}
+                  fill={mark.color}
+                  stroke={LAB_PALETTE.dotStroke}
+                  strokeWidth={1}
+                />
+              );
+            })}
             <ReferenceLine y={0} stroke={LAB_PALETTE.zero} strokeWidth={1.5} />
-            {yLines.filter((line) => inY(line.y)).map((line) => (
-              <ReferenceLine
-                key={line.key}
-                y={line.y}
-                stroke={LAB_PALETTE.axis}
-                strokeWidth={1.25}
-                strokeDasharray="1 4"
-                label={{ value: line.label, fill: LAB_PALETTE.axis, fontSize: 11, position: "insideTopRight" }}
-              />
-            ))}
+            {yLines.filter((line) => inY(line.y)).map((line) => {
+              const place = yPlace.get(line.key);
+              return (
+                <ReferenceLine
+                  key={line.key}
+                  y={line.y}
+                  stroke={LAB_PALETTE.axis}
+                  strokeWidth={1.25}
+                  strokeDasharray="1 4"
+                  label={place?.hidden ? undefined : rightLaneLabel(line.label, LAB_PALETTE.axis, place?.lane ?? 0)}
+                />
+              );
+            })}
             {inX(evaluation.spot) ? (
               <ReferenceLine
                 x={evaluation.spot}
                 stroke={LAB_PALETTE.spot}
                 strokeWidth={2}
                 strokeDasharray="5 5"
-                label={{ value: "Spot", fill: LAB_PALETTE.spot, fontSize: 12, position: "insideTopRight" }}
+                label={topPlace.get("spot")?.hidden ? undefined : topLaneLabel("Spot", LAB_PALETTE.spot, topPlace.get("spot")?.lane ?? 0)}
               />
             ) : null}
             {whatIfSpot != null && Math.abs(whatIfSpot - evaluation.spot) > 0.05 && inX(whatIfSpot) ? (
@@ -588,7 +667,7 @@ export function StrategyPlot({
                 stroke={LAB_PALETTE.whatIf}
                 strokeWidth={2}
                 strokeDasharray="2 2"
-                label={{ value: "What-if", fill: LAB_PALETTE.whatIf, fontSize: 12, position: "insideBottomRight" }}
+                label={topPlace.get("what-if")?.hidden ? undefined : topLaneLabel("What-if", LAB_PALETTE.whatIf, topPlace.get("what-if")?.lane ?? 0)}
               />
             ) : null}
             {curves.map((curve) => (
@@ -619,6 +698,19 @@ export function StrategyPlot({
                 connectNulls={false}
               />
             ) : null}
+            {xLines
+              .filter((line) => line.y != null && inX(line.x) && inY(line.y))
+              .map((line) => (
+                <ReferenceDot
+                  key={`${line.key}-peak`}
+                  x={line.x}
+                  y={line.y}
+                  r={5}
+                  fill={line.color ?? LAB_PALETTE.axis}
+                  stroke={LAB_PALETTE.dotStroke}
+                  strokeWidth={1.5}
+                />
+              ))}
           </ComposedChart>
           </div>
         ) : null}
@@ -654,6 +746,36 @@ export function StrategyPlot({
           </span>
         ) : null}
       </div>
+      {xLines.some((line) => line.readout) ? (
+        <ul aria-label="Peak delta" className="mt-2 flex list-none flex-wrap gap-x-6 gap-y-1.5">
+          {xLines
+            .filter((line) => line.readout)
+            .map((line) => (
+              <li
+                key={line.key}
+                className="inline-flex max-w-full items-center gap-2 whitespace-nowrap text-sm font-semibold tabular-nums"
+                style={{ color: line.color ?? "#e4e4e7" }}
+              >
+                <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-zinc-950" style={{ backgroundColor: line.color ?? "#e4e4e7" }} />
+                {line.readout}
+              </li>
+            ))}
+        </ul>
+      ) : null}
+      {role === "pnl" && breakevens.length > 0 ? (
+        <ul aria-label="Breakevens" className="mt-2 flex list-none flex-wrap gap-x-6 gap-y-1.5">
+          {breakevens.map((mark) => (
+            <li
+              key={`${mark.id}-${mark.spot}`}
+              className="inline-flex max-w-full items-center gap-2 whitespace-nowrap text-sm font-semibold tabular-nums"
+              style={{ color: mark.color }}
+            >
+              <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-zinc-950" style={{ backgroundColor: mark.color }} />
+              {breakevenReadout(displayNames.get(mark.id) ?? "Structure", mark.spot)}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {annotate && chrome.showCrossovers ? (
         <ol className="mt-3 flex list-none flex-wrap gap-x-4 gap-y-2" aria-label="Crossover legend">
           {callouts.length === 0 ? (
@@ -886,4 +1008,50 @@ function zoneColor(evaluation: LabEvaluation, zone: ExpiryZone): string {
   if (zone.bestId === "stock") return LAB_PALETTE.stock;
   const row = evaluation.structures.find((item) => item.spec.id === zone.bestId);
   return seriesColor(row?.spec.slot ?? 0);
+}
+
+type LaneView = { x?: number; y?: number; width?: number; height?: number };
+
+function topLaneLabel(text: string, fill: string, lane: number) {
+  return ({ viewBox }: { viewBox?: LaneView }) => {
+    const x = viewBox?.x ?? 0;
+    const y = viewBox?.y ?? 0;
+    return (
+      <text x={x + 6} y={y + 14 + lane * 16} fill={fill} fontSize={13} fontWeight={600}>
+        {text}
+      </text>
+    );
+  };
+}
+
+function rightLaneLabel(text: string, fill: string, lane: number) {
+  return ({ viewBox }: { viewBox?: LaneView }) => {
+    const x = (viewBox?.x ?? 0) + (viewBox?.width ?? 0);
+    const y = (viewBox?.y ?? 0) + 14 + lane * 16;
+    return (
+      <text x={x - 6} y={y} fill={fill} fontSize={13} fontWeight={600} textAnchor="end">
+        {text}
+      </text>
+    );
+  };
+}
+
+function calloutLaneLabel(text: string, fill: string, lane: number) {
+  return ({ viewBox }: { viewBox?: LaneView }) => {
+    const x = (viewBox?.x ?? 0) + (viewBox?.width ?? 0) / 2;
+    const y = viewBox?.y ?? 0;
+    const height = viewBox?.height ?? 0;
+    if (lane === 0) {
+      return (
+        <text x={x} y={y + height / 2} fill="#09090b" fontSize={11} fontWeight={700} textAnchor="middle" dominantBaseline="central">
+          {text}
+        </text>
+      );
+    }
+    return (
+      <text x={x} y={y - 4 - (lane - 1) * 16} fill={fill} fontSize={12} fontWeight={700} textAnchor="middle">
+        {text}
+      </text>
+    );
+  };
 }
