@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import { FIELD_GRID, PAGE_FRAME } from "@/app/components/pageFrame";
+import { PAGE_FRAME } from "@/app/components/pageFrame";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { ChainGrid } from "@/app/components/strategyLab/ChainGrid";
 import { SpreadOptimizer } from "@/app/components/strategyLab/SpreadOptimizer";
@@ -439,7 +439,7 @@ export function StrategyLabPage() {
 
       {lab && chain && evaluation ? (
         <>
-          <section className={`${labCard} ${FIELD_GRID} p-4`}>
+          <section className={`${labCard} grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4`}>
             <label className={labLabel}>
               Rate %
               <input

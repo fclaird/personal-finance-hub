@@ -2,7 +2,6 @@
 
 import { useCallback, useMemo, type ReactNode } from "react";
 import { EditableHeading } from "@/app/components/EditableHeading";
-import { TILE_GRID } from "@/app/components/pageFrame";
 import { usePersistedCollapsedSet, usePersistedOrder } from "@/lib/usePersistedOrder";
 
 export type DraggableTileDef = {
@@ -14,8 +13,6 @@ export type DraggableTileDef = {
   collapsible?: boolean;
   /** Extra classes on the tile body wrapper (inside the card). */
   bodyClassName?: string;
-  /** "full" keeps a wide chart or table on its own row. */
-  span?: "full";
 };
 
 const TILE_SHELL =
@@ -28,10 +25,8 @@ const TITLE_BTN =
   "flex min-w-0 flex-1 items-center gap-2 px-1 py-2.5 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-100/80 dark:text-zinc-200 dark:hover:bg-white/5";
 
 /**
- * Draggable panels. The default grid keeps each panel at least 420px wide and wraps the rest
- * onto the next row. Pass TILE_STACK when this layout is a page section that already has its
- * own panels inside — auto-fit must not wrap those inner sections. A tile with span "full"
- * takes the whole row. Drag the ⠿ handle to reorder; click the title to collapse.
+ * One panel per row, across the full page width. Drag the ⠿ handle to reorder; click the title to collapse.
+ * Order and collapse state persist in localStorage. A wide table scrolls inside its card.
  */
 export function DraggableTileLayout({
   storageKey,
@@ -76,11 +71,10 @@ export function DraggableTileLayout({
   const rendered = order.filter((id) => tiles[id]?.visible !== false);
 
   return (
-    <div className="flex min-w-0 flex-col gap-3">
+    <div className={className ?? "flex w-full min-w-0 flex-col gap-6"}>
       {hint ? (
         <p className="text-xs text-zinc-600 dark:text-zinc-400">{hint}</p>
       ) : null}
-      <div className={className ?? TILE_GRID}>
       {rendered.map((id) => {
         const tile = tiles[id];
         if (!tile) return null;
@@ -89,7 +83,7 @@ export function DraggableTileLayout({
         return (
           <div
             key={id}
-            className={TILE_SHELL + (tile.span === "full" ? " col-span-full" : "")}
+            className={TILE_SHELL}
             onDragOver={onDragOver}
             onDrop={(e) => onDrop(e, id)}
           >
@@ -140,7 +134,6 @@ export function DraggableTileLayout({
           </div>
         );
       })}
-      </div>
     </div>
   );
 }

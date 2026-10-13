@@ -143,7 +143,6 @@ export default function RebalancingPage() {
           },
           "drift-table": {
             title: "Drift & suggested trades",
-            span: "full",
             bodyClassName: "p-0",
             children: (
         <div className="overflow-x-auto p-6 pt-0">

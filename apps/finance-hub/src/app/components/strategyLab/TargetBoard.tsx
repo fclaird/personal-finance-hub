@@ -1,6 +1,5 @@
 "use client";
 
-import { CARD_GRID } from "@/app/components/pageFrame";
 import { StructureCard } from "@/app/components/strategyLab/StructureCard";
 import { formatSignedUsd2 } from "@/lib/format";
 import type { OptionChain } from "@/lib/optionChain/chain";
@@ -98,7 +97,7 @@ export function TargetSection({
         metrics={metrics}
         masked={masked}
       />
-      <div className={CARD_GRID}>
+      <div className="grid min-w-0 max-w-full gap-4 lg:grid-cols-3 [&>*]:min-w-0 [&>*]:max-w-full">
         {evaluation.structures.map((row) => (
           <StructureCard
             key={row.spec.id}
