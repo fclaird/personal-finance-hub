@@ -3,6 +3,7 @@
 import { StructureCard } from "@/app/components/strategyLab/StructureCard";
 import { formatSignedUsd2 } from "@/lib/format";
 import type { OptionChain } from "@/lib/optionChain/chain";
+import { structureDisplayNames } from "@/lib/strategyLab/displayNames";
 import { bestWhenFor, type Assumptions, type LabEdit, type LabEvaluation, type PricedStructure } from "@/lib/strategyLab/lab";
 import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
 import {
@@ -69,6 +70,7 @@ export function TargetSection({
   onPlot?: (id: string) => void;
   onEdit: (edit: LabEdit | readonly LabEdit[]) => void;
 }) {
+  const names = structureDisplayNames(evaluation.structures.map((row) => ({ id: row.spec.id, label: row.spec.label })));
   const typed = Number(targetText);
   const targetSpot = targetText.trim() !== "" && Number.isFinite(typed) && typed > 0 ? typed : null;
   const reads = readsForHorizon(evaluation, chain, assumptions, horizonId, targetSpot);
@@ -96,6 +98,7 @@ export function TargetSection({
         reads={reads}
         metrics={metrics}
         masked={masked}
+        names={names}
       />
       <div className="grid min-w-0 max-w-full gap-4 lg:grid-cols-3 [&>*]:min-w-0 [&>*]:max-w-full">
         {evaluation.structures.map((row) => (
@@ -108,6 +111,7 @@ export function TargetSection({
             bestWhen={bestWhenFor(evaluation.expiryBoards, row.spec.id)}
             target={row.status === "priced" ? (reads.get(row.spec.id) ?? null) : null}
             metrics={row.status === "priced" ? (metrics.get(row.spec.id) ?? null) : null}
+            displayLabel={names.get(row.spec.id)}
             plotted={plotted ? plotted(row.spec.id) : true}
             onPlot={onPlot ? () => onPlot(row.spec.id) : undefined}
             onEdit={onEdit}
@@ -127,6 +131,7 @@ function TargetBoard({
   reads,
   metrics,
   masked,
+  names,
 }: {
   evaluation: LabEvaluation;
   horizonId: string;
@@ -136,6 +141,7 @@ function TargetBoard({
   reads: Map<string, TargetRead>;
   metrics: Map<string, TileMetrics>;
   masked: boolean;
+  names: ReadonlyMap<string, string>;
 }) {
   const dates = evaluation.horizons.filter((horizon) => horizon.shared && !horizon.settlement);
   const priced = evaluation.structures.filter((row): row is PricedStructure => row.status === "priced");
@@ -188,7 +194,7 @@ function TargetBoard({
               const tile = metrics.get(row.spec.id) ?? null;
               return (
                 <tr key={row.spec.id} className="border-t border-zinc-300 dark:border-zinc-700">
-                  <td className="py-1.5 pr-3 font-semibold">{row.spec.label}</td>
+                  <td className="py-1.5 pr-3 font-semibold">{names.get(row.spec.id) ?? row.spec.label}</td>
                   <td className="py-1.5 pr-3 tabular-nums">{read ? read.target.toFixed(2) : "—"}</td>
                   <td className="py-1.5 pr-3 tabular-nums" title={DELTA_AT_SHORT_HINT}>{read ? deltaLabel(read) : "—"}</td>
                   <td className="py-1.5 pr-3 tabular-nums" title={LEVERAGE_NOW_HINT}>{formatLeverage(tile?.leverageNow ?? null)}</td>

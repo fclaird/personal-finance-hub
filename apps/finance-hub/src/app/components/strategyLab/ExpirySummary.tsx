@@ -12,6 +12,7 @@ import {
   type LabEvaluation,
   type PricedStructure,
 } from "@/lib/strategyLab/lab";
+import { structureDisplayNames } from "@/lib/strategyLab/displayNames";
 import { LAB_PALETTE, labCard, labControl, labLabel, seriesColor } from "@/lib/strategyLab/palette";
 
 function money(n: number | null, mask: boolean): string {
@@ -75,6 +76,7 @@ export function ExpirySummary({
   onEdit: (edit: LabEdit) => void;
 }) {
   const boards = evaluation.expiryBoards;
+  const names = structureDisplayNames(evaluation.structures.map((row) => ({ id: row.spec.id, label: row.spec.label })));
   const priced = evaluation.structures.filter((row): row is PricedStructure => row.status === "priced");
   if (boards.length === 0 || priced.length === 0) return null;
 
@@ -180,7 +182,7 @@ export function ExpirySummary({
                   .map((row) => (
                     <Row
                       key={row.spec.id}
-                      label={row.spec.label}
+                      label={names.get(row.spec.id) ?? row.spec.label}
                       pnl={capitalExpiryPnl(row, whatIfSpot)}
                       winner={zone?.bestId === row.spec.id && !zone.tied}
                       color={seriesColor(row.spec.slot)}

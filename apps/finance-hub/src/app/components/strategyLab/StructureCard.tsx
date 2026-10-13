@@ -66,7 +66,7 @@ function Stat({ label, value, hint, headline = false }: { label: string; value: 
 const MOVE_HINT =
   "Approximate P&L if the stock moves 1% from today's spot, using today's share-equivalent exposure times 1%. Gamma is not included.";
 
-function DollarsAtRisk({ row, onEdit, masked }: { row: StructureEval; onEdit: (edit: LabEdit) => void; masked: boolean }) {
+function DollarsAtRisk({ row, onEdit, masked, label }: { row: StructureEval; onEdit: (edit: LabEdit) => void; masked: boolean; label: string }) {
   const spec = row.spec;
   if (row.status !== "priced") return null;
   const templateName = spec.origin?.request.template;
@@ -79,7 +79,7 @@ function DollarsAtRisk({ row, onEdit, masked }: { row: StructureEval; onEdit: (e
     <label className={`mb-3 block ${labLabel}`}>
       Dollars at risk
       <input
-        aria-label={`${spec.label} dollars at risk`}
+        aria-label={`${label} dollars at risk`}
         type="number"
         min={1}
         step="1"
@@ -132,6 +132,7 @@ export function StructureCard({
   plotted = true,
   onPlot,
   onEdit,
+  displayLabel,
 }: {
   chain: OptionChain;
   assumptions: DeltaAssumptions;
@@ -143,8 +144,10 @@ export function StructureCard({
   plotted?: boolean;
   onPlot?: () => void;
   onEdit: (edit: LabEdit | readonly LabEdit[]) => void;
+  displayLabel?: string;
 }) {
   const spec = row.spec;
+  const shown = displayLabel || spec.label || "Structure";
   const color = seriesColor(spec.slot);
   const [longTarget, setLongTarget] = useState("75");
   const [shortTarget, setShortTarget] = useState("50");
@@ -185,10 +188,10 @@ export function StructureCard({
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="inline-block h-4 w-4 shrink-0 rounded-sm border border-zinc-950" style={{ backgroundColor: color }} aria-hidden />
           <span className="rounded-full px-2 py-0.5 text-xs font-bold text-zinc-950" style={{ backgroundColor: color }}>
-            {spec.label || "Structure"}
+            {shown}
           </span>
           <input
-            aria-label={`${spec.label} name`}
+            aria-label={`${shown} name`}
             value={spec.label}
             onChange={(e) => onEdit({ kind: "setLabel", id: spec.id, label: e.target.value })}
             className="w-28 min-w-0 max-w-full border-2 bg-transparent px-2 py-1 text-sm font-semibold text-zinc-950 dark:text-zinc-50"
@@ -201,7 +204,7 @@ export function StructureCard({
               type="checkbox"
               checked={plotted}
               onChange={() => onPlot?.()}
-              aria-label={`Plot ${spec.label || "structure"} on delta chart`}
+              aria-label={`Plot ${shown} on delta chart`}
               className="h-4 w-4"
               style={{ accentColor: color }}
             />
@@ -230,7 +233,7 @@ export function StructureCard({
       <label className={`mb-3 block ${labLabel}`}>
         Expiry
         <select
-          aria-label={`${spec.label} expiry`}
+          aria-label={`${shown} expiry`}
           value={spec.expiry}
           onChange={(e) => onEdit({ kind: "setExpiry", id: spec.id, expiry: e.target.value as typeof spec.expiry })}
           className={`mt-1 block w-full px-2 py-1.5 text-sm ${labControl}`}
@@ -255,7 +258,7 @@ export function StructureCard({
           leg={leg}
           index={index}
           structureId={spec.id}
-          structureLabel={spec.label}
+          structureLabel={shown}
           chain={chain}
           assumptions={assumptions}
           onEdit={onEdit}
@@ -288,7 +291,7 @@ export function StructureCard({
           <label className={labLabel}>
             Long Δ target
             <input
-              aria-label={`${spec.label} long delta target`}
+              aria-label={`${shown} long delta target`}
               type="number"
               min={1}
               max={99}
@@ -301,7 +304,7 @@ export function StructureCard({
           <label className={labLabel}>
             Short Δ target
             <input
-              aria-label={`${spec.label} short delta target`}
+              aria-label={`${shown} short delta target`}
               type="number"
               min={1}
               max={99}
@@ -361,7 +364,7 @@ export function StructureCard({
             />
             limit
             <input
-              aria-label={`${spec.label} limit`}
+              aria-label={`${shown} limit`}
               type="number"
               step="0.01"
               value={spec.entry.kind === "limit" ? spec.entry.netPerShare : ""}
@@ -378,7 +381,7 @@ export function StructureCard({
         </div>
       </fieldset>
 
-      <DollarsAtRisk row={row} onEdit={onEdit} masked={masked} />
+      <DollarsAtRisk row={row} onEdit={onEdit} masked={masked} label={shown} />
 
       {row.status === "blocked" ? (
         <p className="text-sm text-rose-600">{row.reason}</p>
@@ -415,7 +418,7 @@ export function StructureCard({
             value={
               row.sizing.status === "needsCapitalOverride"
                 ? "Needs $"
-                : `${row.spec.label}: ${formatNum(row.sizing.packages, Number.isInteger(row.sizing.packages) ? 0 : 1)} ${row.sizing.packages === 1 ? "package" : "packages"}`
+                : `${shown}: ${formatNum(row.sizing.packages, Number.isInteger(row.sizing.packages) ? 0 : 1)} ${row.sizing.packages === 1 ? "package" : "packages"}`
             }
           />
           <Stat

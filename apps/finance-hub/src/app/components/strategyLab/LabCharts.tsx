@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { formatNum, formatSignedUsd2 } from "@/lib/format";
+import { seriesReactKey, structureDisplayNames } from "@/lib/strategyLab/displayNames";
 import { StrategyPlot, type ChartRow, type ChartSize } from "@/app/components/strategyLab/StrategyPlot";
 import {
   applyHorizonPolicy,
@@ -83,6 +84,10 @@ export function LabCharts({
   bindDeltaToggle?: (toggle: (id: string) => void) => void;
 }) {
   const priced = pricedOf(evaluation);
+  const displayNames = useMemo(
+    () => structureDisplayNames(evaluation.structures.map((row) => ({ id: row.spec.id, label: row.spec.label }))),
+    [evaluation],
+  );
   const [selection, setSelection] = useState<ChartSelection>(() => initialChartSelection(evaluation));
   const [chrome, setChrome] = useState<ChartChrome>(() => defaultChartChrome());
   const [minDraft, setMinDraft] = useState<string | null>(null);
@@ -333,7 +338,7 @@ export function LabCharts({
       if (!prev || peak.value > prev.value) byId.set(curve.structureId, { x: peak.spot, value: peak.value, color: curve.color });
     }
     return [...byId.entries()].map(([id, peak]) => {
-      const name = priced.find((row) => row.spec.id === id)?.spec.label ?? "max";
+      const name = displayNames.get(id) ?? "max";
       return {
         key: `peak-${id}`,
         x: peak.x,
@@ -341,7 +346,7 @@ export function LabCharts({
         label: `${name} max delta at $${peak.x.toFixed(2)}`,
       };
     });
-  }, [showPeak, deltaMeasure, deltaCurves, deltaRows, priced]);
+  }, [showPeak, deltaMeasure, deltaCurves, deltaRows, displayNames]);
   const shown = view ?? home;
   const profit = useMemo(
     () => (evaluation.spotWindow.source === "fit" ? positiveCrossovers(evaluation, pnlCurves) : []),
@@ -531,7 +536,7 @@ export function LabCharts({
       </div>
       {quiet.map((row) => (
         <p key={row.spec.id} className="rounded-lg border border-amber-400 bg-zinc-950 px-3 py-2 text-sm text-amber-200">
-          {capital != null ? zeroPackageNotice(row.spec.label, capital, packageCostOf(row)) : `${row.spec.label} has no sized packages.`}
+          {capital != null ? zeroPackageNotice(displayNames.get(row.spec.id) ?? row.spec.label, capital, packageCostOf(row)) : `${displayNames.get(row.spec.id) ?? row.spec.label} has no sized packages.`}
           {evaluation.basis.kind === "equalCapital" && evaluation.basis.units === "whole" ? (
             <button
               type="button"
@@ -727,6 +732,7 @@ function PlotChips({
   onAction: (action: PlotAction) => void;
 }) {
   const universe = structures.map((row) => row.spec.id);
+  const names = structureDisplayNames(structures.map((row) => ({ id: row.spec.id, label: row.spec.label })));
   const noun = chart === "delta" ? "delta chart" : "P&L chart";
   return (
     <div className="space-y-1.5">
@@ -755,7 +761,7 @@ function PlotChips({
           const color = seriesColor(row.spec.slot);
           const on = ids.includes(row.spec.id);
           const focus = mode === "waterfall" && on && row.spec.id === focusId;
-          const label = row.spec.label || "Structure";
+          const label = names.get(row.spec.id) ?? "Structure";
           return (
             <button
               key={row.spec.id}
@@ -1019,7 +1025,7 @@ function DeltaTip({
   unit,
 }: {
   active?: boolean;
-  payload?: Array<{ name?: string; value?: number; color?: string; payload?: ChartRow }>;
+  payload?: Array<{ name?: string; dataKey?: string | number; value?: number; color?: string; payload?: ChartRow }>;
   formatValue: (value: number | undefined) => string;
   unit: string;
 }) {
@@ -1035,8 +1041,8 @@ function DeltaTip({
       <div className="tabular-nums text-zinc-50">
         Spot {spot != null ? spot.toFixed(2) : ""} · {unit}
       </div>
-      {rows.map((item) => (
-        <div key={String(item.name)} className="tabular-nums" style={{ color: item.color }}>
+      {rows.map((item, index) => (
+        <div key={seriesReactKey(item, index)} className="tabular-nums" style={{ color: item.color }}>
           {item.name} {formatValue(typeof item.value === "number" ? item.value : undefined)}
         </div>
       ))}

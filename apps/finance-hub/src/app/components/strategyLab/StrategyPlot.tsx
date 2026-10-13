@@ -14,6 +14,7 @@ import {
 } from "recharts";
 
 import { formatSignedUsd2 } from "@/lib/format";
+import { seriesReactKey, structureDisplayNames } from "@/lib/strategyLab/displayNames";
 import {
   crossoverCallouts,
   isPlottableStructure,
@@ -108,11 +109,13 @@ function ChartTip({
   payload,
   mask,
   structures,
+  names,
 }: {
   active?: boolean;
-  payload?: Array<{ name?: string; value?: number; color?: string; payload?: ChartRow }>;
+  payload?: Array<{ name?: string; dataKey?: string | number; value?: number; color?: string; payload?: ChartRow }>;
   mask: boolean;
   structures: readonly PricedStructure[];
+  names: ReadonlyMap<string, string>;
 }) {
   if (!active || !payload?.length) return null;
   const spot = payload[0]?.payload?.spot;
@@ -124,8 +127,8 @@ function ChartTip({
   return (
     <div className="max-w-xs rounded-md border border-zinc-500 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-100 shadow-lg">
       <div className="tabular-nums text-zinc-50">Spot {spot != null ? spot.toFixed(2) : ""}</div>
-      {rows.map((item) => (
-        <div key={String(item.name)} className="tabular-nums" style={{ color: item.color }}>
+      {rows.map((item, index) => (
+        <div key={seriesReactKey(item, index)} className="tabular-nums" style={{ color: item.color }}>
           {item.name} {money(typeof item.value === "number" ? item.value : undefined, mask)}
         </div>
       ))}
@@ -134,7 +137,7 @@ function ChartTip({
           <div className="text-zinc-300">At expiry</div>
           {structures.map((row) => (
             <div key={row.spec.id} className="tabular-nums" style={{ color: seriesColor(row.spec.slot) }}>
-              {row.spec.label} {money(capitalExpiryPnl(row, spot), mask)}
+              {names.get(row.spec.id) ?? row.spec.label} {money(capitalExpiryPnl(row, spot), mask)}
             </div>
           ))}
         </div>
@@ -321,6 +324,10 @@ export function StrategyPlot({
     };
   }, [engaged]);
 
+  const displayNames = useMemo(
+    () => structureDisplayNames(evaluation.structures.map((row) => ({ id: row.spec.id, label: row.spec.label }))),
+    [evaluation],
+  );
   const readoutSpot = whatIfSpot ?? evaluation.spot;
   const marked = priced.filter((row) => curves.some((curve) => curve.structureId === row.spec.id));
   const callouts = (
@@ -511,7 +518,7 @@ export function StrategyPlot({
               tickLine={{ stroke: LAB_PALETTE.axisLine }}
             />
             <Tooltip
-              content={tooltip ?? <ChartTip mask={masked} structures={marked} />}
+              content={tooltip ?? <ChartTip mask={masked} structures={marked} names={displayNames} />}
               cursor={{ stroke: LAB_PALETTE.spot, strokeWidth: 1.5 }}
             />
             {zones.map((zone) => (
@@ -678,7 +685,7 @@ export function StrategyPlot({
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
             {marked.map((row) => (
               <span key={row.spec.id} className="text-sm font-semibold tabular-nums" style={{ color: seriesColor(row.spec.slot) }}>
-                {row.spec.label} {money(capitalExpiryPnl(row, readoutSpot), masked)}
+                {displayNames.get(row.spec.id) ?? row.spec.label} {money(capitalExpiryPnl(row, readoutSpot), masked)}
               </span>
             ))}
           </div>
@@ -860,7 +867,7 @@ function zoneBands(
       const x1 = Math.max(zone.lo, xLo);
       const x2 = Math.min(zone.hi ?? xHi, xHi);
       if (!(x2 > x1)) return;
-      bands.push({ key: `${horizonId}-${index}`, x1, x2, color: zoneColor(evaluation, zone) });
+      bands.push({ key: `${horizonId}:${zone.bestId}:${index}`, x1, x2, color: zoneColor(evaluation, zone) });
     });
   }
   return bands;

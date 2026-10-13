@@ -30,6 +30,7 @@ import {
 export type { Assumptions };
 export { describeVolShift };
 import { assignLegIds, legEntry, optionLeg, parityPackageDebit, stockLeg, syntheticShape, type Leg } from "@/lib/strategyLab/legs";
+import { structureDisplayNames } from "@/lib/strategyLab/displayNames";
 import { MODEL_DIVIDEND_YIELD, MODEL_RATE, underlyingModelIv } from "@/lib/strategyLab/modelAssumptions";
 import { catalogRequest, resolveTemplate, TEMPLATE_CATALOG, type TemplateId, type TemplateRequest } from "@/lib/strategyLab/internal/templates";
 import {
@@ -1140,7 +1141,7 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
   };
 }
 
-function zoneSeriesOf(row: PricedStructure): ZoneSeries | null {
+function zoneSeriesOf(row: PricedStructure, label: string): ZoneSeries | null {
   if (row.sizing.status === "needsCapitalOverride" || !(row.sizing.packages > 0)) return null;
   const packages = row.sizing.packages;
   const strikes = [...new Set(row.legs.map((leg) => leg.strike).filter((strike): strike is number => strike != null))].sort((a, b) => a - b);
@@ -1149,7 +1150,7 @@ function zoneSeriesOf(row: PricedStructure): ZoneSeries | null {
     last > 0 ? (expiryPnl(row.legs, row.debit, last + 1) - expiryPnl(row.legs, row.debit, last)) * packages : 0;
   return {
     id: row.spec.id,
-    label: row.spec.label,
+    label,
     pnl: (spot) => expiryPnl(row.legs, row.debit, spot) * packages,
     terminalSlope: slope,
     knots: strikes,
@@ -1164,10 +1165,11 @@ function expiryBoardsOf(
   spot: number,
   capital: number,
 ): ExpiryBoard[] {
+  const names = structureDisplayNames(structures.map((row) => ({ id: row.spec.id, label: row.spec.label })));
   const groups = new Map<IsoDate, ZoneSeries[]>();
   for (const row of structures) {
     if (row.status !== "priced") continue;
-    const series = zoneSeriesOf(row);
+    const series = zoneSeriesOf(row, names.get(row.spec.id) ?? row.spec.label);
     if (!series) continue;
     const list = groups.get(row.spec.expiry) ?? [];
     list.push(series);
@@ -1209,6 +1211,7 @@ function expiryBoardsOf(
 }
 
 function modelCrossoversOf(horizons: readonly HorizonView[], structures: readonly StructureEval[]): ModelCrossover[] {
+  const names = structureDisplayNames(structures.map((row) => ({ id: row.spec.id, label: row.spec.label })));
   const out: ModelCrossover[] = [];
   for (const horizon of horizons) {
     if (horizon.settlement) continue;
@@ -1216,7 +1219,7 @@ function modelCrossoversOf(horizons: readonly HorizonView[], structures: readonl
       if (row.status !== "priced") return [];
       const curve = row.curves.find((item) => item.horizonId === horizon.id);
       if (!curve) return [];
-      return [{ id: row.spec.id, label: row.spec.label, points: curve.points }];
+      return [{ id: row.spec.id, label: names.get(row.spec.id) ?? row.spec.label, points: curve.points }];
     });
     for (const hit of solveSampledCrossovers(sampled)) {
       out.push({ ...hit, horizonId: horizon.id, approximate: true });
