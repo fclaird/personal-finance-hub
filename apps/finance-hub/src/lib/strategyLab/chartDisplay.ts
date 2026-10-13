@@ -3,7 +3,7 @@
  * Pure and instant: the page never refetches when Chris changes mode, dates, or structures.
  */
 
-import { calendarDaysBetween, formatExpiryLabel } from "@/lib/optionChain/chain";
+import { calendarDaysBetween, formatExpiryLabel, type IsoDate } from "@/lib/optionChain/chain";
 import {
   crossoverText,
   type ExpiryCrossover,
@@ -11,6 +11,7 @@ import {
   type LabEvaluation,
   type PricedStructure,
 } from "@/lib/strategyLab/lab";
+import { structureDisplayNames } from "@/lib/strategyLab/displayNames";
 import { seriesColor } from "@/lib/strategyLab/palette";
 
 export const CHART_MODES = [
@@ -242,43 +243,51 @@ export function visibleCurves(evaluation: LabEvaluation, selection: ChartSelecti
   return look ? applyCurveLook(painted, look, evaluation) : painted;
 }
 
+function displayOf(evaluation: LabEvaluation): ReadonlyMap<string, string> {
+  return structureDisplayNames(evaluation.structures.map((row) => ({ id: row.spec.id, label: row.spec.label })));
+}
+
 function paintMode(evaluation: LabEvaluation, selection: ChartSelection): CurveView[] {
   const structures = selectedStructures(evaluation, selection);
   if (structures.length === 0) return [];
   const focus = structures.find((row) => row.spec.id === selection.focusStructureId) ?? structures[0]!;
   const rainbow = structures.length === 1;
+  const names = displayOf(evaluation);
+  const label = (row: PricedStructure) => names.get(row.spec.id) ?? row.spec.label;
 
   switch (selection.mode) {
     case "waterfall": {
-      const curves = paint(focus, structureHorizons(evaluation, focus), "rainbow");
+      const curves = paint(focus, structureHorizons(evaluation, focus), "rainbow", label(focus));
       for (const row of structures) {
         if (row.spec.id === focus.spec.id) continue;
         const horizons = structureHorizons(evaluation, row);
         const expiry = horizons.find((horizon) => horizon.settlement) ?? horizons[horizons.length - 1];
         if (!expiry) continue;
-        const [curve] = paint(row, [expiry], "palette");
+        const [curve] = paint(row, [expiry], "palette", label(row));
         if (!curve) continue;
-        curves.push({ ...curve, name: `${row.spec.label} · expiry ${formatExpiryLabel(row.spec.expiry)}`, dash: "8 4", width: 3.5 });
+        curves.push({ ...curve, name: `${label(row)} · expiry ${formatExpiryLabel(row.spec.expiry)}`, dash: "8 4", width: 3.5 });
       }
       return curves;
     }
     case "expiry":
-      return structures.flatMap((row) => paint(row, structureHorizons(evaluation, row).filter((horizon) => horizon.settlement), "palette"));
+      return structures.flatMap((row) => paint(row, structureHorizons(evaluation, row).filter((horizon) => horizon.settlement), "palette", label(row)));
     case "today":
       return structures.flatMap((row) =>
-        paint(row, structureHorizons(evaluation, row).filter((horizon) => isToday(evaluation, horizon)), "palette"),
+        paint(row, structureHorizons(evaluation, row).filter((horizon) => isToday(evaluation, horizon)), "palette", label(row)),
       );
     case "quarters":
     case "custom":
       return structures.flatMap((row) => {
         const chosen = structureHorizons(evaluation, row).filter((horizon) => selection.horizonIds.includes(horizon.id));
-        return paint(row, chosen, rainbow ? "rainbow" : "palette");
+        return paint(row, chosen, rainbow ? "rainbow" : "palette", label(row));
       });
     case "structure":
     case "dateOverlay":
       return curvesOnFocusDate(evaluation, selection);
     case "span":
-      return structures.flatMap((row) => paint(row, spanHorizons(evaluation, row, selection.focusHorizonId), rainbow ? "rainbow" : "palette"));
+      return structures.flatMap((row) =>
+        paint(row, spanHorizons(evaluation, row, selection.focusHorizonId), rainbow ? "rainbow" : "palette", label(row)),
+      );
     default:
       return [];
   }
@@ -317,9 +326,10 @@ function curvesOnFocusDate(evaluation: LabEvaluation, selection: ChartSelection)
     evaluation.horizons[0]?.id ??
     null;
   if (!horizonId) return [];
+  const names = displayOf(evaluation);
   return structures.flatMap((row) => {
     const chosen = horizonForStructure(evaluation, row, horizonId);
-    return chosen ? paint(row, [chosen], "palette") : [];
+    return chosen ? paint(row, [chosen], "palette", names.get(row.spec.id) ?? row.spec.label) : [];
   });
 }
 
@@ -465,7 +475,7 @@ export function samplePnl(points: readonly { spot: number; pnl: number }[], spot
   return null;
 }
 
-function paint(row: PricedStructure, horizons: readonly HorizonView[], kind: "rainbow" | "palette"): CurveView[] {
+function paint(row: PricedStructure, horizons: readonly HorizonView[], kind: "rainbow" | "palette", label: string): CurveView[] {
   return horizons.map((horizon, index) => {
     const look = lookOf(row, horizon, index, horizons.length, kind);
     const many = horizons.length > 1 || kind === "rainbow";
@@ -473,7 +483,7 @@ function paint(row: PricedStructure, horizons: readonly HorizonView[], kind: "ra
       key: `${row.spec.id}@@${horizon.id}`,
       structureId: row.spec.id,
       horizonId: horizon.id,
-      name: curveName(row, horizon, many),
+      name: curveName(label, row.spec.expiry, horizon, many),
       ...look,
     };
   });
@@ -545,11 +555,11 @@ function horizonForStructure(evaluation: LabEvaluation, row: PricedStructure, ho
   return horizons.find((horizon) => horizon.date === focus.date && !horizon.settlement) ?? horizons.find((horizon) => horizon.date === focus.date) ?? null;
 }
 
-function curveName(row: PricedStructure, horizon: HorizonView, many: boolean): string {
-  if (horizon.settlement || calendarDaysBetween(horizon.date, row.spec.expiry) <= 0) {
-    return `${row.spec.label} · expiry ${formatExpiryLabel(row.spec.expiry)}`;
+function curveName(label: string, expiry: IsoDate, horizon: HorizonView, many: boolean): string {
+  if (horizon.settlement || calendarDaysBetween(horizon.date, expiry) <= 0) {
+    return `${label} · expiry ${formatExpiryLabel(expiry)}`;
   }
-  return many ? `${row.spec.label} · ${shortHorizon(horizon.label)}` : row.spec.label;
+  return many ? `${label} · ${shortHorizon(horizon.label)}` : label;
 }
 
 function isToday(evaluation: LabEvaluation, horizon: HorizonView): boolean {

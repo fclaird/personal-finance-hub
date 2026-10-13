@@ -563,3 +563,26 @@ describe("structures with different expiries", () => {
     }
   });
 });
+
+describe("duplicate structure names", () => {
+  it("numbers the second ZEBRA and keeps series keys unique", () => {
+    const chain = chainOf();
+    const zebra = {
+      kind: "addStructure" as const,
+      label: "ZEBRA",
+      expiry: isoDate(EXPIRY),
+      request: {
+        template: "zebra" as const,
+        long: { by: "strike" as const, strike: 140 },
+        short: { by: "strike" as const, strike: 160 },
+      },
+    };
+    const ev = evaluateLab(editLab(createLab(chain), [zebra, zebra], chain), chain);
+    const curves = visibleCurves(ev, setChartMode(initialChartSelection(ev), "today"));
+    const names = curves.map((curve) => curve.name);
+    assert.ok(names.includes("ZEBRA"));
+    assert.ok(names.includes("ZEBRA (2)"));
+    assert.equal(new Set(curves.map((curve) => curve.key)).size, curves.length);
+    assert.ok(curves.every((curve) => curve.key.startsWith(`${curve.structureId}@@`)));
+  });
+});

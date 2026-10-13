@@ -236,7 +236,23 @@ function parseAssumptions(raw: unknown): Assumptions | null {
   const dividendYield = finite(raw.dividendYield);
   if (rate == null || dividendYield == null || dividendYield < 0) return null;
   if (raw.ivSource !== "mid" && raw.ivSource !== "feed") return null;
-  return { rate: MODEL_RATE, dividendYield: MODEL_DIVIDEND_YIELD, ivSource: raw.ivSource };
+  const volShift = parseVolShift(raw.volShift);
+  if (raw.volShift != null && volShift == null) return null;
+  return {
+    rate: MODEL_RATE,
+    dividendYield: MODEL_DIVIDEND_YIELD,
+    ivSource: raw.ivSource,
+    volShift: volShift ?? { mode: "points", amount: 0 },
+  };
+}
+
+function parseVolShift(raw: unknown): { mode: "points" | "pct"; amount: number } | null {
+  if (raw == null) return null;
+  if (!isRecord(raw)) return null;
+  if (raw.mode !== "points" && raw.mode !== "pct") return null;
+  const amount = finite(raw.amount);
+  if (amount == null) return null;
+  return { mode: raw.mode, amount };
 }
 
 function parseBasis(raw: unknown): Basis | null {

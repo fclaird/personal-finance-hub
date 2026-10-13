@@ -2,17 +2,18 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import { FIELD_GRID, PAGE_FRAME } from "@/app/components/pageFrame";
+import { PAGE_FRAME } from "@/app/components/pageFrame";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { ChainGrid } from "@/app/components/strategyLab/ChainGrid";
 import { SpreadOptimizer } from "@/app/components/strategyLab/SpreadOptimizer";
 import { LabCharts } from "@/app/components/strategyLab/LabCharts";
 import { ExpirySummary } from "@/app/components/strategyLab/ExpirySummary";
+import { HeldPositions } from "@/app/components/strategyLab/HeldPositions";
 import { ScenarioBar } from "@/app/components/strategyLab/ScenarioBar";
 import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
 import { TargetSection } from "@/app/components/strategyLab/TargetBoard";
 import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
-import { catalogRequest, LAB_LIMITS, TEMPLATE_CATALOG, type HorizonSpec, type LabEdit, type TemplateId } from "@/lib/strategyLab/lab";
+import { catalogRequest, describeVolShift, LAB_LIMITS, TEMPLATE_CATALOG, type HorizonSpec, type LabEdit, type TemplateId } from "@/lib/strategyLab/lab";
 import type { SpreadCandidate } from "@/lib/strategyLab/callSpreadOptimizer";
 import { formatModelDelta, nearestDeltaStrike, strikeDeltas } from "@/lib/strategyLab/strikeDelta";
 import { modelAssumptionLabel, underlyingModelIv } from "@/lib/strategyLab/modelAssumptions";
@@ -438,7 +439,7 @@ export function StrategyLabPage() {
 
       {lab && chain && evaluation ? (
         <>
-          <section className={`${labCard} ${FIELD_GRID} p-4`}>
+          <section className={`${labCard} grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4`}>
             <label className={labLabel}>
               Rate %
               <input
@@ -459,6 +460,49 @@ export function StrategyLabPage() {
                 className="mt-1 block w-full rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm tabular-nums"
               />
               <span className="mt-1 block text-[11px] text-zinc-700 dark:text-zinc-300">{modelAssumptionLabel(underlyingModelIv(chain))}</span>
+            </label>
+            <label className={labLabel}>
+              Vol shift
+              <select
+                aria-label="Vol shift mode"
+                value={lab.assumptions.volShift?.mode ?? "points"}
+                onChange={(event) =>
+                  edit({
+                    kind: "setAssumptions",
+                    patch: {
+                      volShift: {
+                        mode: event.target.value === "pct" ? "pct" : "points",
+                        amount: lab.assumptions.volShift?.amount ?? 0,
+                      },
+                    },
+                  })
+                }
+                className={`mt-1 block px-2 py-1.5 text-sm ${labControl}`}
+              >
+                <option value="points">Vol points</option>
+                <option value="pct">Percent of IV</option>
+              </select>
+            </label>
+            <label className={labLabel}>
+              Shift amount
+              <input
+                aria-label="Vol shift amount"
+                type="number"
+                step="1"
+                value={String(lab.assumptions.volShift?.amount ?? 0)}
+                onChange={(event) => {
+                  const amount = Number(event.target.value);
+                  if (!Number.isFinite(amount)) return;
+                  edit({
+                    kind: "setAssumptions",
+                    patch: { volShift: { mode: lab.assumptions.volShift?.mode ?? "points", amount } },
+                  });
+                }}
+                className={`mt-1 block w-24 px-2 py-1.5 text-sm tabular-nums ${labControl}`}
+              />
+              {describeVolShift(lab.assumptions.volShift) ? (
+                <span className="mt-1 block text-[11px] text-amber-200">{describeVolShift(lab.assumptions.volShift)}</span>
+              ) : null}
             </label>
             <label className={labLabel}>
               IV source
@@ -538,7 +582,9 @@ export function StrategyLabPage() {
             onEdit={edit}
           />
 
-          <ScenarioBar lab={lab} symbol={chain.symbol} evaluation={evaluation} onRestore={replace} />
+          <ScenarioBar lab={lab} symbol={chain.symbol} chain={chain} evaluation={evaluation} onRestore={replace} />
+
+          <HeldPositions symbol={chain.symbol} masked={privacy.masked} full={lab.structures.length >= LAB_LIMITS.structures} onImport={edit} />
 
           {evaluation.issues.length > 0 ? (
             <ul className="space-y-1 text-sm text-amber-800 dark:text-amber-200">

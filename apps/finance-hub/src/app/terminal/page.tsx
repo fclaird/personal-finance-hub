@@ -1,6 +1,6 @@
 "use client";
 
-import { CARD_GRID, PAGE_FRAME } from "@/app/components/pageFrame";
+import { PAGE_FRAME } from "@/app/components/pageFrame";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Line, LineChart, ResponsiveContainer } from "recharts";
@@ -1129,7 +1129,7 @@ export default function TerminalPage() {
                   Contracts from <span className="font-mono">TERMINAL_FUTURES_SYMBOLS</span>. ES, NQ, and the other
                   indexes sit on Quick glance.
                 </div>
-                <div className={`mt-3 ${CARD_GRID}`}>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {futuresItems.map((row) => {
                         const last = row.quote.last ?? row.quote.mark;
                         const pctPts = row.quote.changePercent == null ? null : row.quote.changePercent * 100;
@@ -1182,6 +1182,7 @@ export default function TerminalPage() {
             children: (
         <DraggableTileLayout
           storageKey="fh.terminal.watchlist.tiles.v1"
+          className="flex w-full min-w-0 flex-col gap-4"
           hint={null}
           defaultOrder={["watchlist-controls", "heatmap", "treemap", "news", "quotes-table", "market-sidebar"]}
           tiles={{

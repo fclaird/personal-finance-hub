@@ -1,6 +1,6 @@
 "use client";
 
-import { PAGE_FRAME, STAT_GRID } from "@/app/components/pageFrame";
+import { PAGE_FRAME } from "@/app/components/pageFrame";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
@@ -236,7 +236,7 @@ function ReportsPageInner() {
 
       {metrics ? (
         <>
-          <div className={STAT_GRID}>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <MetricCard
               title="Net portfolio balance"
               value={usd2Masked(metrics.netBalance, privacy.masked)}

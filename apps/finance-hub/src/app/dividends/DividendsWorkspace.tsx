@@ -470,7 +470,7 @@ export function DividendsWorkspace() {
               {banner.totalEquitySymbolCount} equity/fund total
             </p>
           </div>
-          <div className="mt-5 grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-4 [&>*]:min-w-0">
+          <div className="mt-5 grid gap-4 sm:grid-cols-3">
             <div className="rounded-xl border border-zinc-200 bg-white/60 p-4 dark:border-white/10 dark:bg-white/5">
               <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
                 Dividend share of book

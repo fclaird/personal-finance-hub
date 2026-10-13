@@ -12,6 +12,7 @@ import {
   type SpreadCandidate,
 } from "@/lib/strategyLab/callSpreadOptimizer";
 import { panView, zoomAroundCursor, type ChartPoint, type ChartView } from "@/lib/strategyLab/chartView";
+import { seriesReactKey } from "@/lib/strategyLab/displayNames";
 import { LAB_PALETTE, seriesColor } from "@/lib/strategyLab/palette";
 import { CHART_ENGAGE_HINT, CHART_SIZE_HEIGHT, type ChartSize } from "@/app/components/strategyLab/StrategyPlot";
 
@@ -280,8 +281,8 @@ export function OptimizerDeltaChart({
                   return (
                     <div className="rounded-md border border-zinc-500 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-100">
                       <div>Spot {typeof price === "number" ? price.toFixed(2) : ""}</div>
-                      {ordered.map((item) => (
-                        <div key={String(item.name)} style={{ color: item.color }}>
+                      {ordered.map((item, index) => (
+                        <div key={seriesReactKey(item, index)} style={{ color: item.color }}>
                           {item.name} {typeof item.value === "number" ? item.value.toFixed(1) : ""}
                         </div>
                       ))}
