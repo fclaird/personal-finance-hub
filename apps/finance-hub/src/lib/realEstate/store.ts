@@ -374,13 +374,29 @@ export function upsertLoanPayments(db: Database.Database, propertyId: string, pa
 }
 
 export function updateLoanPayment(db: Database.Database, id: string, payment: PaymentWrite, now = new Date()): void {
-  const existing = db.prepare(`SELECT loan_id AS loanId FROM real_estate_loan_payments WHERE id = ?`).get(id) as { loanId: string } | undefined;
+  const existing = db
+    .prepare(
+      `SELECT loan_id AS loanId, principal, interest, escrow, extra_principal AS extraPrincipal,
+              balance_after AS balanceAfter, split_source AS splitSource
+       FROM real_estate_loan_payments WHERE id = ?`,
+    )
+    .get(id) as
+    | {
+        loanId: string;
+        principal: number | null;
+        interest: number | null;
+        escrow: number | null;
+        extraPrincipal: number | null;
+        balanceAfter: number | null;
+        splitSource: string;
+      }
+    | undefined;
   if (!existing) throw new Error("Payment not found");
   const clash = db
     .prepare(`SELECT id FROM real_estate_loan_payments WHERE loan_id = ? AND paid_on = ? AND id <> ?`)
     .get(existing.loanId, payment.paidOn, id) as { id: string } | undefined;
   if (clash) throw new Error("A payment is already logged on that date");
-  const splitSource: SplitSource = payment.principal != null && payment.interest != null ? "statement" : "computed";
+  const splitSource = splitSourceForUpdate(payment, existing);
   if (splitSource === "computed" && !loadMortgageTerms(db, existing.loanId)) {
     throw new Error("Enter original principal, rate, term, first payment date, and the monthly principal and interest before a total-only payment can be split");
   }
@@ -449,6 +465,39 @@ function writePayments(db: Database.Database, loanId: string, payments: PaymentW
   });
   tx();
   return ids;
+}
+
+function moneySame(left: number | null | undefined, right: number | null | undefined): boolean {
+  if (left == null && right == null) return true;
+  if (left == null || right == null) return false;
+  return Math.abs(left - right) < 0.005;
+}
+
+/**
+ * The edit form round-trips the computed principal, interest, and extra.
+ * Those echoed figures are not a statement. Keep the row computed so a corrected
+ * total is split again. A component the user actually changed locks the statement split.
+ */
+function splitSourceForUpdate(
+  payment: PaymentWrite,
+  existing: {
+    splitSource: string;
+    principal: number | null;
+    interest: number | null;
+    escrow: number | null;
+    extraPrincipal: number | null;
+    balanceAfter: number | null;
+  },
+): SplitSource {
+  if (payment.principal == null || payment.interest == null) return "computed";
+  if (existing.splitSource !== "computed") return "statement";
+  const echoed =
+    moneySame(payment.principal, existing.principal) &&
+    moneySame(payment.interest, existing.interest) &&
+    moneySame(payment.escrow, existing.escrow) &&
+    moneySame(payment.extraPrincipal ?? 0, existing.extraPrincipal ?? 0) &&
+    moneySame(payment.balanceAfter, existing.balanceAfter);
+  return echoed ? "computed" : "statement";
 }
 
 function paymentParams(id: string, loanId: string, payment: PaymentWrite, splitSource: SplitSource, now: Date) {
