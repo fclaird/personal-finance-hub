@@ -5,6 +5,7 @@ import { isoDate, makeOptionChain, type ChainDraft, type DraftContract, type Opt
 import { parseCboeChain } from "@/lib/optionChain/internal/cboeWire";
 import { parseSchwabChain } from "@/lib/optionChain/internal/schwabWire";
 import { csvField, entryTableCsv, evaluationCubeCsv } from "@/lib/strategyLab/exportCsv";
+import { expiryRisk } from "@/lib/strategyLab/internal/pricing";
 import { createLab, editLab, evaluateLab, expiryPnlAtSpot, type PricedStructure } from "@/lib/strategyLab/lab";
 import {
   parseLibrary,
@@ -97,6 +98,46 @@ describe("phase 2 templates", () => {
         ["C", 160, -1],
       ],
     );
+  });
+
+  it("reports the upside breakeven past the last strike", () => {
+    const longCall = expiryRisk([{ right: "C", strike: 150, ratio: 1 }], 1555, 140);
+    assert.deepEqual(longCall.breakevens, [165.55]);
+    assert.equal(longCall.maxLoss, 1555);
+    assert.equal(longCall.maxGain, "unbounded");
+
+    const synthetic = expiryRisk(
+      [
+        { right: "C", strike: 140, ratio: 1 },
+        { right: "P", strike: 140, ratio: -1 },
+      ],
+      500,
+      140,
+    );
+    assert.deepEqual(synthetic.breakevens, [145]);
+    assert.equal(synthetic.maxLoss, 14_500);
+
+    const strangle = expiryRisk(
+      [
+        { right: "P", strike: 120, ratio: -1 },
+        { right: "C", strike: 160, ratio: -1 },
+      ],
+      -400,
+      140,
+    );
+    assert.deepEqual(strangle.breakevens, [116, 164]);
+    assert.equal(strangle.maxLoss, "unbounded");
+
+    const debitSpread = expiryRisk(
+      [
+        { right: "C", strike: 150, ratio: 1 },
+        { right: "C", strike: 210, ratio: -1 },
+      ],
+      1555,
+      140,
+    );
+    assert.deepEqual(debitSpread.breakevens, [165.55]);
+    assert.equal(debitSpread.maxGain, 4445);
   });
 
   it("sizes the synthetic from the loss at spot 0 and waits on the strangle", () => {

@@ -186,7 +186,14 @@ export function expiryRisk(
       breakevens.push(x0 + (x1 - x0) * t);
     }
   }
-  if (Math.abs(pnls[pnls.length - 1]!) < 1e-6 && knots.length) breakevens.push(knots[knots.length - 1]!);
+  const yLast = pnls[pnls.length - 1]!;
+  if (Math.abs(yLast) < 1e-6 && knots.length) breakevens.push(knots[knots.length - 1]!);
+  else if (hi > 0 && Math.abs(slopeAbove) > 1e-6) {
+    // Payoff is linear past the last strike. A long call, synthetic, or the
+    // call wing of a short strangle crosses zero on that ray, not between knots.
+    const beyond = hi - yLast / slopeAbove;
+    if (beyond > hi + 1e-4) breakevens.push(beyond);
+  }
   const unique = [...new Set(breakevens.map((b) => Math.round(b * 100) / 100))].sort((a, b) => a - b);
   const intrinsicNow = expiryValue(legs, spot);
   return {
