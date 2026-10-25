@@ -62,7 +62,23 @@ export type SpreadCandidate = {
   readonly deltaAtShortExpiry: number;
   readonly scores: Readonly<Record<ScoreId, number>>;
   readonly iv: number;
+  /** True for the spread the user picked. Scan rows are never selected. */
+  readonly selected: boolean;
+  /** How this pair sits relative to the picked spread. Scan rows are "scan". */
+  readonly variation: "scan" | "selected" | "shift" | "long" | "short";
+  /** Listed-strike steps. Positive shift moves both legs up. Positive long/short moves that strike up. */
+  readonly variationSteps: number;
 };
+
+export type SpreadVariation = {
+  readonly longStrike: number;
+  readonly shortStrike: number;
+  readonly kind: "selected" | "shift" | "long" | "short";
+  readonly steps: number;
+};
+
+/** How many listed strikes to step when building a neighborhood around a picked spread. */
+export const VARIATION_REACH = 2;
 
 export type SpreadScan = {
   readonly expiry: IsoDate;
@@ -132,6 +148,108 @@ export function rankSpreads(rows: readonly SpreadCandidate[], score: ScoreId): S
   return [...rows].sort(
     (a, b) => b.scores[score] - a.scores[score] || a.longStrike - b.longStrike || a.shortStrike - b.shortStrike,
   );
+}
+
+/** The picked spread stays first. The rest keep the score order. */
+export function pinSelected(rows: readonly SpreadCandidate[]): SpreadCandidate[] {
+  const selected = rows.filter((row) => row.selected);
+  if (selected.length === 0) return [...rows];
+  return [...selected, ...rows.filter((row) => !row.selected)];
+}
+
+/**
+ * Neighborhood of a listed call debit spread.
+ * Shifts move both strikes by the same number of listed strikes.
+ * Long and short steps widen or narrow the width by moving one strike.
+ * The picked pair is first and is the only `selected` row.
+ */
+export function callSpreadVariations(
+  strikes: readonly number[],
+  longStrike: number,
+  shortStrike: number,
+  reach = VARIATION_REACH,
+): SpreadVariation[] {
+  const listed = [...new Set(strikes)].sort((a, b) => a - b);
+  const longIndex = listed.findIndex((strike) => Math.abs(strike - longStrike) < 1e-6);
+  const shortIndex = listed.findIndex((strike) => Math.abs(strike - shortStrike) < 1e-6);
+  if (longIndex < 0 || shortIndex <= longIndex) return [];
+  const out: SpreadVariation[] = [
+    { longStrike: listed[longIndex]!, shortStrike: listed[shortIndex]!, kind: "selected", steps: 0 },
+  ];
+  const seen = new Set([`${listed[longIndex]}|${listed[shortIndex]}`]);
+  const add = (longAt: number, shortAt: number, kind: SpreadVariation["kind"], steps: number) => {
+    if (longAt < 0 || shortAt < 0 || longAt >= listed.length || shortAt >= listed.length || !(shortAt > longAt)) return;
+    const key = `${listed[longAt]}|${listed[shortAt]}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ longStrike: listed[longAt]!, shortStrike: listed[shortAt]!, kind, steps });
+  };
+  const span = Math.max(1, Math.floor(reach));
+  for (let step = -span; step <= span; step++) {
+    if (step === 0) continue;
+    add(longIndex + step, shortIndex + step, "shift", step);
+  }
+  for (let step = 1; step <= span; step++) {
+    add(longIndex, shortIndex + step, "short", step);
+    add(longIndex, shortIndex - step, "short", -step);
+    add(longIndex - step, shortIndex, "long", -step);
+    add(longIndex + step, shortIndex, "long", step);
+  }
+  return out;
+}
+
+export function variationCaption(kind: SpreadCandidate["variation"], steps: number): string {
+  if (kind === "scan") return "";
+  if (kind === "selected") return "Selected";
+  const signed = steps > 0 ? `+${steps}` : String(steps);
+  if (kind === "shift") return `Both strikes ${signed}`;
+  if (kind === "long") return `Long strike ${signed}`;
+  return `Short strike ${signed}`;
+}
+
+/**
+ * Price the picked spread and the strikes stepped around it.
+ * The pick is kept whenever it has a debit, even if the liquidity filters would drop it.
+ */
+export function scanAnchoredCallSpreads(input: {
+  readonly chain: OptionChain;
+  readonly expiry: IsoDate;
+  readonly longStrike: number;
+  readonly shortStrike: number;
+  readonly minOpenInterest: number;
+  readonly maxBidAsk: number | null;
+  readonly targetSpot: number;
+  readonly horizon: OptimizerHorizonId;
+  readonly reach?: number;
+}): SpreadScan {
+  const iv = underlyingModelIv(input.chain);
+  const years = calendarDaysBetween(input.chain.tradeDate, input.expiry) / 365;
+  if (iv == null || !(years > 0)) return { expiry: input.expiry, iv, years, rows: [], skipped: 0 };
+  const strikes = listedStrikes(input.chain, input.expiry, "C");
+  const variations = callSpreadVariations(strikes, input.longStrike, input.shortStrike, input.reach ?? VARIATION_REACH);
+  const rows: SpreadCandidate[] = [];
+  let skipped = 0;
+  for (const variation of variations) {
+    const relaxed = variation.kind === "selected";
+    const row = pricePair(
+      relaxed ? { ...input, minOpenInterest: 0, maxBidAsk: null } : input,
+      variation.longStrike,
+      variation.shortStrike,
+      iv,
+      years,
+      {
+        selected: variation.kind === "selected",
+        variation: variation.kind,
+        variationSteps: variation.steps,
+      },
+    );
+    if (!row) {
+      skipped += 1;
+      continue;
+    }
+    rows.push(row);
+  }
+  return { expiry: input.expiry, iv, years, rows, skipped };
 }
 
 export function yearsRemaining(fullYears: number, horizon: OptimizerHorizonId): number {
@@ -222,6 +340,11 @@ function pricePair(
   shortStrike: number,
   iv: number,
   years: number,
+  mark: { readonly selected: boolean; readonly variation: SpreadCandidate["variation"]; readonly variationSteps: number } = {
+    selected: false,
+    variation: "scan",
+    variationSteps: 0,
+  },
 ): SpreadCandidate | null {
   const longQuote = findQuote(input.chain, input.expiry, "C", longStrike);
   const shortQuote = findQuote(input.chain, input.expiry, "C", shortStrike);
@@ -300,6 +423,9 @@ function pricePair(
       probability: pop,
     },
     iv,
+    selected: mark.selected,
+    variation: mark.variation,
+    variationSteps: mark.variationSteps,
   };
 }
 

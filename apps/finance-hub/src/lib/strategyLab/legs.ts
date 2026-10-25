@@ -27,8 +27,11 @@ export type Leg = {
   readonly right: OptionRight | null;
 };
 
+/** Hand-built cards stay small. A held book can be the whole account. */
 export const LEG_CAP = 8;
-export const OPTION_QTY_CAP = 100;
+export const HELD_LEG_CAP = 2_000;
+/** Contracts on one line. Large enough for a real Schwab lot. */
+export const OPTION_QTY_CAP = 1_000_000;
 
 const EMPTY_ENTRY: LegEntry = { kind: "mid", price: null };
 

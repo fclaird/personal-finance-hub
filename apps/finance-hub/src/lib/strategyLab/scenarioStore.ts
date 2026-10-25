@@ -1,6 +1,6 @@
 import { isoDate, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
 import { LAB_LIMITS, type Basis, type EntryBasis, type HorizonSpec, type LabScenario, type LegSpec, type SpotWindow, type StructureSpec, type StructureSlot } from "@/lib/strategyLab/lab";
-import { assignLegIds, legEntry, parseStoredLeg, stockFromSidecar } from "@/lib/strategyLab/legs";
+import { assignLegIds, HELD_LEG_CAP, legEntry, OPTION_QTY_CAP, parseStoredLeg, stockFromSidecar } from "@/lib/strategyLab/legs";
 import { MODEL_DIVIDEND_YIELD, MODEL_RATE } from "@/lib/strategyLab/modelAssumptions";
 import type { Assumptions } from "@/lib/strategyLab/internal/pricing";
 import type { StrikeTarget, TemplateRequest } from "@/lib/strategyLab/internal/templates";
@@ -48,7 +48,7 @@ function parseTarget(raw: unknown): StrikeTarget | null {
 
 function parseRatio(raw: unknown): number | null {
   const ratio = finite(raw);
-  if (ratio == null || !Number.isInteger(ratio) || ratio === 0 || Math.abs(ratio) > 100) return null;
+  if (ratio == null || !Number.isInteger(ratio) || ratio === 0 || Math.abs(ratio) > OPTION_QTY_CAP) return null;
   return ratio;
 }
 
@@ -121,7 +121,7 @@ function parseTemplate(raw: unknown): TemplateRequest | null {
     return right && front && frontStrike && backStrike ? { template, right, front, frontStrike, backStrike } : null;
   }
   if (template === "custom") {
-    if (!Array.isArray(raw.legs) || raw.legs.length < 1 || raw.legs.length > 8) return null;
+    if (!Array.isArray(raw.legs) || raw.legs.length < 1 || raw.legs.length > HELD_LEG_CAP) return null;
     const legs: { right: OptionRight; strike: number; ratio: number }[] = [];
     for (const leg of raw.legs) {
       if (!isRecord(leg)) return null;
@@ -183,7 +183,7 @@ function parseStructure(raw: unknown, seenSlots: Set<number>, seenIds: Set<strin
     snappedFrom = dateOf(raw.snappedFrom);
     if (!snappedFrom) return null;
   }
-  if (!Array.isArray(raw.legs) || raw.legs.length > LAB_LIMITS.legs) return null;
+  if (!Array.isArray(raw.legs) || raw.legs.length > HELD_LEG_CAP) return null;
   const entry = parseEntry(raw.entry);
   if (!entry) return null;
   const legs: LegSpec[] = [];
@@ -194,7 +194,7 @@ function parseStructure(raw: unknown, seenSlots: Set<number>, seenIds: Set<strin
   }
   if (!legs.some((leg) => leg.instrument === "stock")) {
     const stock = stockFromSidecar(raw.stock);
-    if (stock && legs.length < LAB_LIMITS.legs) legs.push(stock);
+    if (stock && legs.length < HELD_LEG_CAP) legs.push(stock);
   }
   let capitalOverride: number | null = null;
   if (raw.capitalOverride != null) {

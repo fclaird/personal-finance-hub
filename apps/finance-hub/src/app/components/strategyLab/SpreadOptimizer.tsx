@@ -4,19 +4,24 @@ import { useMemo, useState } from "react";
 
 import { OptimizerDeltaChart } from "@/app/components/strategyLab/OptimizerDeltaChart";
 import { formatSignedUsd2, formatUsd2 } from "@/lib/format";
-import { formatExpiryLabel, type IsoDate, type OptionChain } from "@/lib/optionChain/chain";
+import { formatExpiryLabel, listedStrikes, type IsoDate, type OptionChain } from "@/lib/optionChain/chain";
 import {
   OPTIMIZER_HORIZONS,
   SCORE_LABEL,
   expiryForDuration,
   parseWidths,
+  pinSelected,
   rankSpreads,
+  scanAnchoredCallSpreads,
   scanCallSpreads,
+  variationCaption,
   type DurationId,
   type OptimizerHorizonId,
   type ScoreId,
   type SpreadCandidate,
 } from "@/lib/strategyLab/callSpreadOptimizer";
+import type { DeltaChartSource } from "@/lib/strategyLab/deltaSource";
+import type { LabEvaluation } from "@/lib/strategyLab/lab";
 import { modelAssumptionLabel, underlyingModelIv } from "@/lib/strategyLab/modelAssumptions";
 
 const COMPARE_LIMIT = 4;
@@ -33,6 +38,8 @@ export function SpreadOptimizer({
   structureCount,
   structureLimit,
   masked,
+  evaluation,
+  plottedIds,
   onAdd,
   onRemove,
 }: {
@@ -40,6 +47,8 @@ export function SpreadOptimizer({
   structureCount: number;
   structureLimit: number;
   masked: boolean;
+  evaluation: LabEvaluation | null;
+  plottedIds: readonly string[] | null;
   onAdd: (row: SpreadCandidate) => boolean;
   onRemove: (key: string) => void;
 }) {
@@ -52,30 +61,44 @@ export function SpreadOptimizer({
   const [minOi, setMinOi] = useState("0");
   const [maxSpread, setMaxSpread] = useState("");
   const [picked, setPicked] = useState<readonly string[]>([]);
+  const [pickExpiry, setPickExpiry] = useState<IsoDate | "">(chain.expiries.at(-1)?.date ?? "");
+  const [pickLong, setPickLong] = useState("");
+  const [pickShort, setPickShort] = useState("");
+  const [anchor, setAnchor] = useState<{ expiry: IsoDate; longStrike: number; shortStrike: number } | null>(null);
+  const [deltaSource, setDeltaSource] = useState<DeltaChartSource>("optimizer");
 
   const iv = useMemo(() => underlyingModelIv(chain), [chain]);
-  const expiry = expiryForDuration(chain, duration, custom || null);
+  const expiry = anchor?.expiry ?? expiryForDuration(chain, duration, custom || null);
   const targetSpot = Number(targetText);
+  const pickStrikes = useMemo(() => {
+    if (!pickExpiry) return [];
+    return listedStrikes(chain, pickExpiry, "C");
+  }, [chain, pickExpiry]);
+  const longStrike = Number(pickLong);
+  const shortChoices = pickStrikes.filter((strike) => strike > longStrike);
 
   const scan = useMemo(() => {
     if (!expiry || !(targetSpot > 0)) return null;
     const oi = Number(minOi);
     const spreadCap = maxSpread.trim() === "" ? null : Number(maxSpread) / 100;
-    return scanCallSpreads({
+    const filters = {
       chain,
       expiry,
-      widths: parseWidths(widthText),
       minOpenInterest: Number.isFinite(oi) && oi > 0 ? oi : 0,
       maxBidAsk: spreadCap != null && Number.isFinite(spreadCap) && spreadCap > 0 ? spreadCap : null,
       targetSpot,
       horizon,
-    });
-  }, [chain, expiry, widthText, minOi, maxSpread, targetSpot, horizon]);
+    };
+    if (anchor && anchor.expiry === expiry) {
+      return scanAnchoredCallSpreads({ ...filters, longStrike: anchor.longStrike, shortStrike: anchor.shortStrike });
+    }
+    return scanCallSpreads({ ...filters, widths: parseWidths(widthText) });
+  }, [chain, expiry, widthText, minOi, maxSpread, targetSpot, horizon, anchor]);
 
-  const ranked = useMemo(() => (scan ? rankSpreads(scan.rows, score) : []), [scan, score]);
+  const ranked = useMemo(() => (scan ? pinSelected(rankSpreads(scan.rows, score)) : []), [scan, score]);
   const byKey = useMemo(() => new Map(ranked.map((row) => [row.key, row])), [ranked]);
   const chosen = picked.map((key) => byKey.get(key)).filter((row): row is SpreadCandidate => row != null);
-  const chartRows = chosen.length > 0 ? chosen : ranked.slice(0, COMPARE_LIMIT);
+  const chartRows = anchor ? ranked : chosen.length > 0 ? chosen : ranked.slice(0, COMPARE_LIMIT);
   const longs = [...new Set(ranked.map((row) => row.longStrike))].sort((a, b) => a - b);
   const shorts = [...new Set(ranked.map((row) => row.shortStrike))].sort((a, b) => a - b);
   const metricValues = ranked.map((row) => row.scores[score]);
@@ -99,6 +122,97 @@ export function SpreadOptimizer({
       <p className="mt-1 max-w-3xl text-xs text-zinc-300">
         Ranks listed call debit spreads on one vol. {modelAssumptionLabel(iv)} Debits are quoted mids. Nothing here places an order.
       </p>
+
+      <div className="mt-3 rounded-lg border border-zinc-400 bg-zinc-900 p-3" data-manual-spread="">
+        <h3 className="text-xs font-semibold text-zinc-100">Start from a spread</h3>
+        <p className="mt-1 text-xs text-zinc-300">
+          Pick the long strike, short strike, and expiry. The table and the delta chart then show that spread and the listed strikes stepped around it.
+        </p>
+        <div className="mt-2 flex min-w-0 flex-wrap items-end gap-2">
+          <label className="text-xs text-zinc-300">
+            Expiry
+            <select
+              aria-label="Picked spread expiry"
+              value={pickExpiry}
+              onChange={(event) => {
+                setPickExpiry(event.target.value as IsoDate);
+                setPickLong("");
+                setPickShort("");
+              }}
+              className="mt-1 block max-w-full rounded border border-zinc-400 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-50"
+            >
+              {chain.expiries.map((item) => (
+                <option key={item.date} value={item.date}>
+                  {formatExpiryLabel(item.date)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-zinc-300">
+            Long strike
+            <select
+              aria-label="Picked long strike"
+              value={pickLong}
+              onChange={(event) => {
+                setPickLong(event.target.value);
+                if (Number(pickShort) <= Number(event.target.value)) setPickShort("");
+              }}
+              className="mt-1 block rounded border border-zinc-400 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-50"
+            >
+              <option value="">Choose</option>
+              {pickStrikes.map((strike) => (
+                <option key={strike} value={strike}>
+                  {strikeText(strike)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-zinc-300">
+            Short strike
+            <select
+              aria-label="Picked short strike"
+              value={pickShort}
+              onChange={(event) => setPickShort(event.target.value)}
+              className="mt-1 block rounded border border-zinc-400 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-50"
+            >
+              <option value="">Choose</option>
+              {shortChoices.map((strike) => (
+                <option key={strike} value={strike}>
+                  {strikeText(strike)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            disabled={!(longStrike > 0) || !(Number(pickShort) > longStrike)}
+            onClick={() => {
+              if (!pickExpiry || !(longStrike > 0) || !(Number(pickShort) > longStrike)) return;
+              setAnchor({ expiry: pickExpiry, longStrike, shortStrike: Number(pickShort) });
+              setPicked([]);
+            }}
+            className="rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-950 disabled:opacity-40"
+          >
+            Use this spread
+          </button>
+          {anchor ? (
+            <button
+              type="button"
+              onClick={() => setAnchor(null)}
+              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-semibold text-zinc-100"
+            >
+              Clear pick
+            </button>
+          ) : null}
+        </div>
+        {anchor ? (
+          <p className="mt-2 text-xs font-semibold text-amber-200" data-anchor-label="">
+            Selected {strikeText(anchor.longStrike)}/{strikeText(anchor.shortStrike)} · {formatExpiryLabel(anchor.expiry)}. Nearby rows shift both strikes or change the width.
+          </p>
+        ) : (
+          <p className="mt-2 text-xs text-zinc-300">No spread picked. The scan below uses duration and width.</p>
+        )}
+      </div>
 
       <div className="mt-3 flex min-w-0 flex-wrap items-end gap-2">
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Duration">
@@ -242,7 +356,11 @@ export function SpreadOptimizer({
                 {ranked.slice(0, 40).map((row, index) => {
                   const on = picked.includes(row.key);
                   return (
-                    <tr key={row.key} className="border-t border-zinc-700">
+                    <tr
+                      key={row.key}
+                      data-selected={row.selected ? "true" : "false"}
+                      className={row.selected ? "border-t border-amber-300 bg-zinc-800" : "border-t border-zinc-700"}
+                    >
                       <td className="py-1.5 pr-3">
                         <input
                           type="checkbox"
@@ -251,8 +369,14 @@ export function SpreadOptimizer({
                           onChange={() => toggle(row)}
                         />
                       </td>
-                      <td className="py-1.5 pr-3 font-semibold" style={{ color: seriesHint(index) }}>
+                      <td className="py-1.5 pr-3 font-semibold" style={{ color: row.selected ? "#fbbf24" : seriesHint(index) }}>
                         {strikeText(row.longStrike)}/{strikeText(row.shortStrike)}
+                        {row.selected ? (
+                          <span className="ml-2 rounded bg-amber-300 px-1.5 py-0.5 text-[10px] font-bold text-zinc-950">Selected</span>
+                        ) : null}
+                        {anchor && !row.selected ? (
+                          <span className="ml-2 font-medium text-zinc-300">{variationCaption(row.variation, row.variationSteps)}</span>
+                        ) : null}
                       </td>
                       <td className="py-1.5 pr-3 tabular-nums">{money(row.debit, masked)}</td>
                       <td className="py-1.5 pr-3 tabular-nums">{signed(row.maxProfit, masked)}</td>
@@ -311,7 +435,7 @@ export function SpreadOptimizer({
                             aria-pressed={picked.includes(row.key)}
                             aria-label={`Load ${strikeText(longStrike)} ${strikeText(shortStrike)}`}
                             onClick={() => toggle(row)}
-                            className="block min-w-14 rounded px-1.5 py-1 tabular-nums text-zinc-950"
+                            className={`block min-w-14 rounded px-1.5 py-1 tabular-nums text-zinc-950 ${row.selected ? "ring-2 ring-amber-200" : ""}`}
                             style={{ backgroundColor: heat(t) }}
                           >
                             {heatLabel(row, score)}
@@ -325,10 +449,20 @@ export function SpreadOptimizer({
             </table>
           </div>
 
-          <h3 className="mb-2 mt-4 text-xs font-semibold text-zinc-200">Effective delta as the underlying moves</h3>
-          <OptimizerDeltaChart rows={chartRows} spot={chain.spot} years={scan?.years ?? 0} preview={chosen.length === 0} />
         </>
       )}
+      <h3 className="mb-2 mt-4 text-xs font-semibold text-zinc-200">Effective delta as the underlying moves</h3>
+      <OptimizerDeltaChart
+        rows={chartRows}
+        spot={chain.spot}
+        years={scan?.years ?? 0}
+        preview={!anchor && chosen.length === 0}
+        anchored={anchor != null}
+        source={deltaSource}
+        onSource={setDeltaSource}
+        evaluation={evaluation}
+        plottedIds={plottedIds}
+      />
     </section>
   );
 }

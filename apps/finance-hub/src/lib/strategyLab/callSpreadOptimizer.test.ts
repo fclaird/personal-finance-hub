@@ -12,12 +12,16 @@ import {
   type OptionChain,
 } from "@/lib/optionChain/chain";
 import {
+  callSpreadVariations,
   deltaReadout,
   expiryForDuration,
   parseWidths,
+  pinSelected,
   rankSpreads,
+  scanAnchoredCallSpreads,
   scanCallSpreads,
   spreadShareDelta,
+  variationCaption,
 } from "@/lib/strategyLab/callSpreadOptimizer";
 import { MODEL_DIVIDEND_YIELD, MODEL_RATE, modelAssumptionLabel, underlyingModelIv } from "@/lib/strategyLab/modelAssumptions";
 
@@ -283,5 +287,87 @@ describe("call debit spread scan", () => {
     assert.equal(priced.legs[0]?.iv, row.iv);
     assert.equal(priced.legs[1]?.iv, row.iv);
     assert.equal(priced.spec.label, "100/110");
+  });
+
+  it("leaves a duration scan unmarked when no spread is picked", () => {
+    const scan = scanCallSpreads({
+      chain: quoted(),
+      expiry,
+      widths: [10],
+      minOpenInterest: 0,
+      maxBidAsk: null,
+      targetSpot: 110,
+      horizon: "expiry",
+    });
+    assert.ok(scan.rows.length > 0);
+    assert.ok(scan.rows.every((row) => row.selected === false && row.variation === "scan"));
+  });
+});
+
+describe("call debit spread variations", () => {
+  const strikes = [90, 100, 110, 120, 130, 140, 150];
+
+  it("steps both legs and widens or narrows from the picked strikes", () => {
+    const rows = callSpreadVariations(strikes, 110, 130, 2);
+    const key = (longStrike: number, shortStrike: number) => `${longStrike}/${shortStrike}`;
+    const byKey = new Map(rows.map((row) => [key(row.longStrike, row.shortStrike), row]));
+    assert.equal(byKey.get("110/130")?.kind, "selected");
+    assert.equal(byKey.get("100/120")?.kind, "shift");
+    assert.equal(byKey.get("100/120")?.steps, -1);
+    assert.equal(byKey.get("120/140")?.kind, "shift");
+    assert.equal(byKey.get("90/110")?.steps, -2);
+    assert.equal(byKey.get("130/150")?.steps, 2);
+    assert.equal(byKey.get("110/140")?.kind, "short");
+    assert.equal(byKey.get("110/150")?.kind, "short");
+    assert.equal(byKey.get("110/120")?.kind, "short");
+    assert.equal(byKey.get("110/120")?.steps, -1);
+    assert.equal(byKey.get("100/130")?.kind, "long");
+    assert.equal(byKey.get("90/130")?.kind, "long");
+    assert.equal(byKey.get("120/130")?.kind, "long");
+    assert.equal(byKey.get("140/160"), undefined);
+    assert.equal(byKey.get("110/110"), undefined);
+    assert.equal(new Set(rows.map((row) => key(row.longStrike, row.shortStrike))).size, rows.length);
+    assert.equal(rows.filter((row) => row.kind === "selected").length, 1);
+    assert.equal(variationCaption("shift", -1), "Both strikes -1");
+    assert.equal(variationCaption("short", 2), "Short strike +2");
+    assert.equal(variationCaption("long", -2), "Long strike -2");
+    assert.equal(variationCaption("selected", 0), "Selected");
+  });
+
+  it("prices the picked spread and keeps it first even when a neighbor scores higher", () => {
+    const chain = chainOf(
+      strikes.map((strike, index) => contract(APR, strike, 20 - index, 22 - index, 100)),
+    );
+    const open = scanAnchoredCallSpreads({
+      chain,
+      expiry: isoDate(APR),
+      longStrike: 110,
+      shortStrike: 130,
+      minOpenInterest: 0,
+      maxBidAsk: null,
+      targetSpot: 140,
+      horizon: "expiry",
+    });
+    const picked = open.rows.find((row) => row.longStrike === 110 && row.shortStrike === 130);
+    assert.ok(picked);
+    assert.equal(picked?.selected, true);
+    assert.ok(open.rows.some((row) => row.variation === "shift"));
+    assert.ok(open.rows.some((row) => row.variation === "long" || row.variation === "short"));
+    assert.equal(pinSelected(rankSpreads(open.rows, "return"))[0]?.selected, true);
+    const tight = scanAnchoredCallSpreads({
+      chain,
+      expiry: isoDate(APR),
+      longStrike: 110,
+      shortStrike: 130,
+      minOpenInterest: 10_000,
+      maxBidAsk: 0.01,
+      targetSpot: 140,
+      horizon: "expiry",
+    });
+    assert.deepEqual(
+      tight.rows.map((row) => row.longStrike + "/" + row.shortStrike),
+      ["110/130"],
+    );
+    assert.equal(tight.rows[0]?.selected, true);
   });
 });

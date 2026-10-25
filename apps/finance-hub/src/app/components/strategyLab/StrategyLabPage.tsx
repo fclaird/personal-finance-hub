@@ -8,7 +8,7 @@ import { ChainGrid } from "@/app/components/strategyLab/ChainGrid";
 import { SpreadOptimizer } from "@/app/components/strategyLab/SpreadOptimizer";
 import { LabCharts } from "@/app/components/strategyLab/LabCharts";
 import { ExpirySummary } from "@/app/components/strategyLab/ExpirySummary";
-import { HeldPositions } from "@/app/components/strategyLab/HeldPositions";
+import { HeldPositions, useSchwabPositions } from "@/app/components/strategyLab/HeldPositions";
 import { ScenarioBar } from "@/app/components/strategyLab/ScenarioBar";
 import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
 import { TargetSection } from "@/app/components/strategyLab/TargetBoard";
@@ -188,6 +188,7 @@ function ageOf(iso: string): string {
 
 export function StrategyLabPage() {
   const privacy = usePrivacy();
+  const heldSnapshot = useSchwabPositions();
   const { chain, lab, evaluation, loading, error, hint, load, edit, replace } = useStrategyLab();
   const [symbol, setSymbol] = useState("NOW");
   const [template, setTemplate] = useState<TemplateChoice>("callDebit");
@@ -584,7 +585,14 @@ export function StrategyLabPage() {
 
           <ScenarioBar lab={lab} symbol={chain.symbol} chain={chain} evaluation={evaluation} onRestore={replace} />
 
-          <HeldPositions symbol={chain.symbol} masked={privacy.masked} full={lab.structures.length >= LAB_LIMITS.structures} onImport={edit} />
+          <HeldPositions
+            symbol={chain.symbol}
+            masked={privacy.masked}
+            full={lab.structures.length >= LAB_LIMITS.structures}
+            snapshot={heldSnapshot}
+            nextStructureId={`s${lab.seq}`}
+            onImport={edit}
+          />
 
           {evaluation.issues.length > 0 ? (
             <ul className="space-y-1 text-sm text-amber-800 dark:text-amber-200">
@@ -792,6 +800,8 @@ export function StrategyLabPage() {
             structureCount={lab.structures.length}
             structureLimit={LAB_LIMITS.structures}
             masked={privacy.masked}
+            evaluation={evaluation}
+            plottedIds={deltaPlotted}
             onAdd={addOptimizedSpread}
             onRemove={removeOptimizedSpread}
           />

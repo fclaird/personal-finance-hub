@@ -29,7 +29,7 @@ import {
 
 export type { Assumptions };
 export { describeVolShift };
-import { assignLegIds, legEntry, optionLeg, parityPackageDebit, stockLeg, syntheticShape, type Leg } from "@/lib/strategyLab/legs";
+import { assignLegIds, HELD_LEG_CAP, legEntry, OPTION_QTY_CAP, optionLeg, parityPackageDebit, stockLeg, syntheticShape, type Leg } from "@/lib/strategyLab/legs";
 import { structureDisplayNames } from "@/lib/strategyLab/displayNames";
 import { MODEL_DIVIDEND_YIELD, MODEL_RATE, underlyingModelIv } from "@/lib/strategyLab/modelAssumptions";
 import { catalogRequest, resolveTemplate, TEMPLATE_CATALOG, type TemplateId, type TemplateRequest } from "@/lib/strategyLab/internal/templates";
@@ -552,7 +552,7 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
       if (!Number.isFinite(edit.netPerShare) || edit.legs.length < 1) return lab;
       const stock = edit.stock;
       if (stock && (!Number.isFinite(stock.shares) || stock.shares === 0 || !(stock.averagePrice > 0))) return lab;
-      const ratiosOk = edit.legs.every((leg) => Number.isInteger(leg.ratio) && leg.ratio !== 0 && Math.abs(leg.ratio) <= 100);
+      const ratiosOk = edit.legs.every((leg) => Number.isInteger(leg.ratio) && leg.ratio !== 0 && Math.abs(leg.ratio) <= OPTION_QTY_CAP);
       if (!ratiosOk) return lab;
       const latest = edit.legs.reduce((far, leg) => ((leg.expiry ?? edit.expiry) > far ? (leg.expiry ?? edit.expiry) : far), edit.expiry);
       const listedExpiry = chain.expiries.some((expiry) => expiry.date === latest);
@@ -566,7 +566,7 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
       const reason = !listedExpiry
         ? `${latest} is not on this chain.`
         : `Not listed: ${missing.map((leg) => `${leg.strike} ${leg.right}`).join(", ")}.`;
-      if (edit.legs.length + (stock ? 1 : 0) > LAB_LIMITS.legs) return lab;
+      if (edit.legs.length + (stock ? 1 : 0) > HELD_LEG_CAP) return lab;
       const used = new Set(lab.structures.map((item) => item.slot));
       let slot: number | null = null;
       for (let candidate = 0; candidate < LAB_LIMITS.structures; candidate++) {
