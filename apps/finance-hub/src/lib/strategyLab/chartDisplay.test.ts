@@ -12,6 +12,9 @@ import {
   CHART_MODES,
   combinedDateCurves,
   crossoverCallouts,
+  dateRampColor,
+  displayedCurves,
+  EXPIRY_RAMP_COLOR,
   positiveCrossovers,
   structurePanelCurves,
   defaultChartChrome,
@@ -21,8 +24,8 @@ import {
   rainbowColor,
   readableHorizonIds,
   reconcileChartSelection,
+  selectDate,
   setChartMode,
-  setFocusHorizon,
   setHorizons,
   setStructures,
   toggleStructure,
@@ -134,29 +137,43 @@ describe("chart display selector", () => {
     assert.equal(initial.focusHorizonId, middle!.id);
   });
 
-  it("paints a rainbow for the focus structure and one expiry line for the rest", () => {
+  it("paints every three-month step of the focus structure on a cool-to-warm ramp", () => {
     const curves = visibleCurves(ev, initial);
-    const zebraHorizons = idsOf(initial, ev, zebra.spec.id);
     assert.deepEqual(
-      zebraHorizons,
+      curves.map((curve) => curve.horizonId),
       zebra.curves.map((curve) => curve.horizonId),
     );
-    assert.deepEqual(idsOf(initial, ev, spread.spec.id), [expiry!.id]);
-    const zebraCurves = curves.filter((curve) => curve.structureId === zebra.spec.id);
-    const last = zebraCurves[zebraCurves.length - 1]!;
-    assert.ok(last.width > zebraCurves[0]!.width);
-    assert.notEqual(zebraCurves[0]!.color, last.color);
-    assert.equal(zebraCurves[0]!.dash, undefined);
-    const other = curves.find((curve) => curve.structureId === spread.spec.id);
-    assert.equal(other?.dash, "8 4");
-    assert.match(other?.name ?? "", /expiry/);
+    assert.ok(curves.every((curve) => curve.structureId === zebra.spec.id));
+    assert.equal(curves[0]!.name, "Today");
+    assert.equal(curves[curves.length - 1]!.name, "Expiry");
+    assert.equal(curves[0]!.color, dateRampColor(0));
+    assert.equal(curves[curves.length - 1]!.color, EXPIRY_RAMP_COLOR);
+    assert.ok(curves[curves.length - 1]!.width > curves[0]!.width);
+    assert.equal(curves[0]!.dash, undefined);
+    const colors = curves.map((curve) => curve.color);
+    assert.equal(new Set(colors).size, colors.length);
+    const steps = curves.slice(0, -1).map((curve) => curve.color);
+    for (let i = 1; i < steps.length; i++) assert.notEqual(steps[i - 1], steps[i]);
   });
 
-  it("moves the rainbow to the structure turned on last", () => {
+  it("keeps one color per date after the structure look that used to collapse them", () => {
+    const look = { colorMode: "structure" as const, stroke: "solid" as const, thickness: 3 };
+    const painted = visibleCurves(ev, initial);
+    const collapsed = applyCurveLook(painted, look, ev);
+    assert.ok(painted.length > 1);
+    assert.equal(new Set(collapsed.map((curve) => curve.color)).size, 1);
+    assert.ok(collapsed.every((curve) => curve.dash == null));
+    const shown = displayedCurves(ev, initial, look);
+    assert.equal(new Set(shown.map((curve) => curve.color)).size, shown.length);
+    assert.equal(shown[shown.length - 1]!.color, EXPIRY_RAMP_COLOR);
+    assert.ok(shown[shown.length - 1]!.width > shown[0]!.width);
+  });
+
+  it("moves the waterfall to the structure turned on last", () => {
     const next = toggleStructure(toggleStructure(initial, zebra.spec.id), zebra.spec.id);
     assert.equal(next.focusStructureId, zebra.spec.id);
     assert.equal(idsOf(next, ev, zebra.spec.id).length, zebra.curves.length);
-    assert.deepEqual(idsOf(next, ev, spread.spec.id), [expiry!.id]);
+    assert.deepEqual(idsOf(next, ev, spread.spec.id), []);
     const cleared = setStructures(initial, [spread.spec.id]);
     assert.deepEqual(
       visibleCurves(ev, setChartMode(cleared, "waterfall")).map((curve) => curve.structureId),
@@ -164,64 +181,32 @@ describe("chart display selector", () => {
     );
   });
 
-  it("shows only the quarters that are selected", () => {
-    const selection = setChartMode(setHorizons(initial, [today!.id, expiry!.id]), "quarters");
-    const curves = visibleCurves(ev, selection);
-    assert.ok(curves.every((curve) => curve.horizonId === today!.id || curve.horizonId === expiry!.id));
-    assert.equal(curves.filter((curve) => curve.structureId === zebra.spec.id).length, 2);
-    assert.equal(curves.filter((curve) => curve.structureId === spread.spec.id).length, 2);
-    const one = setStructures(selection, [zebra.spec.id]);
-    const solo = visibleCurves(ev, one);
-    assert.equal(solo.length, 2);
-    assert.notEqual(solo[0]!.color, solo[1]!.color);
-    assert.ok(solo[1]!.width > solo[0]!.width);
-  });
-
-  it("shows expiry curves only", () => {
-    const curves = visibleCurves(ev, setChartMode(initial, "expiry"));
+  it("replaces the date when a second date is picked", () => {
+    const first = setChartMode(initial, "single");
+    assert.equal(first.mode, "single");
+    assert.equal(first.horizonIds.length, 1);
+    assert.equal(first.focusHorizonId, first.horizonIds[0]);
+    const second = selectDate(first, expiry!.id, ev.horizons);
+    assert.deepEqual(second.horizonIds, [expiry!.id]);
+    assert.equal(second.focusHorizonId, expiry!.id);
+    assert.equal(second.horizonIds.length, 1);
+    const curves = visibleCurves(ev, second);
+    assert.ok(curves.length > 0);
+    assert.ok(curves.every((curve) => curve.horizonId === expiry!.id));
+    assert.equal(new Set(curves.map((curve) => curve.horizonId)).size, 1);
+    const replaced = selectDate(second, today!.id, ev.horizons);
+    assert.deepEqual(replaced.horizonIds, [today!.id]);
+    assert.ok(!replaced.horizonIds.includes(expiry!.id));
+    const again = visibleCurves(ev, replaced);
+    assert.ok(again.every((curve) => curve.horizonId === today!.id));
     assert.deepEqual(
-      curves.map((curve) => curve.horizonId),
-      [expiry!.id, expiry!.id],
-    );
-    assert.ok(curves.every((curve) => curve.width >= 4));
-  });
-
-  it("shows the trade-date curves only", () => {
-    const curves = visibleCurves(ev, setChartMode(initial, "today"));
-    assert.deepEqual(
-      curves.map((curve) => curve.horizonId),
-      [today!.id, today!.id],
-    );
-  });
-
-  it("shows today, the chosen date, and expiry", () => {
-    const curves = visibleCurves(ev, setChartMode(setStructures(initial, [zebra.spec.id]), "span"));
-    assert.deepEqual(
-      curves.map((curve) => curve.horizonId),
-      [today!.id, middle!.id, expiry!.id],
-    );
-  });
-
-  it("overlays every selected structure on one date", () => {
-    const curves = visibleCurves(ev, setChartMode(initial, "dateOverlay"));
-    assert.equal(curves.length, 2);
-    assert.ok(curves.every((curve) => curve.horizonId === middle!.id));
-    assert.deepEqual(
-      curves.map((curve) => curve.structureId),
+      again.map((curve) => curve.structureId),
       [zebra.spec.id, spread.spec.id],
     );
   });
 
-  it("clears and restores dates in custom mode", () => {
-    const custom = setChartMode(initial, "custom");
-    assert.equal(visibleCurves(ev, setHorizons(custom, [])).length, 0);
-    const all = visibleCurves(ev, setHorizons(custom, ev.horizons.map((horizon) => horizon.id)));
-    assert.equal(all.length, zebra.curves.length + spread.curves.length);
-    assert.equal(visibleCurves(ev, setStructures(custom, [])).length, 0);
-  });
-
   it("numbers crossover callouts in spot order with readable text", () => {
-    const curves = visibleCurves(ev, setChartMode(initial, "expiry"));
+    const curves = visibleCurves(ev, selectDate(initial, expiry!.id, ev.horizons));
     const callouts = crossoverCallouts(ev, curves);
     const board = ev.expiryBoards.find((item) => item.exact);
     assert.ok(board);
@@ -251,11 +236,6 @@ describe("chart display selector", () => {
     assert.ok(span.max <= axisHi + 1 || span.max < axisHi);
     assert.ok(span.min <= Math.min(...profit.map((hit) => hit.spot)));
     assert.ok(span.max >= Math.max(...profit.map((hit) => hit.spot)));
-    const waterfall = crossoverCallouts(ev, visibleCurves(ev, initial));
-    assert.deepEqual(
-      waterfall.map((callout) => callout.spot),
-      callouts.map((callout) => callout.spot),
-    );
   });
 
   it("keeps a cleared structure cleared until a new one arrives", () => {
@@ -299,13 +279,14 @@ describe("chart display selector", () => {
     assert.ok(everyFourth.includes(horizons[10]!.id));
     assert.deepEqual(applyHorizonPolicy(horizons, { kind: "every", step: 4 }, null).at(-1), horizons[10]!.id);
     const modeIds = CHART_MODES.map((mode) => mode.id as string);
+    assert.deepEqual(modeIds, ["waterfall", "single"]);
+    assert.equal(modeIds.includes("quarters"), false);
+    assert.equal(modeIds.includes("custom"), false);
     assert.equal(modeIds.includes("overlay"), false);
-    assert.equal(modeIds.includes("grid"), false);
-    assert.equal(CHART_MODES.some((mode) => mode.label === "Overlay"), false);
   });
 
-  it("restyles the big chart from thickness, dash, and color", () => {
-    const curves = visibleCurves(ev, setChartMode(initial, "expiry"));
+  it("restyles a single date from thickness, dash, and color", () => {
+    const curves = visibleCurves(ev, selectDate(initial, expiry!.id, ev.horizons));
     const styled = applyCurveLook(curves, { colorMode: "rainbow", stroke: "dashed", thickness: 2 }, ev);
     assert.equal(styled.length, curves.length);
     assert.equal(styled[0]?.width, 3);
@@ -324,6 +305,51 @@ function quarterHorizons(count: number): HorizonView[] {
     structureId: null,
   }));
 }
+
+describe("waterfall date series", () => {
+  it("builds one curve for every three-month step from today through expiry", () => {
+    const built = makeOptionChain(
+      draft([
+        { expiry: "2028-01-21", right: "C", strike: 100, bid: 20, ask: 24, feedIv: null, multiplier: 100, root: null, openInterest: 10, volume: 4 },
+      ]),
+    );
+    if (!built.ok) throw new Error(built.error);
+    const chain = { ...built.chain, spot: 100 };
+    const ev = evaluateLab(
+      editLab(
+        createLab(chain),
+        [
+          { kind: "setAssumptions", patch: { rate: 0.04, dividendYield: 0, ivSource: "mid" } },
+          { kind: "setBasis", basis: { kind: "perPackage" } },
+          { kind: "addStructure", label: "Leap", expiry: isoDate("2028-01-21"), request: { template: "longCall", strike: { by: "strike", strike: 100 } } },
+        ],
+        chain,
+      ),
+      chain,
+    );
+    const steps = ev.horizons.filter((horizon) => !horizon.settlement).map((horizon) => Number(horizon.id.split(":")[1]));
+    assert.deepEqual(steps, [0, 3, 6, 9, 12, 15]);
+    assert.equal(ev.horizons.at(-1)?.settlement, true);
+    const curves = visibleCurves(ev, initialChartSelection(ev));
+    assert.deepEqual(
+      curves.map((curve) => curve.horizonId),
+      ev.horizons.map((horizon) => horizon.id),
+    );
+    assert.deepEqual(
+      curves.map((curve) => curve.name),
+      ["Today", "+3 mo", "+6 mo", "+9 mo", "+12 mo", "+15 mo", "Expiry"],
+    );
+    assert.equal(new Set(curves.map((curve) => curve.color)).size, curves.length);
+    assert.equal(curves[0]!.color, dateRampColor(0));
+    assert.notEqual(curves[1]!.color, curves[0]!.color);
+    assert.equal(curves.at(-1)!.color, EXPIRY_RAMP_COLOR);
+    assert.ok(curves.at(-1)!.width >= curves[0]!.width + 1);
+    const picked = selectDate(initialChartSelection(ev), ev.horizons[2]!.id, ev.horizons);
+    assert.deepEqual(picked.horizonIds, [ev.horizons[2]!.id]);
+    assert.equal(visibleCurves(ev, picked).length, 1);
+    assert.equal(visibleCurves(ev, selectDate(picked, ev.horizons[4]!.id, ev.horizons)).length, 1);
+  });
+});
 
 describe("ZEBRA zero packages", () => {
   const chain = expensiveChain();
@@ -453,7 +479,10 @@ describe("chart settings parser", () => {
     assert.equal(parseChartSettings({ v: 2 }), null);
     assert.equal(parseChartSettings({ v: 1, mode: "grid", horizonPolicy: { kind: "readable" }, chrome: defaultChartChrome() }), null);
     const chrome = { ...defaultChartChrome(), thickness: 3.5, yAxis: { kind: "manual" as const, min: -500, max: 8000 } };
-    const settings = { mode: "quarters" as const, horizonPolicy: { kind: "every" as const, step: 2 as const }, chrome };
+    const settings = { mode: "waterfall" as const, horizonPolicy: { kind: "every" as const, step: 2 as const }, chrome };
+    const opened = parseChartSettings({ v: 1, mode: "quarters", horizonPolicy: settings.horizonPolicy, chrome });
+    assert.equal(opened?.mode, "waterfall");
+    assert.deepEqual(opened?.horizonPolicy, settings.horizonPolicy);
     assert.deepEqual(parseChartSettings({ v: 1, ...settings }), settings);
     assert.equal(parseChartSettings({ v: 1, ...settings, chrome: { ...chrome, thickness: 0 } }), null);
     const savedOverlay = parseChartSettings({
@@ -462,10 +491,12 @@ describe("chart settings parser", () => {
       horizonPolicy: { kind: "every", step: 2 },
       chrome: { ...chrome, colorMode: "rainbow" },
     });
-    assert.equal(savedOverlay?.mode, "structure");
+    assert.equal(savedOverlay?.mode, "single");
     assert.deepEqual(savedOverlay?.horizonPolicy, { kind: "every", step: 2 });
     assert.equal(savedOverlay?.chrome.thickness, 3.5);
     assert.equal(savedOverlay?.chrome.colorMode, "rainbow");
+    assert.equal(parseChartSettings({ v: 1, mode: "custom", horizonPolicy: { kind: "all" }, chrome })?.mode, "waterfall");
+    assert.equal(parseChartSettings({ v: 1, mode: "expiry", horizonPolicy: { kind: "readable" }, chrome })?.mode, "single");
     assert.doesNotThrow(() => parseChartSettings({ v: 1, mode: "overlay", horizonPolicy: null, chrome: "nope" }));
     const mem = new Map<string, string>();
     const storage = {
@@ -539,9 +570,9 @@ describe("structures with different expiries", () => {
     assert.ok(Math.abs(farDelta - expected(farRow)) < 1e-6);
     assert.notEqual(calendarDaysBetween(today.date, nearRow.spec.expiry), calendarDaysBetween(today.date, farRow.spec.expiry));
 
-    const expiryCurves = visibleCurves(ev, setChartMode(initialChartSelection(ev), "expiry"));
-    assert.equal(expiryCurves.length, 2);
     const ownSettlement = (row: PricedStructure) => ev.horizons.find((horizon) => horizon.settlement && horizon.structureId === row.spec.id);
+    const expiryCurves = visibleCurves(ev, selectDate(initialChartSelection(ev), ownSettlement(nearRow)!.id, ev.horizons));
+    assert.equal(expiryCurves.length, 2);
     for (const row of rows) {
       const horizon = ownSettlement(row);
       assert.ok(horizon);
@@ -553,7 +584,7 @@ describe("structures with different expiries", () => {
 
     const focus = ownSettlement(nearRow);
     assert.ok(focus);
-    const sharedExpiry = visibleCurves(ev, setFocusHorizon(setChartMode(initialChartSelection(ev), "structure"), focus!.id));
+    const sharedExpiry = visibleCurves(ev, selectDate(initialChartSelection(ev), focus!.id, ev.horizons));
     assert.equal(sharedExpiry.length, 2);
     for (const row of rows) {
       const horizon = ownSettlement(row);
@@ -578,7 +609,9 @@ describe("duplicate structure names", () => {
       },
     };
     const ev = evaluateLab(editLab(createLab(chain), [zebra, zebra], chain), chain);
-    const curves = visibleCurves(ev, setChartMode(initialChartSelection(ev), "today"));
+    const today = ev.horizons.find((horizon) => horizon.date === ev.entryDate && !horizon.settlement);
+    assert.ok(today);
+    const curves = visibleCurves(ev, selectDate(initialChartSelection(ev), today.id, ev.horizons));
     const names = curves.map((curve) => curve.name);
     assert.ok(names.includes("ZEBRA"));
     assert.ok(names.includes("ZEBRA (2)"));

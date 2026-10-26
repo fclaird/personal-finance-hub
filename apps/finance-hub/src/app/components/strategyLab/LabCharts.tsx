@@ -9,29 +9,21 @@ import { StrategyPlot, type ChartRow, type ChartSize } from "@/app/components/st
 import {
   applyHorizonPolicy,
   CHART_MODES,
-  applyCurveLook,
-  combinedDateCurves,
   defaultChartChrome,
-  everyNthHorizonIds,
-  expiryPlusOneIds,
+  displayedCurves,
   isPlottableStructure,
   initialChartSelection,
-  policyFromIds,
   positiveCrossovers,
   readChartSettings,
   reconcileChartSelection,
+  selectDate,
   setChartMode,
-  setFocusHorizon,
-  setHorizons,
   setStructures,
   shortHorizon,
-  toggleHorizon,
-  visibleCurves,
   writeChartSettings,
   type ChartChrome,
   type ChartMode,
   type ChartSelection,
-  type HorizonPolicy,
 } from "@/lib/strategyLab/chartDisplay";
 import { sameView, sharePriceWindow, type ChartView } from "@/lib/strategyLab/chartView";
 import {
@@ -48,14 +40,8 @@ import { applyPlotAction, type PlotAction, type PlotChart } from "@/lib/strategy
 import { labControl, labLabel, seriesColor } from "@/lib/strategyLab/palette";
 
 const MODE_HINT: Record<ChartMode, string> = {
-  structure: "Every selected structure on the date you pick, on one large chart. Drag to pan, scroll or pinch to zoom.",
-  waterfall: "Every quarter for the rainbow structure, today through a thick expiry line. Other structures are one dashed expiry line.",
-  quarters: "Only the dates you turn on.",
-  expiry: "Settlement P&L only.",
-  today: "Mark to market on the trade date.",
-  span: "Today, one date you pick, and expiry.",
-  dateOverlay: "Every selected structure on one date.",
-  custom: "Any dates and any structures. Changes apply on this chart only.",
+  waterfall: "Every three-month step from today through expiry. Expiry is the thick bright line. Hover a price to read each date.",
+  single: "One date. Picking another date replaces the curve. Each plotted structure is one line.",
 };
 
 
@@ -188,20 +174,8 @@ export function LabCharts({
   };
 
   const paintCurves = useCallback(
-    (sel: ChartSelection) => {
-      const painted = sel.mode === "structure" ? combinedDateCurves(evaluation, sel) : visibleCurves(evaluation, sel);
-      if (sel.mode === "waterfall") {
-        return painted.map((curve) => {
-          const expiry = evaluation.horizons.some((horizon) => horizon.id === curve.horizonId && horizon.settlement);
-          return {
-            ...curve,
-            width: chrome.thickness + (expiry ? 1 : 0),
-            dash: chrome.stroke === "dashed" && !expiry ? (curve.dash ?? "6 3") : curve.dash,
-          };
-        });
-      }
-      return applyCurveLook(painted, { colorMode: chrome.colorMode, stroke: chrome.stroke, thickness: chrome.thickness }, evaluation);
-    },
+    (sel: ChartSelection) =>
+      displayedCurves(evaluation, sel, { colorMode: chrome.colorMode, stroke: chrome.stroke, thickness: chrome.thickness }),
     [evaluation, chrome.colorMode, chrome.stroke, chrome.thickness],
   );
   const pnlCurves = useMemo(() => paintCurves(selection), [paintCurves, selection]);
@@ -366,12 +340,7 @@ export function LabCharts({
   }
 
   const dateChoices = [...evaluation.horizons].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.settlement ? 1 : -1));
-  const multiDates = selection.mode === "quarters" || selection.mode === "custom";
-  const singleDate = selection.mode === "span" || selection.mode === "dateOverlay" || selection.mode === "structure";
-  const singleChoices =
-    selection.mode === "span"
-      ? dateChoices.filter((horizon) => !horizon.settlement && horizon.date !== evaluation.entryDate)
-      : dateChoices;
+  const waterfall = selection.mode === "waterfall";
 
   const commitWindow = (minText: string, maxText: string) => {
     const min = Number(minText);
@@ -387,8 +356,8 @@ export function LabCharts({
   const dateLabel = shortHorizon(
     evaluation.horizons.find((horizon) => horizon.id === selection.focusHorizonId)?.label ?? "this date",
   );
-  const chartTitle = selection.mode === "structure" ? `All structures on this date · ${dateLabel}` : evaluation.metric;
-  const chartMetric = selection.mode === "structure" ? evaluation.metric : "";
+  const chartTitle = evaluation.metric;
+  const chartMetric = waterfall ? "" : dateLabel;
 
   return (
     <div className="box-border w-full min-w-0 max-w-full space-y-3" data-chart-mode={selection.mode}>
@@ -415,23 +384,45 @@ export function LabCharts({
       </div>
       <p className="text-xs text-zinc-700 dark:text-zinc-300">{MODE_HINT[selection.mode]}</p>
 
-      {multiDates || (singleDate && singleChoices.length > 0) ? (
-        <DatePicker
-          mode={selection.mode}
-          horizons={singleDate ? singleChoices : dateChoices}
-          selection={selection}
-          multi={multiDates}
-          onToggle={(id) => choose(toggleHorizon(selection, id, evaluation.horizons))}
-          onSet={(ids, policy) => choose(setHorizons(selection, ids, policy ?? policyFromIds(evaluation.horizons, ids)))}
-          onFocus={(id) => choose(setFocusHorizon(selection, id))}
-        />
-      ) : null}
+      {waterfall ? null : (
+        <div className="space-y-1.5" role="group" aria-label="Date">
+          <span className="text-xs font-semibold text-zinc-300">Date</span>
+          <div className="flex flex-wrap gap-1.5">
+            {dateChoices.map((horizon) => {
+              const on = selection.focusHorizonId === horizon.id;
+              return (
+                <button
+                  key={horizon.id}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => {
+                    setView(null);
+                    setDeltaView(null);
+                    choose(selectDate(selection, horizon.id, evaluation.horizons));
+                  }}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                    on
+                      ? "bg-zinc-100 text-zinc-950"
+                      : "border border-zinc-400 text-zinc-100 hover:border-zinc-200"
+                  }`}
+                >
+                  {shortHorizon(horizon.label)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-end gap-2">
-        <Toggle on={chrome.showCrossovers} onClick={() => restyle({ ...chrome, showCrossovers: !chrome.showCrossovers })} label="Crossovers" />
-        <Toggle on={chrome.showZones} onClick={() => restyle({ ...chrome, showZones: !chrome.showZones })} label="Zones" />
-        <Toggle on={chrome.showStrikes} onClick={() => restyle({ ...chrome, showStrikes: !chrome.showStrikes })} label="Strikes" />
-        <Toggle on={chrome.showBreakevens} onClick={() => restyle({ ...chrome, showBreakevens: !chrome.showBreakevens })} label="Breakevens" />
+        {waterfall ? null : (
+          <>
+            <Toggle on={chrome.showCrossovers} onClick={() => restyle({ ...chrome, showCrossovers: !chrome.showCrossovers })} label="Crossovers" />
+            <Toggle on={chrome.showZones} onClick={() => restyle({ ...chrome, showZones: !chrome.showZones })} label="Zones" />
+            <Toggle on={chrome.showStrikes} onClick={() => restyle({ ...chrome, showStrikes: !chrome.showStrikes })} label="Strikes" />
+            <Toggle on={chrome.showBreakevens} onClick={() => restyle({ ...chrome, showBreakevens: !chrome.showBreakevens })} label="Breakevens" />
+          </>
+        )}
         <Toggle
           on={chrome.showStock}
           onClick={() => {
@@ -523,6 +514,7 @@ export function LabCharts({
         </p>
         <ChartLookControls
           chrome={chrome}
+          ramp={waterfall}
           onChrome={(next) => {
             if (yAxisDiffers(chrome.yAxis, next.yAxis)) {
               setView(null);
@@ -570,21 +562,29 @@ export function LabCharts({
             evaluation={evaluation}
             priced={priced}
             curves={pnlCurves}
-            chrome={chrome}
+            chrome={
+              waterfall
+                ? { ...chrome, showStrikes: false, showBreakevens: false, showCrossovers: false, showZones: false }
+                : chrome
+            }
             masked={masked}
             whatIfSpot={whatIfSpot}
             view={view}
             onView={(next) => pushView("pnl", next)}
             onHome={onHome}
             onFullRange={() => showFullRange("pnl")}
-            profitCrossovers={profit}
+            profitCrossovers={waterfall ? [] : profit}
             focusedKey={chrome.focusedCurveKey}
             onFocus={(key) => restyle({ ...chrome, focusedCurveKey: key })}
             useLook={useLook}
+            showExpiryTip={!waterfall}
+            tipSeriesOrder={waterfall}
+            stockName={waterfall ? "Stock" : undefined}
             role="pnl"
             chartSize={chartSize}
             onChartSize={setChartSize}
             stockBasis={hundredShareStock ? "hundred" : "capital"}
+            annotate={!waterfall}
             header={
               <PlotChips
                 chart="pnl"
@@ -782,7 +782,7 @@ function PlotChips({
               }}
             >
               {label}
-              {focus ? " · rainbow" : ""}
+              {focus ? " · waterfall" : ""}
             </button>
           );
         })}
@@ -791,90 +791,9 @@ function PlotChips({
   );
 }
 
-function DatePicker({
-  mode,
-  horizons,
-  selection,
-  multi,
-  onToggle,
-  onSet,
-  onFocus,
-}: {
-  mode: ChartMode;
-  horizons: LabEvaluation["horizons"];
-  selection: ChartSelection;
-  multi: boolean;
-  onToggle: (id: string) => void;
-  onSet: (ids: string[], policy?: HorizonPolicy) => void;
-  onFocus: (id: string) => void;
-}) {
-  const ids = horizons.map((horizon) => horizon.id);
-  const adjustable = mode === "quarters" || mode === "custom";
-  const label = mode === "span" ? "Middle date" : mode === "dateOverlay" || mode === "structure" ? "Date" : "Dates";
-  return (
-    <div className="space-y-1.5">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">{label}</span>
-        {multi ? (
-          <>
-            <TextButton onClick={() => onSet(ids, { kind: "all" })}>Select all</TextButton>
-            <TextButton onClick={() => onSet([], { kind: "none" })}>None</TextButton>
-            {adjustable ? (
-              <>
-                <TextButton onClick={() => onSet(everyNthHorizonIds(horizons, 2), { kind: "every", step: 2 })}>Every 2nd</TextButton>
-                <TextButton onClick={() => onSet(everyNthHorizonIds(horizons, 4), { kind: "every", step: 4 })}>Every 4th</TextButton>
-                <TextButton onClick={() => onSet(expiryPlusOneIds(horizons, selection.focusHorizonId), { kind: "expiryPlus" })}>
-                  Expiry + one date
-                </TextButton>
-              </>
-            ) : null}
-          </>
-        ) : null}
-      </div>
-      {mode === "custom" ? (
-        <ul className="flex flex-wrap gap-x-4 gap-y-1">
-          {horizons.map((horizon) => (
-            <li key={horizon.id}>
-              <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                <input
-                  type="checkbox"
-                  checked={selection.horizonIds.includes(horizon.id)}
-                  onChange={() => onToggle(horizon.id)}
-                  className="accent-zinc-100"
-                />
-                {shortHorizon(horizon.label)}
-              </label>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <div className="flex flex-wrap gap-1.5">
-          {horizons.map((horizon) => {
-            const on = multi ? selection.horizonIds.includes(horizon.id) : selection.focusHorizonId === horizon.id;
-            return (
-              <button
-                key={horizon.id}
-                type="button"
-                aria-pressed={on}
-                onClick={() => (multi ? onToggle(horizon.id) : onFocus(horizon.id))}
-                className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                  on
-                    ? "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950"
-                    : "border border-zinc-500 text-zinc-800 dark:border-zinc-400 dark:text-zinc-100"
-                }`}
-              >
-                {shortHorizon(horizon.label)}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ChartLookControls({
   chrome,
+  ramp,
   onChrome,
   yMinDraft,
   yMaxDraft,
@@ -884,6 +803,7 @@ function ChartLookControls({
   suggestMax,
 }: {
   chrome: ChartChrome;
+  ramp: boolean;
   onChrome: (next: ChartChrome) => void;
   yMinDraft: string | null;
   yMaxDraft: string | null;
@@ -927,14 +847,18 @@ function ChartLookControls({
           className="mt-1 block w-28 accent-zinc-100"
         />
       </label>
-      <div className="flex gap-1">
-        <Toggle on={chrome.colorMode === "rainbow"} onClick={() => onChrome({ ...chrome, colorMode: "rainbow" })} label="Rainbow" />
-        <Toggle on={chrome.colorMode === "structure"} onClick={() => onChrome({ ...chrome, colorMode: "structure" })} label="Structure colors" />
-      </div>
-      <div className="flex gap-1">
-        <Toggle on={chrome.stroke === "solid"} onClick={() => onChrome({ ...chrome, stroke: "solid" })} label="Solid" />
-        <Toggle on={chrome.stroke === "dashed"} onClick={() => onChrome({ ...chrome, stroke: "dashed" })} label="Dashed" />
-      </div>
+      {ramp ? null : (
+        <>
+          <div className="flex gap-1">
+            <Toggle on={chrome.colorMode === "rainbow"} onClick={() => onChrome({ ...chrome, colorMode: "rainbow" })} label="Rainbow" />
+            <Toggle on={chrome.colorMode === "structure"} onClick={() => onChrome({ ...chrome, colorMode: "structure" })} label="Structure colors" />
+          </div>
+          <div className="flex gap-1">
+            <Toggle on={chrome.stroke === "solid"} onClick={() => onChrome({ ...chrome, stroke: "solid" })} label="Solid" />
+            <Toggle on={chrome.stroke === "dashed"} onClick={() => onChrome({ ...chrome, stroke: "dashed" })} label="Dashed" />
+          </div>
+        </>
+      )}
       <Toggle on={chrome.yAxis.kind === "auto"} onClick={() => onChrome({ ...chrome, yAxis: { kind: "auto" } })} label="P&L Y auto" />
       {chrome.yAxis.kind === "manual" ? (
         <>
