@@ -14,6 +14,7 @@ import {
 } from "@/lib/strategyLab/callSpreadOptimizer";
 import { shortHorizon } from "@/lib/strategyLab/chartDisplay";
 import { panView, zoomAroundCursor, type ChartPoint, type ChartView } from "@/lib/strategyLab/chartView";
+import { deltaExtremum, type DeltaSample } from "@/lib/strategyLab/deltaExtremum";
 import {
   DELTA_SOURCE_LABEL,
   analysisSeries,
@@ -151,6 +152,54 @@ export function OptimizerDeltaChart({
       return point;
     });
   }, [spots, rows, years, horizon, showAll, single, source, evaluation, analysisRows, analysisHorizons, analysisSingle, analysisFocus]);
+
+  const optima = useMemo(() => {
+    return series.flatMap((item) => {
+      const found = deltaExtremum(curveSamples(data, item.key), (price) => {
+        if (source === "analysis" && evaluation) {
+          const structureId = showAll && analysisSingle ? analysisSingle.id : item.key;
+          const horizonId = showAll && analysisSingle ? item.key : analysisFocus;
+          if (!horizonId) return null;
+          const value = analysisShareDelta(evaluation, structureId, horizonId, price);
+          return value == null || !Number.isFinite(value) ? null : value;
+        }
+        const row = showAll && single ? single : rows.find((candidate) => candidate.key === item.key);
+        const horizonId = (showAll && single ? item.key : horizon) as OptimizerHorizonId;
+        if (!row) return null;
+        const value = deltaPath(row, [price], years, horizonId)[0]?.delta;
+        return value == null || !Number.isFinite(value) ? null : value;
+      });
+      return found ? [{ key: item.key, color: item.color, price: found.price }] : [];
+    });
+  }, [series, data, source, evaluation, showAll, analysisSingle, analysisFocus, single, rows, years, horizon]);
+
+  const readoutOptimal = useMemo(() => {
+    const prices = new Map<string, number>();
+    if (!showAll) {
+      for (const item of optima) prices.set(item.key, item.price);
+      return prices;
+    }
+    if (source === "analysis" && evaluation && analysisFocus) {
+      for (const row of analysisRows) {
+        const samples = spots.flatMap((price) => {
+          const delta = analysisShareDelta(evaluation, row.id, analysisFocus, price);
+          return delta == null || !Number.isFinite(delta) ? [] : [{ price, delta }];
+        });
+        const found = deltaExtremum(samples, (price) => analysisShareDelta(evaluation, row.id, analysisFocus, price));
+        if (found) prices.set(row.id, found.price);
+      }
+      return prices;
+    }
+    for (const row of rows) {
+      const samples = deltaPath(row, spots, years, horizon).map((point) => ({ price: point.spot, delta: point.delta }));
+      const found = deltaExtremum(samples, (price) => {
+        const value = deltaPath(row, [price], years, horizon)[0]?.delta;
+        return value == null || !Number.isFinite(value) ? null : value;
+      });
+      if (found) prices.set(row.key, found.price);
+    }
+    return prices;
+  }, [showAll, optima, source, evaluation, analysisFocus, analysisRows, spots, rows, years, horizon]);
 
   const home = useMemo(() => frameOf(data, series.map((item) => item.key)), [data, series]);
   const shown = view ?? home;
@@ -339,7 +388,8 @@ export function OptimizerDeltaChart({
               : showAll
                 ? "One spread at today, each quarter, and expiry. Constant IV."
                 : "Net share-equivalent delta versus price. Constant IV."}{" "}
-        {(source === "analysis" ? analysisSingle == null : single == null) && allDates ? "All dates needs a single position." : ""}
+        {(source === "analysis" ? analysisSingle == null : single == null) && allDates ? "All dates needs a single position." : ""}{" "}
+        When a curve turns inside the window, a dashed line marks its effective optimal price.
       </p>
       <div
         ref={plotRef}
@@ -404,6 +454,22 @@ export function OptimizerDeltaChart({
                 }}
               />
               <ReferenceLine x={spot} stroke={LAB_PALETTE.spot} strokeDasharray="5 5" label={{ value: "Spot", fill: LAB_PALETTE.spot, fontSize: 12 }} />
+              {shown
+                ? assignOptimalLanes(optima, spot, shown, plotPx.width).map((marker) => (
+                    <ReferenceLine
+                      key={marker.key}
+                      x={marker.price}
+                      stroke={marker.color}
+                      strokeDasharray="5 5"
+                      label={optimalPriceLabel(
+                        `Effective optimal price ${marker.price.toFixed(2)}`,
+                        marker.color,
+                        marker.lane,
+                        marker.anchorEnd,
+                      )}
+                    />
+                  ))
+                : null}
               {series.map((item) => (
                 <Line
                   key={item.key}
@@ -442,6 +508,9 @@ export function OptimizerDeltaChart({
                     {move === 0 ? "Spot" : `${move > 0 ? "+" : ""}${Math.round(move * 100)}%`}
                   </th>
                 ))}
+                <th className="py-1 pr-3 font-semibold" title="Price where this curve's slope is zero">
+                  Optimal price
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -456,6 +525,7 @@ export function OptimizerDeltaChart({
                       </td>
                     );
                   })}
+                  <OptimalPriceCell price={readoutOptimal.get(row.id) ?? null} color={series.find((item) => item.key === row.id)?.color} />
                 </tr>
               ))}
             </tbody>
@@ -473,6 +543,9 @@ export function OptimizerDeltaChart({
                     {cell.label}
                   </th>
                 ))}
+                <th className="py-1 pr-3 font-semibold" title="Price where this curve's slope is zero">
+                  Optimal price
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -487,6 +560,7 @@ export function OptimizerDeltaChart({
                       {cell.delta.toFixed(1)}
                     </td>
                   ))}
+                  <OptimalPriceCell price={readoutOptimal.get(row.key) ?? null} color={series.find((item) => item.key === row.key)?.color} />
                 </tr>
               ))}
             </tbody>
@@ -512,8 +586,70 @@ function Chip({ label, pressed, onClick }: { label: string; pressed?: boolean; o
   );
 }
 
+function OptimalPriceCell({ price, color }: { price: number | null; color?: string }) {
+  return (
+    <td className="py-1 pr-3 font-semibold tabular-nums" data-optimal-price={price == null ? "" : price.toFixed(2)} style={{ color: color ?? "#fafafa" }}>
+      {price == null ? "—" : price.toFixed(2)}
+    </td>
+  );
+}
+
 function strikeText(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(2);
+}
+
+function curveSamples(data: readonly Record<string, number>[], key: string): DeltaSample[] {
+  return data.flatMap((row) => {
+    const delta = row[key];
+    return typeof row.spot === "number" && typeof delta === "number" ? [{ price: row.spot, delta }] : [];
+  });
+}
+
+function assignOptimalLanes(
+  markers: readonly { key: string; color: string; price: number }[],
+  spotPrice: number,
+  view: ChartView,
+  widthPx: number,
+): { key: string; color: string; price: number; lane: number; anchorEnd: boolean }[] {
+  const span = Math.max(view.xMax - view.xMin, 1);
+  const gap = span * (210 / Math.max(widthPx, 1));
+  const occupied: { price: number; lane: number }[] = [{ price: spotPrice, lane: 0 }];
+  const placed: { key: string; color: string; price: number; lane: number; anchorEnd: boolean }[] = [];
+  for (const marker of markers) {
+    if (marker.price < view.xMin || marker.price > view.xMax) continue;
+    let lane = 0;
+    while (occupied.some((other) => other.lane === lane && Math.abs(other.price - marker.price) < gap)) lane += 1;
+    occupied.push({ price: marker.price, lane });
+    placed.push({
+      ...marker,
+      lane,
+      anchorEnd: marker.price > view.xMin + span * 0.68,
+    });
+  }
+  return placed;
+}
+
+function optimalPriceLabel(text: string, fill: string, lane: number, anchorEnd: boolean) {
+  function OptimalPriceLabel({ viewBox }: { viewBox?: { x?: number; y?: number } }) {
+    const x = viewBox?.x ?? 0;
+    const y = (viewBox?.y ?? 0) + 14 + lane * 16;
+    return (
+      <text
+        x={anchorEnd ? x - 6 : x + 6}
+        y={y}
+        fill={fill}
+        stroke="#09090b"
+        strokeWidth={3}
+        paintOrder="stroke"
+        fontSize={13}
+        fontWeight={700}
+        textAnchor={anchorEnd ? "end" : "start"}
+      >
+        {text}
+      </text>
+    );
+  }
+  return OptimalPriceLabel;
 }
 
 function mid(view: ChartView): ChartPoint {
