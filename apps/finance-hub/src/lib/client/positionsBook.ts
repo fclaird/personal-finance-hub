@@ -1,10 +1,17 @@
 export type PositionsBookPosition = {
   accountId: string;
+  positionId?: string | null;
   symbol?: string | null;
   securityType?: string;
   underlyingSymbol?: string | null;
   effectiveUnderlyingSymbol?: string | null;
+  quantity?: number | null;
+  /** Stored cost per share. The book cache keeps this; it is not the live mark. */
+  averagePrice?: number | null;
+  price?: number | null;
   marketValue?: number | null;
+  /** Manual fill date (YYYY-MM-DD). Schwab lot dates stay on `/api/strategy-lab/book`. */
+  purchaseDate?: string | null;
   metadataJson?: string | null;
   schwabDayProfitLoss?: number | null;
 };

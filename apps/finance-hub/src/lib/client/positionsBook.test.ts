@@ -56,3 +56,34 @@ test("concurrent book loads share a single request", async () => {
   assert.equal(calls, 2);
   assert.equal(refreshed.positions?.[0]?.symbol, "PLTR");
 });
+
+test("a fresh cache hit keeps cost basis and fill date", async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        positions: [
+          {
+            accountId: "joint",
+            symbol: "PLTR",
+            averagePrice: 18.5,
+            purchaseDate: "2026-09-01",
+            quantity: 100,
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  const client = createPositionsBookClient(fetchImpl, () => 0);
+  const first = await client.load();
+  const second = await client.load();
+  assert.equal(calls, 1);
+  assert.equal(second, first);
+  assert.equal(second.positions?.[0]?.averagePrice, 18.5);
+  assert.equal(second.positions?.[0]?.purchaseDate, "2026-09-01");
+  assert.equal(second.positions?.[0]?.quantity, 100);
+});
