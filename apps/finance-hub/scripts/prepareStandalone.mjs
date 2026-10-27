@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { copySchemaBesideStandaloneServers, copySqliteNativeIntoStandalone } from "./sqliteStandalone.mjs";
+
 /**
  * `next start` warns and is unsupported when output is "standalone".
  * The production server is `.next/standalone/server.js`. Next does not copy
@@ -31,5 +33,7 @@ export function prepareStandaloneAssets(root) {
     fs.cpSync(publicSrc, publicDest, { recursive: true, dereference: true });
   }
 
-  return { standaloneDir, serverJs };
+  const nativeFiles = copySqliteNativeIntoStandalone(root);
+  const schemaFiles = copySchemaBesideStandaloneServers(root);
+  return { standaloneDir, serverJs, nativeFiles, schemaFiles };
 }

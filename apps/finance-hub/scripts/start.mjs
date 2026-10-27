@@ -9,6 +9,7 @@ import { loopbackHealthOk } from "./loopbackHealth.mjs";
 import { loadEnvLocal } from "./loadEnvLocal.mjs";
 import { prepareStandaloneAssets } from "./prepareStandalone.mjs";
 import { reexecFinanceHubNode } from "./resolveNode.mjs";
+import { probeStandaloneSqlite } from "./sqliteStandalone.mjs";
 import { certFiles, certsPresent, missingCertMessage, resolveListen, wrongProtocolMessage } from "./schwabListen.mjs";
 
 const root = path.join(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -170,7 +171,7 @@ async function main() {
   }
 
   const wantedUp = await loopbackHealthOk(port, 5000, plan.protocol);
-  if (wantedUp) {
+  if (wantedUp && process.env.FINANCE_HUB_REPLACE !== "1") {
     console.log(`Finance Hub is already running at ${plan.origin}/`);
     process.exit(0);
   }
@@ -207,16 +208,24 @@ async function main() {
     );
   }
 
-  freeListenPort(port);
-
   if (plan.protocol === "http") {
     let prepared;
     try {
       prepared = prepareStandaloneAssets(root);
     } catch (err) {
       console.error(err instanceof Error ? err.message : err);
+      console.error(`Port ${port} was not stopped.`);
       process.exit(1);
     }
+    const probe = probeStandaloneSqlite(process.execPath, path.dirname(prepared.serverJs));
+    if (!probe.ok) {
+      console.error("[finance-hub] Standalone bundle cannot load better-sqlite3.");
+      console.error(probe.error);
+      console.error(`Port ${port} was not stopped.`);
+      process.exit(1);
+    }
+    console.log(`[finance-hub] Standalone sqlite: ${probe.resolved}`);
+    freeListenPort(port);
     const child = spawn(process.execPath, [prepared.serverJs], {
       cwd: prepared.standaloneDir,
       stdio: "inherit",
@@ -238,6 +247,7 @@ async function main() {
     return;
   }
 
+  freeListenPort(port);
   await bootProductionHttps({ bindHost, port, keyPath: files.keyPath, certPath: files.certPath });
 }
 

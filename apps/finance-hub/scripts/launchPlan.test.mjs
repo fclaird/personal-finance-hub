@@ -24,14 +24,22 @@ test("production launch builds when there is no BUILD_ID or sources are newer", 
   ]);
 });
 
-test("a working port is stopped only after the native check and build", () => {
-  assert.deepEqual(launchActions(["build", "start"]), ["ensure-native", "build", "kill-port", "start"]);
-  assert.deepEqual(launchActions(["start"]), ["ensure-native", "kill-port", "start"]);
+test("port 3000 is stopped only after a staged health check", () => {
+  assert.deepEqual(launchActions(["build", "start"]), [
+    "ensure-native",
+    "backup-native",
+    "build",
+    "restore-native",
+    "stage-start",
+    "health-gate",
+    "promote-start",
+  ]);
+  assert.deepEqual(launchActions(["start"]), ["ensure-native", "stage-start", "health-gate", "promote-start"]);
   assert.deepEqual(launchActions(["dev"]), ["ensure-native", "kill-port", "dev"]);
-  for (const actions of [launchActions(["build", "start"]), launchActions(["dev"]), launchActions(["start"])]) {
-    assert.ok(actions.indexOf("ensure-native") < actions.indexOf("kill-port"));
-    if (actions.includes("build")) assert.ok(actions.indexOf("build") < actions.indexOf("kill-port"));
-  }
+  const prod = launchActions(["build", "start"]);
+  assert.ok(prod.indexOf("restore-native") < prod.indexOf("stage-start"));
+  assert.ok(prod.indexOf("health-gate") < prod.indexOf("promote-start"));
+  assert.equal(prod.includes("kill-port"), false);
 });
 
 test("dev and start skip the production build", () => {

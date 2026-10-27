@@ -21,6 +21,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
+import {
+  backupSqliteNative,
+  restoreSqliteNative,
+  sqliteBackupDir,
+  sqlitePackageDir,
+} from "./sqliteStandalone.mjs";
+
 const root = path.join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const require = createRequire(path.join(root, "package.json"));
 
@@ -111,20 +118,27 @@ export function ensureSqliteNative(opts = {}) {
   );
   log(`[finance-hub] ${npmBin} ${sqliteRebuildCommand().join(" ")}`);
 
+  const pkgDir = sqlitePackageDir(appRoot);
+  const backupDir = sqliteBackupDir(appRoot);
+  if (pkgDir) backupSqliteNative(pkgDir, backupDir);
+
   const rebuild = spawnFn(npmBin, sqliteRebuildCommand(), {
     cwd: appRoot,
     stdio: opts.stdio ?? "inherit",
     env: pathWithNodeBinFirst(env, nodeBin),
   });
   if (rebuild.status !== 0) {
+    if (pkgDir) restoreSqliteNative(pkgDir, backupDir);
     throw new Error(
       `npm rebuild better-sqlite3 --build-from-source failed (exit ${rebuild.status ?? "signal"}). ` +
-        `npm was ${npmBin}. A PATH npm such as /usr/local/bin/npm is not used.`,
+        `npm was ${npmBin}. A PATH npm such as /usr/local/bin/npm is not used. ` +
+        "Any build/ that node-gyp removed was restored from a copy when a backup existed.",
     );
   }
 
   const again = probeFn(nodeBin, appRoot);
   if (!again.ok) {
+    if (pkgDir) restoreSqliteNative(pkgDir, backupDir);
     throw new Error(`better-sqlite3 still did not load after rebuild.\n${again.error}`);
   }
   log("[finance-hub] better-sqlite3 rebuild OK.");

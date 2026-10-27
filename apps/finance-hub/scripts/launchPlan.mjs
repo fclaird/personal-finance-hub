@@ -39,21 +39,23 @@ export function newestSourceMtimeMs(root) {
 }
 
 /**
- * Native check and build finish before anything binds.
- * kill-port is the first action that stops a working listener, and it comes
- * after ensure-native and build.
+ * Production cutover is stage-start, then health-gate, then promote-start.
+ * promote-start is the step that stops the old listener. A failed health
+ * gate never reaches it. Dev still stops the port only after the native check.
+ * backup-native runs before next build and restore-native puts build/ back
+ * if the build removed it.
  */
 export function launchActions(steps) {
   const actions = ["ensure-native"];
-  let killArmed = false;
   for (const step of steps) {
-    if (step === "build") actions.push("build");
-    if (step === "start" || step === "dev") {
-      if (!killArmed) {
-        actions.push("kill-port");
-        killArmed = true;
-      }
-      actions.push(step);
+    if (step === "build") {
+      actions.push("backup-native", "build", "restore-native");
+    }
+    if (step === "dev") {
+      actions.push("kill-port", "dev");
+    }
+    if (step === "start") {
+      actions.push("stage-start", "health-gate", "promote-start");
     }
   }
   return actions;
