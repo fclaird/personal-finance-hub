@@ -88,6 +88,8 @@ export type StructureSpec = {
   readonly slot: StructureSlot;
   readonly origin: { readonly request: TemplateRequest; readonly tracking: boolean } | null;
   readonly resolveError: string | null;
+  /** Book packages name their ticker. Hand-built structures leave this null and use the lab symbol. */
+  readonly underlying: string | null;
 };
 
 export type Basis =
@@ -178,6 +180,8 @@ export type LabEdit =
   | {
       readonly kind: "savePackage";
       readonly label: string;
+      /** Ticker this package is priced against. Omitted packages use the loaded chain symbol. */
+      readonly underlying?: string | null;
       readonly legs: readonly ({
         readonly instrument: "call" | "put" | "stock";
         readonly right: OptionRight | null;
@@ -383,6 +387,7 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
         slot,
         origin: null,
         resolveError: null,
+        underlying: null,
       };
       const spec = withLegs(chain, lab, blank, edit.request, listed, true);
       return { ...lab, seq: lab.seq + 1, structures: [...lab.structures, spec] };
@@ -635,6 +640,7 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
           tracking: false,
         },
         resolveError: blocked ? reason : null,
+        underlying: null,
       };
       return { ...lab, seq: lab.seq + 1, structures: [...lab.structures, spec] };
     }
@@ -707,6 +713,8 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
             ];
           });
       const label = edit.label.trim().slice(0, 40) || "Book";
+      const named = (edit.underlying ?? "").trim().toUpperCase();
+      const underlying = named.length >= 1 && named.length <= 12 ? named : chain.symbol;
       const spec: StructureSpec = {
         id: `s${lab.seq}`,
         label,
@@ -718,6 +726,7 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
         slot,
         origin: null,
         resolveError: blocked ? reason : null,
+        underlying,
       };
       return { ...lab, seq: lab.seq + 1, structures: [...lab.structures, spec] };
     }

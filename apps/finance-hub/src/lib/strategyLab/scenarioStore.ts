@@ -214,6 +214,11 @@ function parseStructure(raw: unknown, seenSlots: Set<number>, seenIds: Set<strin
     if (typeof raw.resolveError !== "string" || raw.resolveError.length > 200) return null;
     resolveError = raw.resolveError;
   }
+  let underlying: string | null = null;
+  if (typeof raw.underlying === "string") {
+    const text = raw.underlying.trim().toUpperCase();
+    if (text.length >= 1 && text.length <= 12) underlying = text;
+  }
   seenIds.add(raw.id);
   seenSlots.add(slot);
   return {
@@ -227,6 +232,7 @@ function parseStructure(raw: unknown, seenSlots: Set<number>, seenIds: Set<strin
     slot: slot as StructureSlot,
     origin,
     resolveError,
+    underlying,
   };
 }
 

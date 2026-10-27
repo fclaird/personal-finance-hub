@@ -3,10 +3,11 @@ import { describe, it } from "node:test";
 
 import {
   assembleBook,
-  buildBookTree,
+  bookUnderlyings,
+  buildUnderlyingTree,
   nodeState,
   selectionCost,
-  toggleNode,
+  toggleUnderlyingLegs,
   type BookLeg,
   type BookPositionInput,
   type BookTxnInput,
@@ -105,6 +106,25 @@ describe("book cost reconstruction", () => {
 });
 
 describe("book checkbox tree", () => {
+  const aapl: BookLeg = {
+    id: "c1",
+    accountId: "joint",
+    accountLabel: "Joint",
+    underlying: "AAPL",
+    instrument: "stock",
+    expiry: null,
+    right: null,
+    strike: null,
+    quantity: 10,
+    bookPrice: 180,
+    bookDate: "2026-09-04",
+    mark: 190,
+    costSource: "transactions",
+    dateSource: "transactions",
+    fillCount: 1,
+    partial: false,
+    missingCost: false,
+  };
   const legs: BookLeg[] = [
     {
       id: "a1",
@@ -165,25 +185,54 @@ describe("book checkbox tree", () => {
     },
   ];
 
-  it("checks a parent, shows a partial selection, and clears", () => {
-    const tree = buildBookTree(legs);
+  it("checks a parent, shows a partial selection, and clears inside one underlying", () => {
+    const all = [...legs, aapl];
+    const rows = bookUnderlyings(all);
+    assert.deepEqual(
+      rows.map((row) => row.symbol),
+      ["TSLA", "AAPL"],
+    );
+    assert.equal(rows[0]?.legCount, 3);
+    assert.equal(rows[0]?.shareEquivalent, 400);
+    assert.deepEqual(rows[0]?.accounts, ["IRA", "Joint"]);
+    assert.equal(rows[1]?.legCount, 1);
+    assert.deepEqual(rows[1]?.accounts, ["Joint"]);
+
+    const tree = buildUnderlyingTree(all, "TSLA");
     assert.equal(tree.label, "All accounts");
     assert.deepEqual(tree.legIds, ["b1", "a1", "a2"]);
+    assert.equal(tree.legIds.includes("c1"), false);
     const joint = tree.children.find((node) => node.label === "Joint")!;
-    const tsla = joint.children[0]!;
-    assert.equal(tsla.kind, "underlying");
-    assert.deepEqual(tsla.legIds, ["a1", "a2"]);
-    let selected = toggleNode(tsla.legIds, new Set());
+    assert.equal(joint.kind, "account");
+    assert.ok(joint.children.every((child) => child.kind === "expiry"));
+    assert.deepEqual(joint.legIds, ["a1", "a2"]);
+    let selected = toggleUnderlyingLegs(all, new Set(), joint.legIds);
     assert.equal(nodeState(tree.legIds, selected), "mixed");
     assert.equal(nodeState(joint.legIds, selected), "on");
-    selected = toggleNode(["a1"], selected);
-    assert.equal(nodeState(tsla.legIds, selected), "mixed");
-    selected = toggleNode(tree.legIds, selected);
+    selected = toggleUnderlyingLegs(all, selected, ["a1"]);
+    assert.equal(nodeState(joint.legIds, selected), "mixed");
+    selected = toggleUnderlyingLegs(all, selected, tree.legIds);
     assert.equal(nodeState(tree.legIds, selected), "on");
     assert.equal(selectionCost(legs, selected).count, 3);
     assert.equal(selectionCost(legs, selected).net, 10 * 100 + 8 * 2 * 100 + -1 * 4 * 100);
-    selected = toggleNode(tree.legIds, selected);
+    selected = toggleUnderlyingLegs(all, selected, tree.legIds);
     assert.equal(nodeState(tree.legIds, selected), "off");
     assert.equal(selectionCost(legs, selected).count, 0);
+  });
+
+  it("makes a mixed-underlying selection impossible", () => {
+    const all = [...legs, aapl];
+    const tsla = buildUnderlyingTree(all, "TSLA");
+    const selected = toggleUnderlyingLegs(all, new Set(), tsla.legIds);
+    const refused = toggleUnderlyingLegs(all, selected, ["c1"]);
+    assert.deepEqual([...refused].sort(), [...selected].sort());
+    const symbols = new Set(all.filter((leg) => refused.has(leg.id)).map((leg) => leg.underlying));
+    assert.equal(symbols.size, 1);
+    assert.equal(symbols.has("AAPL"), false);
+    const both = toggleUnderlyingLegs(all, new Set(), ["a1", "c1"]);
+    assert.equal(both.size, 0);
+    const onlyAapl = buildUnderlyingTree(all, "AAPL");
+    assert.deepEqual(onlyAapl.legIds, ["c1"]);
+    assert.equal(onlyAapl.legIds.includes("a1"), false);
   });
 });

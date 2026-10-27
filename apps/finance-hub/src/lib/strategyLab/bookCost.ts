@@ -305,7 +305,7 @@ export function assembleBook(positions: readonly BookPositionInput[], txns: read
   return legs;
 }
 
-export type BookNodeKind = "all" | "account" | "underlying" | "expiry" | "leg";
+export type BookNodeKind = "all" | "account" | "expiry" | "leg";
 
 export type BookNode = {
   readonly id: string;
@@ -313,6 +313,14 @@ export type BookNode = {
   readonly label: string;
   readonly legIds: readonly string[];
   readonly children: readonly BookNode[];
+};
+
+export type BookUnderlying = {
+  readonly symbol: string;
+  readonly legCount: number;
+  /** Share-equivalent size: stock quantity counts as shares, an option contract as 100. */
+  readonly shareEquivalent: number;
+  readonly accounts: readonly string[];
 };
 
 export type CheckState = "on" | "off" | "mixed";
@@ -332,79 +340,86 @@ export function bookLegLabel(leg: BookLeg): string {
   return `${side} ${name} · ${cost}${when}${fills}${partial}`;
 }
 
-function groupLegs(legs: readonly BookLeg[]): BookNode {
+function shareEquivalent(leg: BookLeg): number {
+  return Math.abs(leg.quantity) * (leg.instrument === "stock" ? 1 : 100);
+}
+
+/** One row per held ticker, largest share-equivalent position first, then the ticker. */
+export function bookUnderlyings(legs: readonly BookLeg[]): BookUnderlying[] {
+  const groups = new Map<string, BookLeg[]>();
+  for (const leg of legs) {
+    const list = groups.get(leg.underlying);
+    if (list) list.push(leg);
+    else groups.set(leg.underlying, [leg]);
+  }
+  const rows: BookUnderlying[] = [];
+  for (const [symbol, group] of groups) {
+    const accounts = [...new Set(group.map((leg) => leg.accountLabel))].sort((a, b) => a.localeCompare(b));
+    rows.push({
+      symbol,
+      legCount: group.length,
+      shareEquivalent: group.reduce((sum, leg) => sum + shareEquivalent(leg), 0),
+      accounts,
+    });
+  }
+  rows.sort((a, b) => b.shareEquivalent - a.shareEquivalent || a.symbol.localeCompare(b.symbol));
+  return rows;
+}
+
+/** Account, expiry, and leg tree for one underlying. The price axis is that ticker, so other symbols are absent. */
+export function buildUnderlyingTree(legs: readonly BookLeg[], symbol: string): BookNode {
   const accounts = new Map<string, BookLeg[]>();
   for (const leg of legs) {
+    if (leg.underlying !== symbol) continue;
     const list = accounts.get(leg.accountId);
     if (list) list.push(leg);
     else accounts.set(leg.accountId, [leg]);
   }
   const accountNodes: BookNode[] = [];
   for (const [accountId, accountLegs] of accounts) {
-    const underlyings = new Map<string, BookLeg[]>();
+    const expiries = new Map<string, BookLeg[]>();
     for (const leg of accountLegs) {
-      const list = underlyings.get(leg.underlying);
+      const key = leg.instrument === "stock" || leg.expiry == null ? "stock" : leg.expiry;
+      const list = expiries.get(key);
       if (list) list.push(leg);
-      else underlyings.set(leg.underlying, [leg]);
+      else expiries.set(key, [leg]);
     }
-    const underlyingNodes: BookNode[] = [];
-    for (const [symbol, underLegs] of underlyings) {
-      const expiries = new Map<string, BookLeg[]>();
-      for (const leg of underLegs) {
-        const key = leg.instrument === "stock" || leg.expiry == null ? "stock" : leg.expiry;
-        const list = expiries.get(key);
-        if (list) list.push(leg);
-        else expiries.set(key, [leg]);
-      }
-      const expiryNodes: BookNode[] = [...expiries.entries()]
-        .sort((a, b) => (a[0] === "stock" ? -1 : b[0] === "stock" ? 1 : a[0] < b[0] ? -1 : 1))
-        .map(([key, group]) => {
-          const children = group.map(
-            (leg): BookNode => ({
-              id: `leg:${leg.id}`,
-              kind: "leg",
-              label: bookLegLabel(leg),
-              legIds: [leg.id],
-              children: [],
-            }),
-          );
-          return {
-            id: `account:${accountId}|under:${symbol}|exp:${key}`,
-            kind: "expiry",
-            label: key === "stock" ? "Shares" : key,
-            legIds: children.flatMap((child) => child.legIds),
-            children,
-          };
-        });
-      underlyingNodes.push({
-        id: `account:${accountId}|under:${symbol}`,
-        kind: "underlying",
-        label: symbol,
-        legIds: expiryNodes.flatMap((child) => child.legIds),
-        children: expiryNodes,
+    const expiryNodes: BookNode[] = [...expiries.entries()]
+      .sort((a, b) => (a[0] === "stock" ? -1 : b[0] === "stock" ? 1 : a[0] < b[0] ? -1 : 1))
+      .map(([key, group]) => {
+        const children = group.map(
+          (leg): BookNode => ({
+            id: `leg:${leg.id}`,
+            kind: "leg",
+            label: bookLegLabel(leg),
+            legIds: [leg.id],
+            children: [],
+          }),
+        );
+        return {
+          id: `under:${symbol}|account:${accountId}|exp:${key}`,
+          kind: "expiry",
+          label: key === "stock" ? "Shares" : key,
+          legIds: children.flatMap((child) => child.legIds),
+          children,
+        };
       });
-    }
-    underlyingNodes.sort((a, b) => a.label.localeCompare(b.label));
     accountNodes.push({
-      id: `account:${accountId}`,
+      id: `under:${symbol}|account:${accountId}`,
       kind: "account",
       label: accountLegs[0]?.accountLabel ?? accountId,
-      legIds: underlyingNodes.flatMap((child) => child.legIds),
-      children: underlyingNodes,
+      legIds: expiryNodes.flatMap((child) => child.legIds),
+      children: expiryNodes,
     });
   }
   accountNodes.sort((a, b) => a.label.localeCompare(b.label));
   return {
-    id: "all",
+    id: `under:${symbol}`,
     kind: "all",
     label: "All accounts",
     legIds: accountNodes.flatMap((child) => child.legIds),
     children: accountNodes,
   };
-}
-
-export function buildBookTree(legs: readonly BookLeg[]): BookNode {
-  return groupLegs(legs);
 }
 
 export function nodeState(legIds: readonly string[], selected: ReadonlySet<string>): CheckState {
@@ -424,6 +439,22 @@ export function toggleNode(legIds: readonly string[], selected: ReadonlySet<stri
   } else {
     for (const id of legIds) next.add(id);
   }
+  return next;
+}
+
+/**
+ * Toggle leaves inside one underlying. A result that would span two tickers is refused
+ * and the previous selection is returned unchanged.
+ */
+export function toggleUnderlyingLegs(legs: readonly BookLeg[], selected: ReadonlySet<string>, legIds: readonly string[]): Set<string> {
+  const next = toggleNode(legIds, selected);
+  const byId = new Map(legs.map((leg) => [leg.id, leg.underlying]));
+  const symbols = new Set<string>();
+  for (const id of next) {
+    const symbol = byId.get(id);
+    if (symbol) symbols.add(symbol);
+  }
+  if (symbols.size > 1) return new Set(selected);
   return next;
 }
 

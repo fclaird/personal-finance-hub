@@ -5,10 +5,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { formatSignedUsd2 } from "@/lib/format";
 import type { IsoDate } from "@/lib/optionChain/chain";
 import {
-  buildBookTree,
+  bookUnderlyings,
+  buildUnderlyingTree,
   nodeState,
   selectionCost,
-  toggleNode,
+  toggleUnderlyingLegs,
   type BookLeg,
   type BookNode,
   type CheckState,
@@ -108,6 +109,10 @@ function defaultOpen(node: BookNode, into: Set<string>, depth: number, total: nu
   for (const child of node.children) defaultOpen(child, into, depth + 1, total);
 }
 
+function isBookPackage(spec: StructureSpec): boolean {
+  return spec.legs.some((leg) => leg.bookPrice != null || leg.manualPrice != null || leg.missingCost);
+}
+
 export function BookPicker({
   chainSymbol,
   full,
@@ -127,9 +132,10 @@ export function BookPicker({
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [symbol, setSymbol] = useState<string | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
-  const [query, setQuery] = useState("");
   const [name, setName] = useState("");
   const [note, setNote] = useState<string | null>(null);
 
@@ -161,58 +167,89 @@ export function BookPicker({
   }, [attempt]);
 
   const legKey = legs.map((leg) => leg.id).join("\n");
-  useEffect(() => {
-    const tree = buildBookTree(legs);
-    const next = new Set<string>();
-    defaultOpen(tree, next, 0, legs.length);
-    setOpen(next);
-    setSelected((prev) => {
-      const live = new Set(legs.map((leg) => leg.id));
-      const kept = new Set([...prev].filter((id) => live.has(id)));
-      return kept;
-    });
-  }, [legKey, legs]);
+  const [syncedKey, setSyncedKey] = useState(legKey);
+  const [openedFor, setOpenedFor] = useState<string | null>(null);
+  if (syncedKey !== legKey) {
+    setSyncedKey(legKey);
+    const liveSymbols = new Set(legs.map((leg) => leg.underlying));
+    const liveIds = new Set(legs.map((leg) => leg.id));
+    setSymbol((prev) => (prev && liveSymbols.has(prev) ? prev : null));
+    setSelected((prev) => new Set([...prev].filter((id) => liveIds.has(id))));
+    setPending(null);
+  }
+  if (symbol !== openedFor) {
+    setOpenedFor(symbol);
+    if (!symbol) {
+      setOpen(new Set());
+    } else {
+      const opened = buildUnderlyingTree(legs, symbol);
+      const next = new Set<string>();
+      defaultOpen(opened, next, 0, opened.legIds.length);
+      setOpen(next);
+    }
+  }
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toUpperCase();
-    if (!q) return legs;
-    return legs.filter((leg) => leg.underlying.includes(q) || leg.accountLabel.toUpperCase().includes(q));
-  }, [legs, query]);
-  const tree = useMemo(() => buildBookTree(filtered), [filtered]);
+  const rows = useMemo(() => bookUnderlyings(legs), [legs]);
+  const tree = useMemo(() => (symbol ? buildUnderlyingTree(legs, symbol) : null), [legs, symbol]);
   const summary = selectionCost(legs, selected);
-  const packages = structures.filter((spec) => spec.legs.some((leg) => leg.bookPrice != null || leg.manualPrice != null || leg.missingCost));
+  const packages = structures.filter((spec) => {
+    if (!symbol || !isBookPackage(spec)) return false;
+    return (spec.underlying ?? chainSymbol) === symbol;
+  });
+
+  function choose(next: string) {
+    if (next === symbol) {
+      setPending(null);
+      return;
+    }
+    if (selected.size === 0) {
+      setSymbol(next);
+      setPending(null);
+      setNote(null);
+      return;
+    }
+    setPending(next);
+  }
+
+  function confirmSwitch() {
+    if (!pending) return;
+    setSymbol(pending);
+    setSelected(new Set());
+    setPending(null);
+    setNote(null);
+  }
 
   function save(view: "overlay" | "alone") {
     const chosen = legs.filter((leg) => selected.has(leg.id));
-    if (chosen.length === 0) {
-      setNote("Select at least one leg.");
+    if (chosen.length === 0 || !symbol) {
+      setNote("Select one underlying, then at least one leg.");
       return;
     }
     const symbols = new Set(chosen.map((leg) => leg.underlying));
-    if (symbols.size !== 1) {
+    if (symbols.size !== 1 || !symbols.has(symbol)) {
       setNote("A package is one underlying. Narrow the selection.");
       return;
     }
-    const underlying = [...symbols][0]!;
     if (!chainSymbol) {
-      setNote(`Load ${underlying} to price this package.`);
+      setNote(`Load ${symbol} to price this package.`);
       return;
     }
-    if (underlying !== chainSymbol) {
-      setNote(`Load ${underlying} to price this package. The chain is ${chainSymbol}.`);
+    if (symbol !== chainSymbol) {
+      setNote(`Load ${symbol} to price this package. The chain is ${chainSymbol}.`);
       return;
     }
     if (full) {
       setNote("The lab is full. Remove a structure, then save this package.");
       return;
     }
-    const label = name.trim().slice(0, 40) || `${underlying} book`;
+    const label = name.trim().slice(0, 40) || `${symbol} book`;
     onSave(
       [
         { kind: "setBasis", basis: { kind: "perPackage" } },
         {
           kind: "savePackage",
           label,
+          underlying: symbol,
           legs: chosen.map((leg) => ({
             instrument: leg.instrument,
             right: leg.right,
@@ -236,8 +273,8 @@ export function BookPicker({
     <section className={`${labCard} p-4`} data-book-picker="">
       <h2 className="text-sm font-semibold text-zinc-50">From the book</h2>
       <p className={`mt-1 mb-3 ${labLabel}`}>
-        Check any account, underlying, expiry, or leg. A checked node includes everything under it. Select all checks the whole book.
-        Cost and fill date come from the trade history, then the position average. Nothing here places an order.
+        Pick one underlying, then check an account, expiry, or leg. A package stays on that ticker, so the price axis stays meaningful. Cost and
+        fill date come from the trade history, then the position average. Nothing here places an order.
       </p>
       {status === "loading" ? <p className="text-sm text-zinc-200">Reading the book…</p> : null}
       {status === "error" ? (
@@ -250,51 +287,93 @@ export function BookPicker({
       ) : null}
       {status === "ready" ? (
         <>
-          <div className="mb-3 flex flex-wrap items-end gap-2">
-            <label className={labLabel}>
-              Symbol
-              <input
-                aria-label="Filter book by symbol"
-                value={query}
-                onChange={(event) => setQuery(event.target.value.toUpperCase())}
-                placeholder="TSLA"
-                className={`mt-1 block w-28 px-2 py-1.5 text-sm font-semibold tracking-wide ${labControl}`}
-              />
-            </label>
-            <button type="button" className={`px-3 py-1.5 text-xs font-semibold ${labControl}`} onClick={() => setSelected(new Set(legs.map((leg) => leg.id)))}>
-              Select all
-            </button>
-            <button type="button" className={`px-3 py-1.5 text-xs font-semibold ${labControl}`} onClick={() => setSelected(new Set())}>
-              Clear
-            </button>
-            <p className="pb-1 text-sm font-semibold tabular-nums text-zinc-50" data-book-count={summary.count} data-book-net={summary.net}>
-              {summary.count} {summary.count === 1 ? "leg" : "legs"}
-              {summary.priced > 0 ? ` · net cost basis ${formatSignedUsd2(summary.net, { mask: masked })}` : ""}
-            </p>
-            {summary.missing > 0 ? (
-              <p className="pb-1 text-sm font-semibold text-amber-200">
-                {summary.missing} {summary.missing === 1 ? "leg has" : "legs have"} no cost basis
+          {rows.length === 0 ? <p className="text-sm text-zinc-200">No open equity or option legs.</p> : null}
+          {rows.length > 0 ? (
+            <div
+              role="group"
+              aria-label="Underlying"
+              data-book-underlyings=""
+              className="mb-3 rounded-lg border border-zinc-400 bg-zinc-950 p-2 dark:[color-scheme:dark]"
+            >
+              {rows.map((row) => {
+                const active = symbol === row.symbol;
+                const count = `${row.legCount} ${row.legCount === 1 ? "leg" : "legs"}`;
+                const accounts = row.accounts.join(", ");
+                return (
+                  <label key={row.symbol} className="flex min-w-0 items-center gap-2 py-0.5 text-sm text-zinc-100">
+                    <input
+                      type="checkbox"
+                      checked={active}
+                      onChange={() => choose(row.symbol)}
+                      aria-label={`${row.symbol}, ${count}, ${accounts}`}
+                      data-underlying={row.symbol}
+                      data-active={active ? "true" : "false"}
+                      className="h-4 w-4 accent-zinc-100"
+                    />
+                    <span className="font-semibold">{row.symbol}</span>
+                    <span className="text-zinc-200">
+                      {count} · {accounts}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          ) : null}
+          {pending ? (
+            <div className="mb-3 rounded-lg border border-zinc-400 bg-zinc-950 p-3 text-sm text-zinc-100">
+              <p>
+                Switch to {pending}? This clears {summary.count} checked {summary.count === 1 ? "leg" : "legs"}.
               </p>
-            ) : null}
-          </div>
-          {filtered.length === 0 ? <p className="text-sm text-zinc-200">No open equity or option legs match.</p> : null}
-          <div className="max-h-80 overflow-auto rounded-lg border border-zinc-400 bg-zinc-950 p-2 dark:[color-scheme:dark]">
-            <TreeRows
-              node={tree}
-              depth={0}
-              selected={selected}
-              open={open}
-              onToggle={(legIds) => setSelected((prev) => toggleNode(legIds, prev))}
-              onOpen={(id) =>
-                setOpen((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(id)) next.delete(id);
-                  else next.add(id);
-                  return next;
-                })
-              }
-            />
-          </div>
+              <div className="mt-2 flex gap-2">
+                <button type="button" className={`px-3 py-1.5 text-xs font-semibold ${labControl}`} onClick={confirmSwitch}>
+                  Switch
+                </button>
+                <button type="button" className={`px-3 py-1.5 text-xs font-semibold ${labControl}`} onClick={() => setPending(null)}>
+                  Stay
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {symbol && tree ? (
+            <>
+              <div className="mb-3 flex flex-wrap items-end gap-2">
+                <button type="button" className={`px-3 py-1.5 text-xs font-semibold ${labControl}`} onClick={() => setSelected(new Set(tree.legIds))}>
+                  Select all
+                </button>
+                <button type="button" className={`px-3 py-1.5 text-xs font-semibold ${labControl}`} onClick={() => setSelected(new Set())}>
+                  Clear
+                </button>
+                <p className="pb-1 text-sm font-semibold tabular-nums text-zinc-50" data-book-count={summary.count} data-book-net={summary.net}>
+                  {summary.count} {summary.count === 1 ? "leg" : "legs"}
+                  {summary.priced > 0 ? ` · net cost basis ${formatSignedUsd2(summary.net, { mask: masked })}` : ""}
+                </p>
+                {summary.missing > 0 ? (
+                  <p className="pb-1 text-sm font-semibold text-amber-200">
+                    {summary.missing} {summary.missing === 1 ? "leg has" : "legs have"} no cost basis
+                  </p>
+                ) : null}
+              </div>
+              <div className="max-h-80 overflow-auto rounded-lg border border-zinc-400 bg-zinc-950 p-2 dark:[color-scheme:dark]">
+                <TreeRows
+                  node={tree}
+                  depth={0}
+                  selected={selected}
+                  open={open}
+                  onToggle={(legIds) => setSelected((prev) => toggleUnderlyingLegs(legs, prev, legIds))}
+                  onOpen={(id) =>
+                    setOpen((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(id)) next.delete(id);
+                      else next.add(id);
+                      return next;
+                    })
+                  }
+                />
+              </div>
+            </>
+          ) : rows.length > 0 ? (
+            <p className="text-sm text-zinc-200">Choose an underlying…</p>
+          ) : null}
           <div className="mt-3 flex flex-wrap items-end gap-2">
             <label className={labLabel}>
               Package name
