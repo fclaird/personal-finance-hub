@@ -12,7 +12,6 @@ import {
 } from "@/lib/optionChain/chain";
 import { formatInt, formatUsd2 } from "@/lib/format";
 import {
-  describeVolShift,
   entryDollars,
   expiryPnl,
   expiryRisk,
@@ -28,7 +27,6 @@ import {
 } from "@/lib/strategyLab/internal/pricing";
 
 export type { Assumptions };
-export { describeVolShift };
 import { forwardDateSteps, forwardStepId, forwardStepLabel } from "@/lib/strategyLab/dateSteps";
 import { daysHeldFromLegs, entryPackageDebit, legMissingBookCost, packageUsesEntryCost } from "@/lib/strategyLab/entryCost";
 import { assignLegIds, HELD_LEG_CAP, legCostOf, legEntry, OPTION_QTY_CAP, optionLeg, parityPackageDebit, stockLeg, syntheticShape, type Leg, type LegCost } from "@/lib/strategyLab/legs";

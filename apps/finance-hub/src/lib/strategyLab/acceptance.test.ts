@@ -255,7 +255,12 @@ describe("NOW Jan 19 2029 acceptance", () => {
         contracts: calls(JAN, [[150, 43.4, 44.7]]),
       }),
     );
-    assert.equal(createLab(hinted).assumptions.dividendYield, 0);
+    const fresh = createLab(hinted);
+    assert.equal(fresh.assumptions.rate, 0.04);
+    assert.equal(fresh.assumptions.dividendYield, 0);
+    assert.equal(fresh.assumptions.ivSource, "mid");
+    assert.deepEqual(fresh.assumptions.volShift, { mode: "points", amount: 0 });
+    assert.deepEqual(fresh.basis, { kind: "matchExpensive" });
     assert.equal(hinted.dividendYieldHint, 0.012);
   });
 });

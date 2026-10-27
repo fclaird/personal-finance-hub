@@ -118,6 +118,7 @@ export function BookPicker({
   full,
   structures,
   masked,
+  onUnderlyingSelected,
   onSave,
   onView,
 }: {
@@ -125,7 +126,8 @@ export function BookPicker({
   full: boolean;
   structures: readonly StructureSpec[];
   masked: boolean;
-  onSave: (edits: readonly LabEdit[], view: "overlay" | "alone") => void;
+  onUnderlyingSelected?: (symbol: string) => void;
+  onSave: (edits: readonly LabEdit[], view: "overlay" | "alone") => boolean | Promise<boolean>;
   onView: (id: string, view: "overlay" | "alone") => void;
 }) {
   const [legs, setLegs] = useState<readonly BookLeg[]>([]);
@@ -189,6 +191,12 @@ export function BookPicker({
     }
   }
 
+  const selectionReady = symbol != null && selected.size > 0 && symbol !== chainSymbol;
+  useEffect(() => {
+    if (!selectionReady || !symbol) return;
+    onUnderlyingSelected?.(symbol);
+  }, [selectionReady, symbol, onUnderlyingSelected]);
+
   const rows = useMemo(() => bookUnderlyings(legs), [legs]);
   const tree = useMemo(() => (symbol ? buildUnderlyingTree(legs, symbol) : null), [legs, symbol]);
   const summary = selectionCost(legs, selected);
@@ -219,7 +227,7 @@ export function BookPicker({
     setNote(null);
   }
 
-  function save(view: "overlay" | "alone") {
+  async function save(view: "overlay" | "alone") {
     const chosen = legs.filter((leg) => selected.has(leg.id));
     if (chosen.length === 0 || !symbol) {
       setNote("Select one underlying, then at least one leg.");
@@ -230,20 +238,13 @@ export function BookPicker({
       setNote("A package is one underlying. Narrow the selection.");
       return;
     }
-    if (!chainSymbol) {
-      setNote(`Load ${symbol} to price this package.`);
-      return;
-    }
-    if (symbol !== chainSymbol) {
-      setNote(`Load ${symbol} to price this package. The chain is ${chainSymbol}.`);
-      return;
-    }
-    if (full) {
+    if (full && chainSymbol === symbol) {
       setNote("The lab is full. Remove a structure, then save this package.");
       return;
     }
     const label = name.trim().slice(0, 40) || `${symbol} book`;
-    onSave(
+    if (chainSymbol !== symbol) setNote(`Loading ${symbol}…`);
+    const saved = await onSave(
       [
         { kind: "setBasis", basis: { kind: "perPackage" } },
         {
@@ -266,6 +267,10 @@ export function BookPicker({
       ],
       view,
     );
+    if (!saved) {
+      setNote(chainSymbol === symbol ? "The lab is full. Remove a structure, then save this package." : `Could not load ${symbol}.`);
+      return;
+    }
     setNote(`Saved ${label}. ${view === "alone" ? "Showing it alone." : "Added to the overlay."}`);
   }
 
