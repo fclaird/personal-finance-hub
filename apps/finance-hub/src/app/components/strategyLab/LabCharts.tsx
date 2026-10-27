@@ -40,7 +40,7 @@ import { applyPlotAction, type PlotAction, type PlotChart } from "@/lib/strategy
 import { labControl, labLabel, seriesColor } from "@/lib/strategyLab/palette";
 
 const MODE_HINT: Record<ChartMode, string> = {
-  waterfall: "Every three-month step from today through expiry. Expiry is the thick bright line. Hover a price to read each date.",
+  waterfall: "Three-month steps from today, then monthly and weekly steps in the final three months. Expiry is the thick bright line. Hover a price to read each date.",
   single: "One date. Picking another date replaces the curve. Each plotted structure is one line.",
 };
 
@@ -62,6 +62,7 @@ export function LabCharts({
   onEdit,
   onDeltaPlot,
   bindDeltaToggle,
+  bindPnlPlot,
 }: {
   evaluation: LabEvaluation;
   masked: boolean;
@@ -69,6 +70,7 @@ export function LabCharts({
   onEdit: (edit: LabEdit) => void;
   onDeltaPlot?: (ids: readonly string[]) => void;
   bindDeltaToggle?: (toggle: (id: string) => void) => void;
+  bindPnlPlot?: (api: { overlay: (id: string) => void; alone: (id: string) => void }) => void;
 }) {
   const priced = pricedOf(evaluation);
   const displayNames = useMemo(
@@ -191,10 +193,17 @@ export function LabCharts({
       const next = applyPlotAction({ link: linkPlots, pnl: selection.structureIds, delta: activeDelta }, action);
       setLinkPlots(next.link);
       setDeltaIds(next.link ? null : next.delta);
-      if (next.pnl.join("\n") === selection.structureIds.join("\n")) return;
+      if (next.pnl.join("\n") === selection.structureIds.join("\n") && action.kind !== "only") return;
       let updated = setStructures(selection, [...next.pnl]);
-      if (action.kind === "toggle" && !selection.structureIds.includes(action.id) && next.pnl.includes(action.id)) {
+      if (
+        (action.kind === "toggle" && !selection.structureIds.includes(action.id) && next.pnl.includes(action.id)) ||
+        action.kind === "add" ||
+        action.kind === "only"
+      ) {
         updated = { ...updated, focusStructureId: action.id };
+      }
+      if (action.kind === "add" && next.pnl.length > 1 && selection.mode === "waterfall") {
+        updated = setChartMode(updated, "single");
       }
       setSelection(updated);
       persist(updated, chrome);
@@ -212,6 +221,12 @@ export function LabCharts({
   useEffect(() => {
     bindDeltaToggle?.((id) => commitRef.current({ kind: "toggle", chart: "delta", id }));
   }, [bindDeltaToggle]);
+  useEffect(() => {
+    bindPnlPlot?.({
+      overlay: (id) => commitRef.current({ kind: "add", chart: "pnl", id }),
+      alone: (id) => commitRef.current({ kind: "only", chart: "pnl", id }),
+    });
+  }, [bindPnlPlot]);
   const onHome = useCallback((next: ChartView, limits: ChartView) => {
     pnlLimitsRef.current = limits;
     setPnlLimits((prev) => (sameView(prev, limits) ? prev : limits));
@@ -767,23 +782,34 @@ function PlotChips({
           const focus = mode === "waterfall" && on && row.spec.id === focusId;
           const label = names.get(row.spec.id) ?? "Structure";
           return (
-            <button
-              key={row.spec.id}
-              type="button"
-              aria-pressed={on}
-              aria-label={`Plot ${label} on ${noun}`}
-              onClick={() => onAction({ kind: "toggle", chart, id: row.spec.id })}
-              className="rounded-full px-3 py-1 text-xs font-semibold"
-              style={{
-                backgroundColor: on ? color : "transparent",
-                color: on ? "#09090b" : color,
-                border: `1px solid ${color}`,
-                boxShadow: focus ? `0 0 0 2px #09090b, 0 0 0 4px ${color}` : undefined,
-              }}
-            >
-              {label}
-              {focus ? " · waterfall" : ""}
-            </button>
+            <span key={row.spec.id} className="inline-flex items-center gap-1">
+              <button
+                type="button"
+                aria-pressed={on}
+                aria-label={`Plot ${label} on ${noun}`}
+                onClick={() => onAction({ kind: "toggle", chart, id: row.spec.id })}
+                className="rounded-full px-3 py-1 text-xs font-semibold"
+                style={{
+                  backgroundColor: on ? color : "transparent",
+                  color: on ? "#09090b" : color,
+                  border: `1px solid ${color}`,
+                  boxShadow: focus ? `0 0 0 2px #09090b, 0 0 0 4px ${color}` : undefined,
+                }}
+              >
+                {label}
+                {focus ? " · waterfall" : ""}
+              </button>
+              {chart === "pnl" ? (
+                <button
+                  type="button"
+                  aria-label={`View ${label} alone`}
+                  onClick={() => onAction({ kind: "only", chart: "pnl", id: row.spec.id })}
+                  className="rounded-full border border-zinc-400 px-2 py-1 text-xs font-semibold text-zinc-100"
+                >
+                  Alone
+                </button>
+              ) : null}
+            </span>
           );
         })}
       </div>

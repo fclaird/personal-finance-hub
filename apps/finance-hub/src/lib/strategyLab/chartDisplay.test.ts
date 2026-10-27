@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import { paddedPriceSpan } from "@/lib/strategyLab/chartView";
 import { calendarDaysBetween, formatExpiryLabel, isoDate, makeOptionChain, type ChainDraft, type DraftContract, type OptionChain } from "@/lib/optionChain/chain";
+import { forwardDateSteps, forwardStepLabel } from "@/lib/strategyLab/dateSteps";
 import { bsmGreeks } from "@/lib/options/blackScholes";
 import { sampleStructureDelta } from "@/lib/strategyLab/deltaCurves";
 import { createLab, editLab, evaluateLab, zeroPackageNotice, type HorizonView, type LabEvaluation, type PricedStructure } from "@/lib/strategyLab/lab";
@@ -24,6 +25,7 @@ import {
   rainbowColor,
   readableHorizonIds,
   reconcileChartSelection,
+  shortHorizon,
   selectDate,
   setChartMode,
   setHorizons,
@@ -137,7 +139,7 @@ describe("chart display selector", () => {
     assert.equal(initial.focusHorizonId, middle!.id);
   });
 
-  it("paints every three-month step of the focus structure on a cool-to-warm ramp", () => {
+  it("paints every forward date step of the focus structure on a cool-to-warm ramp", () => {
     const curves = visibleCurves(ev, initial);
     assert.deepEqual(
       curves.map((curve) => curve.horizonId),
@@ -307,7 +309,7 @@ function quarterHorizons(count: number): HorizonView[] {
 }
 
 describe("waterfall date series", () => {
-  it("builds one curve for every three-month step from today through expiry", () => {
+  it("builds one curve for every forward date step from today through expiry", () => {
     const built = makeOptionChain(
       draft([
         { expiry: "2028-01-21", right: "C", strike: 100, bid: 20, ask: 24, feedIv: null, multiplier: 100, root: null, openInterest: 10, volume: 4 },
@@ -327,8 +329,11 @@ describe("waterfall date series", () => {
       ),
       chain,
     );
-    const steps = ev.horizons.filter((horizon) => !horizon.settlement).map((horizon) => Number(horizon.id.split(":")[1]));
-    assert.deepEqual(steps, [0, 3, 6, 9, 12, 15]);
+    const schedule = forwardDateSteps(isoDate("2026-10-08"), isoDate("2028-01-21"));
+    assert.deepEqual(
+      ev.horizons.map((horizon) => horizon.date),
+      schedule.map((step) => step.date),
+    );
     assert.equal(ev.horizons.at(-1)?.settlement, true);
     const curves = visibleCurves(ev, initialChartSelection(ev));
     assert.deepEqual(
@@ -337,10 +342,12 @@ describe("waterfall date series", () => {
     );
     assert.deepEqual(
       curves.map((curve) => curve.name),
-      ["Today", "+3 mo", "+6 mo", "+9 mo", "+12 mo", "+15 mo", "Expiry"],
+      schedule.map((step) => shortHorizon(forwardStepLabel(step, false))),
     );
+    assert.ok(curves.some((curve) => curve.name.startsWith("E−2wk")));
     assert.equal(new Set(curves.map((curve) => curve.color)).size, curves.length);
     assert.equal(curves[0]!.color, dateRampColor(0));
+    assert.equal(curves.at(-2)!.color, dateRampColor(1));
     assert.notEqual(curves[1]!.color, curves[0]!.color);
     assert.equal(curves.at(-1)!.color, EXPIRY_RAMP_COLOR);
     assert.ok(curves.at(-1)!.width >= curves[0]!.width + 1);
@@ -545,7 +552,7 @@ describe("structures with different expiries", () => {
     built.chain,
   );
 
-  it("uses each structure's own time to expiry on a shared date, and its own expiry when Expiry is picked", () => {
+  it("uses each structure's own time to expiry on a shared date, on a schedule ending at the later expiry", () => {
     const today = ev.horizons.find((horizon) => horizon.date === ev.entryDate && !horizon.settlement);
     assert.ok(today);
     const rows = ["Near", "Far"].map((label) => {
@@ -570,27 +577,22 @@ describe("structures with different expiries", () => {
     assert.ok(Math.abs(farDelta - expected(farRow)) < 1e-6);
     assert.notEqual(calendarDaysBetween(today.date, nearRow.spec.expiry), calendarDaysBetween(today.date, farRow.spec.expiry));
 
-    const ownSettlement = (row: PricedStructure) => ev.horizons.find((horizon) => horizon.settlement && horizon.structureId === row.spec.id);
-    const expiryCurves = visibleCurves(ev, selectDate(initialChartSelection(ev), ownSettlement(nearRow)!.id, ev.horizons));
+    const schedule = forwardDateSteps(isoDate("2026-10-08"), isoDate(far));
+    assert.deepEqual(
+      ev.horizons.map((horizon) => horizon.date),
+      schedule.map((step) => step.date),
+    );
+    assert.ok(ev.horizons.every((horizon) => horizon.shared && horizon.structureId == null));
+    assert.equal(ev.horizons.at(-1)?.date, isoDate(far));
+    assert.ok(ev.horizons.some((horizon) => horizon.label.includes(" · ")));
+    const expiry = ev.horizons.at(-1);
+    assert.ok(expiry?.settlement);
+    const expiryCurves = visibleCurves(ev, selectDate(initialChartSelection(ev), expiry!.id, ev.horizons));
     assert.equal(expiryCurves.length, 2);
+    assert.ok(expiryCurves.every((curve) => curve.horizonId === expiry!.id));
     for (const row of rows) {
-      const horizon = ownSettlement(row);
-      assert.ok(horizon);
       const curve = expiryCurves.find((item) => item.structureId === row.spec.id);
-      assert.equal(curve?.horizonId, horizon?.id);
       assert.match(curve?.name ?? "", /expiry/);
-      assert.match(curve?.name ?? "", new RegExp(formatExpiryLabel(row.spec.expiry).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-    }
-
-    const focus = ownSettlement(nearRow);
-    assert.ok(focus);
-    const sharedExpiry = visibleCurves(ev, selectDate(initialChartSelection(ev), focus!.id, ev.horizons));
-    assert.equal(sharedExpiry.length, 2);
-    for (const row of rows) {
-      const horizon = ownSettlement(row);
-      const curve = sharedExpiry.find((item) => item.structureId === row.spec.id);
-      assert.equal(curve?.horizonId, horizon?.id);
-      assert.match(curve?.name ?? "", new RegExp(formatExpiryLabel(row.spec.expiry)));
     }
   });
 });

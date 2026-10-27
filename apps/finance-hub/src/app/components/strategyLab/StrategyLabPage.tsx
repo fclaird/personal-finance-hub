@@ -8,7 +8,7 @@ import { ChainGrid } from "@/app/components/strategyLab/ChainGrid";
 import { SpreadOptimizer } from "@/app/components/strategyLab/SpreadOptimizer";
 import { LabCharts } from "@/app/components/strategyLab/LabCharts";
 import { ExpirySummary } from "@/app/components/strategyLab/ExpirySummary";
-import { HeldPositions, useSchwabPositions } from "@/app/components/strategyLab/HeldPositions";
+import { BookPicker } from "@/app/components/strategyLab/BookPicker";
 import { ScenarioBar } from "@/app/components/strategyLab/ScenarioBar";
 import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
 import { TargetSection } from "@/app/components/strategyLab/TargetBoard";
@@ -80,7 +80,7 @@ function HorizonBar({
             )
           }
         >
-          Quarters
+          Date steps
         </button>
         <button
           type="button"
@@ -188,8 +188,12 @@ function ageOf(iso: string): string {
 
 export function StrategyLabPage() {
   const privacy = usePrivacy();
-  const heldSnapshot = useSchwabPositions();
   const { chain, lab, evaluation, loading, error, hint, load, edit, replace } = useStrategyLab();
+  const [mode, setMode] = useState<"book" | "hypothetical">("hypothetical");
+  const pnlApi = useRef<{ overlay: (id: string) => void; alone: (id: string) => void } | null>(null);
+  const bindPnlPlot = useCallback((api: { overlay: (id: string) => void; alone: (id: string) => void }) => {
+    pnlApi.current = api;
+  }, []);
   const [symbol, setSymbol] = useState("NOW");
   const [template, setTemplate] = useState<TemplateChoice>("callDebit");
   const [expiryPick, setExpiryPick] = useState<string>("");
@@ -401,6 +405,25 @@ export function StrategyLabPage() {
         ) : null}
       </header>
 
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Strategy lab mode" data-lab-mode={mode}>
+        <button
+          type="button"
+          aria-pressed={mode === "book"}
+          onClick={() => setMode("book")}
+          className={`rounded-full px-3 py-1.5 text-xs font-semibold ${mode === "book" ? "bg-zinc-100 text-zinc-950" : `${labControl}`}`}
+        >
+          From book (current holdings)
+        </button>
+        <button
+          type="button"
+          aria-pressed={mode === "hypothetical"}
+          onClick={() => setMode("hypothetical")}
+          className={`rounded-full px-3 py-1.5 text-xs font-semibold ${mode === "hypothetical" ? "bg-zinc-100 text-zinc-950" : `${labControl}`}`}
+        >
+          Hypothetical (new trade)
+        </button>
+      </div>
+
       <form
         className="flex flex-wrap items-end gap-2"
         onSubmit={(e) => {
@@ -436,6 +459,26 @@ export function StrategyLabPage() {
           {error}
           {hint ? ` ${hint}` : ""}
         </p>
+      ) : null}
+
+      {mode === "book" ? (
+        <BookPicker
+          chainSymbol={chain?.symbol ?? null}
+          full={lab != null && lab.structures.length >= LAB_LIMITS.structures}
+          structures={lab?.structures ?? []}
+          masked={privacy.masked}
+          onSave={(edits, view) => {
+            if (!lab) return;
+            const id = `s${lab.seq}`;
+            edit(edits);
+            if (view === "alone") pnlApi.current?.alone(id);
+            else pnlApi.current?.overlay(id);
+          }}
+          onView={(id, view) => {
+            if (view === "alone") pnlApi.current?.alone(id);
+            else pnlApi.current?.overlay(id);
+          }}
+        />
       ) : null}
 
       {lab && chain && evaluation ? (
@@ -585,15 +628,6 @@ export function StrategyLabPage() {
 
           <ScenarioBar lab={lab} symbol={chain.symbol} chain={chain} evaluation={evaluation} onRestore={replace} />
 
-          <HeldPositions
-            symbol={chain.symbol}
-            masked={privacy.masked}
-            full={lab.structures.length >= LAB_LIMITS.structures}
-            snapshot={heldSnapshot}
-            nextStructureId={`s${lab.seq}`}
-            onImport={edit}
-          />
-
           {evaluation.issues.length > 0 ? (
             <ul className="space-y-1 text-sm text-amber-800 dark:text-amber-200">
               {evaluation.issues.map((issue, index) => (
@@ -602,6 +636,8 @@ export function StrategyLabPage() {
             </ul>
           ) : null}
 
+          {mode === "hypothetical" ? (
+          <>
           <section className="rounded-xl border border-dashed border-zinc-400 p-4 dark:border-zinc-500">
             <h2 className="mb-3 text-sm font-semibold">Add a structure</h2>
             <div className="flex flex-wrap items-end gap-2">
@@ -805,6 +841,8 @@ export function StrategyLabPage() {
             onAdd={addOptimizedSpread}
             onRemove={removeOptimizedSpread}
           />
+          </>
+          ) : null}
 
           <TargetSection
             evaluation={evaluation}
@@ -836,6 +874,7 @@ export function StrategyLabPage() {
               onEdit={edit}
               onDeltaPlot={setDeltaPlotted}
               bindDeltaToggle={bindDeltaToggle}
+              bindPnlPlot={bindPnlPlot}
             />
           </div>
         </>

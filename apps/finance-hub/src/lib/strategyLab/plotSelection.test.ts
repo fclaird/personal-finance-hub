@@ -39,6 +39,16 @@ describe("plot selection", () => {
     assert.deepEqual(inverted.pnl, []);
     assert.deepEqual(inverted.delta, []);
   });
+
+  it("adds a package to the overlay and can leave one package alone", () => {
+    const start = { link: false, pnl: ["a"], delta: ["a", "b"] };
+    const overlaid = applyPlotAction(start, { kind: "add", chart: "pnl", id: "c" });
+    assert.deepEqual(overlaid.pnl, ["a", "c"]);
+    assert.deepEqual(overlaid.delta, ["a", "b"]);
+    const alone = applyPlotAction(overlaid, { kind: "only", chart: "pnl", id: "c" });
+    assert.deepEqual(alone.pnl, ["c"]);
+    assert.deepEqual(alone.delta, ["a", "b"]);
+  });
 });
 
 describe("structure colors past four", () => {

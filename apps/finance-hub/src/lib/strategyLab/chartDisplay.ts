@@ -94,8 +94,13 @@ type KnownIds = {
 
 const DATE_DASH = ["4 3", "1 3", "8 4", "2 2", "6 3"] as const;
 
+const LONG_DATE = /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) /;
+
+/** Chip and legend text. A long weekday date drops off. `E−2wk · Jun 4` stays whole. */
 export function shortHorizon(label: string): string {
-  return label.split(" · ")[0] ?? label;
+  const parts = label.split(" · ");
+  if (parts.length >= 2 && LONG_DATE.test(parts[1] ?? "")) return parts[0] ?? label;
+  return label;
 }
 
 /** t = 0 is today (cyan). t = 1 is expiry (magenta). Used when a single-date chart is set to rainbow. */
@@ -348,7 +353,7 @@ function curvesOnFocusDate(evaluation: LabEvaluation, selection: ChartSelection)
   });
 }
 
-/** One structure's quarter steps, drawn as the waterfall. A zero-package structure contributes nothing. */
+/** One structure's forward date steps, drawn as the waterfall. A zero-package structure contributes nothing. */
 export function structurePanelCurves(evaluation: LabEvaluation, selection: ChartSelection, structureId: string): CurveView[] {
   if (!selection.structureIds.includes(structureId)) return [];
   return visibleCurves(evaluation, {
@@ -496,10 +501,12 @@ export function samplePnl(points: readonly { spot: number; pnl: number }[], spot
 }
 
 function paintWaterfall(row: PricedStructure, horizons: readonly HorizonView[]): CurveView[] {
-  const last = Math.max(horizons.length - 1, 1);
-  return horizons.map((horizon, index) => {
+  const dated = Math.max(horizons.filter((horizon) => !horizon.settlement).length - 1, 1);
+  let datedIndex = 0;
+  return horizons.map((horizon) => {
     const expiry = horizon.settlement;
-    const t = horizons.length <= 1 ? 0 : index / last;
+    const t = expiry ? 1 : datedIndex / dated;
+    if (!expiry) datedIndex += 1;
     return {
       key: `${row.spec.id}@@${horizon.id}`,
       structureId: row.spec.id,

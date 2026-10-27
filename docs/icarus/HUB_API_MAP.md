@@ -25,6 +25,7 @@ Base: `https://127.0.0.1:3000` (or Electron `3049`). When `FINANCE_HUB_API_KEY` 
 | `/api/real-estate` | Owned-property values, loan, equity, and the Main-flavor net-worth strip |
 | `/api/strategy-lab/chain` | Full option chain for Strategy Lab (`?symbol=&refresh=1`). Schwab, then Cboe delayed. Read only |
 | `/api/strategy-lab/snapshots` | List saved lab snapshots for a symbol (`?symbol=`). One row (`?id=`) includes the scenario, compact quotes, and provenance. The id is stable so a future journal entry can cite it. Local SQLite only. Not on the MCP allowlist |
+| `/api/strategy-lab/book` | Open equity and option legs for the Strategy Lab picker, with cost basis and fill dates reconstructed from local positions and `broker_transactions`. Local SQLite only. Not on the MCP allowlist |
 
 Other `GET /api/*` pages (terminal, dividends, earnings, taxonomy, …) are also read-only. `/api/allocation/page-data` is the allocation screen payload (same cache as positions: `asOf`, `stale`, `?refresh=1`).
 

@@ -4,7 +4,6 @@ import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
-  addCalendarMonths,
   calendarDaysBetween,
   formatExpiryLabel,
   isoDate,
@@ -13,6 +12,7 @@ import {
   type DraftContract,
   type OptionChain,
 } from "@/lib/optionChain/chain";
+import { STEP_MINUS, forwardDateSteps, forwardStepLabel } from "@/lib/strategyLab/dateSteps";
 import {
   createLab,
   editLab,
@@ -143,15 +143,18 @@ describe("NOW Jan 19 2029 acceptance", () => {
     assert.equal(a.ownHalfway, isoDate("2027-11-29"));
     assert.equal(formatExpiryLabel(isoDate(JAN)), "Fri Jan 19, 2029");
     assert.equal(formatExpiryLabel(a.ownHalfway), "Mon Nov 29, 2027");
-    const dates = ev.horizons.map((h) => h.date);
-    assert.equal(dates[0], isoDate("2026-10-08"));
-    assert.equal(dates[dates.length - 1], isoDate(JAN));
-    assert.ok(dates.length >= 9 && dates.length <= 12, `quarter count ${dates.length}`);
-    for (let i = 1; i < dates.length - 1; i++) {
-      assert.equal(dates[i], addCalendarMonths(isoDate("2026-10-08"), i * 3));
-    }
+    const steps = forwardDateSteps(isoDate("2026-10-08"), isoDate(JAN));
+    assert.deepEqual(
+      ev.horizons.map((horizon) => horizon.date),
+      steps.map((step) => step.date),
+    );
+    assert.equal(ev.horizons[0]!.date, isoDate("2026-10-08"));
+    assert.equal(ev.horizons.at(-1)!.date, isoDate(JAN));
     assert.match(ev.horizons[0]!.label, /Today/);
     assert.match(ev.horizons[1]!.label, /\+3 mo/);
+    assert.equal(forwardStepLabel(steps.find((step) => step.weeks === 2)!, false).includes(`${STEP_MINUS}2wk`), true);
+    assert.ok(ev.horizons.some((horizon) => horizon.label.startsWith(`E${STEP_MINUS}2wk`)));
+    assert.ok(ev.horizons.some((horizon) => horizon.label.startsWith(`E${STEP_MINUS}1mo`)));
     assert.equal(ev.horizons.at(-1)!.settlement, true);
     assert.ok(ev.horizons.every((h) => h.shared));
     assert.equal(ev.issues.some((issue) => issue.severity === "block"), false);
