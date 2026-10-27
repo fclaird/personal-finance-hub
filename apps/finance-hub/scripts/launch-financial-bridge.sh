@@ -15,6 +15,9 @@
 # The new server is staged on port 3001 (or the next free port) and must return
 # /api/health 200 before anything stops the listener on 3000. A 500 or a timeout
 # leaves the old server running.
+# After that cutover, Bridge tabs in the default browser (Safari, Chrome, Arc,
+# Brave, or Edge) are closed and a new full-screen window opens.
+# FINANCE_HUB_NO_BROWSER=1 skips the browser. Other tabs are left alone.
 # Leave FINANCE_HUB_ALLOW_BROKER_ORDERS unset.
 set -eu
 
@@ -121,6 +124,22 @@ wait_for_health() {
   return 1
 }
 
+# Close Bridge tabs and open one new full-screen window. Never fails the cutover.
+reopen_bridge_browser() {
+  if [[ "${FINANCE_HUB_NO_BROWSER:-}" == "1" ]]; then
+    print -r -- "Browser reopen skipped (FINANCE_HUB_NO_BROWSER=1)."
+    return 0
+  fi
+  local origin
+  origin="$(PORT="$PORT" "$NODE" "$APP_ROOT/scripts/print-listen-origin.mjs" 2>/dev/null || true)"
+  if [[ -z "$origin" ]]; then
+    print -u2 "Browser reopen skipped: listen origin is unknown."
+    return 0
+  fi
+  "$NODE" "$APP_ROOT/scripts/reopenBridgeBrowser.mjs" "$origin" \
+    || print -u2 "Browser reopen failed; Finance Hub is up on port ${PORT}."
+}
+
 STEPS="$("$NODE" "$APP_ROOT/scripts/launchPlan.mjs" "$MODE" "$APP_ROOT")"
 steps=("${(@f)STEPS}")
 
@@ -163,6 +182,7 @@ run_step() {
         exit 1
       fi
       stop_pid "$STAGE_PID"
+      reopen_bridge_browser
       if (( BACKGROUND )); then
         print -r -- "Finance Hub listening on port ${PORT} (pid ${PROMOTE_PID})."
       else

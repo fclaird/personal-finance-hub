@@ -75,7 +75,7 @@ npm rebuild better-sqlite3
 node scripts/ensure-sqlite-native.mjs
 ```
 
-If `~/.local/opt/node-arm64` is missing or is not arm64, the launcher falls back to Cursor's bundled arm64 Node, then to whatever `node` invoked the script. `FINANCE_HUB_NODE` overrides that. `FINANCE_HUB_REBUILD=1` forces a production build. `… start` skips the build.
+If `~/.local/opt/node-arm64` is missing or is not arm64, the launcher falls back to Cursor's bundled arm64 Node, then to whatever `node` invoked the script. `FINANCE_HUB_NODE` overrides that. `FINANCE_HUB_REBUILD=1` forces a production build. `… start` skips the build. After `/api/health` returns 200 on port 3000, the launcher closes Bridge tabs (`localhost:3000` and `127.0.0.1:3000`) in the default browser — Safari, Chrome, Arc, Brave, or Edge — and opens one new full-screen window. `FINANCE_HUB_NO_BROWSER=1` skips that. Other tabs stay open.
 
 From the repo root you can also run `npm run start` (delegates to `apps/finance-hub`).
 
