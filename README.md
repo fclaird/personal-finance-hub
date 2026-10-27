@@ -58,7 +58,7 @@ npm install
 npm run build && npm start         # same scheme as SCHWAB_REDIRECT_URI, on 127.0.0.1:3000
 ```
 
-Day-to-day, run `apps/finance-hub/scripts/launch-financial-bridge.sh` (or point `~/bin/launch-financial-bridge.sh` at it). That kills anything on port 3000, builds when sources are newer than `.next`, and starts the production server on the arm64 Node at `~/.local/opt/node-arm64` when that binary exists. `… dev` keeps the dev server. `npm start` listens with the scheme in `SCHWAB_REDIRECT_URI`. An `https://127.0.0.1:3000/api/schwab/callback` URI serves HTTPS with the mkcert files `npm run dev` writes under `apps/finance-hub/certificates/`. An `http://` URI stays plain HTTP. Leave `FINANCE_HUB_ALLOW_BROKER_ORDERS` unset. Do not leave `npm run dev` running — Turbopack dev RSS grows to many GB.
+Day-to-day, run `apps/finance-hub/scripts/launch-financial-bridge.sh` (or point `~/bin/launch-financial-bridge.sh` at it). That kills anything on port 3000, builds when sources are newer than `.next`, kills port 3000 again, and starts `node .next/standalone/server.js` (static and public assets copied beside it) on the arm64 Node at `~/.local/opt/node-arm64` when that binary exists. `… dev` keeps the dev server. `npm start` listens with the scheme in `SCHWAB_REDIRECT_URI`. An `https://127.0.0.1:3000/api/schwab/callback` URI serves HTTPS with the mkcert files `npm run dev` writes under `apps/finance-hub/certificates/`. An `http://` URI stays plain HTTP. Leave `FINANCE_HUB_ALLOW_BROKER_ORDERS` unset. Do not leave `npm run dev` running — Turbopack dev RSS grows to many GB.
 
 On the Mac, the Dock launcher should be a one-line exec of that script. Interactive `npm` needs the arm64 Node first on `PATH`, then a native rebuild:
 

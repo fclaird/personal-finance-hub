@@ -11,6 +11,8 @@
 #
 # Node: ~/.local/opt/node-arm64 when that binary reports arm64, else the current node.
 # Override with FINANCE_HUB_NODE. FINANCE_HUB_REBUILD=1 forces a production build.
+# Production start is `node .next/standalone/server.js` (not `next start`).
+# Port 3000 is cleared again immediately before start or dev, after any build.
 # Leave FINANCE_HUB_ALLOW_BROKER_ORDERS unset.
 set -eu
 
@@ -26,15 +28,22 @@ PORT="${PORT:-3000}"
 
 kill_port() {
   local port="$1"
-  local pids
-  pids="$(lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null || true)"
-  if [[ -z "${pids//[$' \n\t']/}" ]]; then
-    return 0
-  fi
-  print -r -- "Stopping listener on port ${port}: ${pids//$'\n'/ }"
-  kill ${=pids} 2>/dev/null || true
-  sleep 0.4
-  kill -9 ${=pids} 2>/dev/null || true
+  local attempt pids
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    pids="$(lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null || true)"
+    if [[ -z "${pids//[$' \n\t']/}" ]]; then
+      return 0
+    fi
+    print -r -- "Stopping listener on port ${port}: ${pids//$'\n'/ }"
+    if (( attempt <= 2 )); then
+      kill ${=pids} 2>/dev/null || true
+    else
+      kill -9 ${=pids} 2>/dev/null || true
+    fi
+    sleep 0.3
+  done
+  print -u2 "Port ${port} is still in use."
+  exit 1
 }
 
 cd "$APP_ROOT"
@@ -52,6 +61,7 @@ run_step() {
       "$NODE" "$APP_ROOT/node_modules/next/dist/bin/next" build
       ;;
     start)
+      kill_port "$PORT"
       "$NODE" "$APP_ROOT/scripts/ensure-sqlite-native.mjs"
       if (( BACKGROUND )); then
         mkdir -p "${HOME}/Library/Logs/finance-hub"
@@ -62,6 +72,7 @@ run_step() {
       fi
       ;;
     dev)
+      kill_port "$PORT"
       if (( BACKGROUND )); then
         mkdir -p "${HOME}/Library/Logs/finance-hub"
         nohup "$NODE" "$APP_ROOT/scripts/dev.mjs" >>"${HOME}/Library/Logs/finance-hub/dev.log" 2>&1 &

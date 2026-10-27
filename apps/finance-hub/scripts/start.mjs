@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn, spawnSync } from "node:child_process";
+import { execSync, spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { listenLoopbackHttp, listenTls } from "./localHttps.mjs";
 import { loopbackHealthOk } from "./loopbackHealth.mjs";
 import { loadEnvLocal } from "./loadEnvLocal.mjs";
+import { prepareStandaloneAssets } from "./prepareStandalone.mjs";
 import { reexecFinanceHubNode } from "./resolveNode.mjs";
 import { certFiles, certsPresent, missingCertMessage, resolveListen, wrongProtocolMessage } from "./schwabListen.mjs";
 
@@ -26,6 +27,47 @@ function closeServer(server) {
   return new Promise((resolve) => {
     server.close(() => resolve());
   });
+}
+
+function listenPids(port) {
+  try {
+    const out = execSync(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t 2>/dev/null || true`, { encoding: "utf8" });
+    return [
+      ...new Set(
+        out
+          .trim()
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((pid) => Number(pid))
+          .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid),
+      ),
+    ];
+  } catch {
+    return [];
+  }
+}
+
+/** Drop a stale listener that failed the health check, then wait until the port is free. */
+function freeListenPort(port) {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const pids = listenPids(port);
+    if (pids.length === 0) return;
+    const signal = attempt < 2 ? "SIGTERM" : "SIGKILL";
+    console.log(`Stopping listener on port ${port}: ${pids.join(" ")}`);
+    for (const pid of pids) {
+      try {
+        process.kill(pid, signal);
+      } catch {
+        /* already gone */
+      }
+    }
+    spawnSync("sleep", ["0.3"]);
+  }
+  const left = listenPids(port);
+  if (left.length > 0) {
+    console.error(`Port ${port} is still in use by pid ${left.join(", ")}.`);
+    process.exit(1);
+  }
 }
 
 async function listenPlainHttpForInProcessFetch(onRequest) {
@@ -158,19 +200,32 @@ async function main() {
   });
   if (ensure.status !== 0) process.exit(ensure.status ?? 1);
 
-  console.log(`Finance Hub (next start) ${plan.origin}/`);
+  console.log(`Finance Hub (standalone) ${plan.origin}/`);
   if (!isLoopback(bindHost)) {
     console.log(
       `Remote desktop: open ${plan.protocol}://<vpn-or-tailscale-ip>:${port}/ — see docs/remote-desktop-vpn.md`,
     );
   }
 
+  freeListenPort(port);
+
   if (plan.protocol === "http") {
-    const nextBin = path.join(root, "node_modules", "next", "dist", "bin", "next");
-    const child = spawn(process.execPath, [nextBin, "start", "--hostname", bindHost, "--port", String(port)], {
-      cwd: root,
+    let prepared;
+    try {
+      prepared = prepareStandaloneAssets(root);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : err);
+      process.exit(1);
+    }
+    const child = spawn(process.execPath, [prepared.serverJs], {
+      cwd: prepared.standaloneDir,
       stdio: "inherit",
-      env: process.env,
+      env: {
+        ...process.env,
+        NODE_ENV: "production",
+        PORT: String(port),
+        HOSTNAME: bindHost,
+      },
     });
     child.on("error", (err) => {
       console.error(err);

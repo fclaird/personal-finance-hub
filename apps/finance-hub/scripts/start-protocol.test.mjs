@@ -63,7 +63,7 @@ describe("start protocol matches SCHWAB_REDIRECT_URI", () => {
     const combined = `${result.stdout}${result.stderr}`;
     assert.equal(result.code, 1);
     assert.match(combined, /Run: npm run dev/);
-    assert.doesNotMatch(combined, /Finance Hub \(next start\) http:/);
+    assert.doesNotMatch(combined, /Finance Hub \(standalone\) http:/);
   });
 
   it("an https redirect treats a healthy HTTPS port as already running", async () => {
@@ -102,7 +102,7 @@ describe("start protocol matches SCHWAB_REDIRECT_URI", () => {
       const combined = `${result.stdout}${result.stderr}`;
       assert.equal(result.code, 0);
       assert.match(combined, new RegExp(`already running at https://127\\.0\\.0\\.1:${port}/`));
-      assert.doesNotMatch(combined, /Finance Hub \(next start\) http:/);
+      assert.doesNotMatch(combined, /Finance Hub \(standalone\) http:/);
     } finally {
       await new Promise((resolve) => server.close(resolve));
       fs.rmSync(dir, { recursive: true, force: true });
@@ -136,7 +136,7 @@ describe("start protocol matches SCHWAB_REDIRECT_URI", () => {
         ),
       );
       assert.match(combined, /Stop that process, then run: npm start/);
-      assert.doesNotMatch(combined, /Finance Hub \(next start\) http:/);
+      assert.doesNotMatch(combined, /Finance Hub \(standalone\) http:/);
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
@@ -149,7 +149,7 @@ describe("start protocol matches SCHWAB_REDIRECT_URI", () => {
       SCHWAB_REDIRECT_URI: `http://127.0.0.1:${port}/api/schwab/callback`,
     });
     const combined = `${result.stdout}${result.stderr}`;
-    assert.match(combined, new RegExp(`Finance Hub \\(next start\\) http://127\\.0\\.0\\.1:${port}/`));
+    assert.match(combined, new RegExp(`Finance Hub \\(standalone\\) http://127\\.0\\.0\\.1:${port}/`));
     assert.doesNotMatch(combined, /Refusing to start/);
   });
 });
