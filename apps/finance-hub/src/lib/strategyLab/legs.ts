@@ -9,6 +9,23 @@ export type LegEntry = {
   readonly price: number | null;
 };
 
+/** Price paid and fill date. Manual wins over the book. Both empty means the live mark. */
+export type LegCost = {
+  readonly bookPrice: number | null;
+  readonly bookDate: IsoDate | null;
+  readonly manualPrice: number | null;
+  readonly manualDate: IsoDate | null;
+  readonly missingCost: boolean;
+};
+
+export const NO_LEG_COST: LegCost = {
+  bookPrice: null,
+  bookDate: null,
+  manualPrice: null,
+  manualDate: null,
+  missingCost: false,
+};
+
 /**
  * One position in a structure. `ratio` is the signed size (contracts, or shares).
  * `right` is null for stock. Both stay in lockstep with side, quantity, and instrument
@@ -25,7 +42,17 @@ export type Leg = {
   readonly ivOverride: number | null;
   readonly ratio: number;
   readonly right: OptionRight | null;
-};
+} & LegCost;
+
+export function legCostOf(leg: LegCost): LegCost {
+  return {
+    bookPrice: leg.bookPrice,
+    bookDate: leg.bookDate,
+    manualPrice: leg.manualPrice,
+    manualDate: leg.manualDate,
+    missingCost: leg.missingCost,
+  };
+}
 
 /** Hand-built cards stay small. A held book can be the whole account. */
 export const LEG_CAP = 8;
@@ -58,7 +85,7 @@ export function optionLeg(input: {
   readonly ivOverride?: number | null;
   readonly entry?: LegEntry;
   readonly id?: string;
-}): Leg {
+} & Partial<LegCost>): Leg {
   const ratio = input.ratio;
   return {
     id: input.id ?? "",
@@ -71,6 +98,11 @@ export function optionLeg(input: {
     ivOverride: input.ivOverride ?? null,
     ratio,
     right: input.right,
+    bookPrice: input.bookPrice ?? null,
+    bookDate: input.bookDate ?? null,
+    manualPrice: input.manualPrice ?? null,
+    manualDate: input.manualDate ?? null,
+    missingCost: input.missingCost ?? false,
   };
 }
 
@@ -86,6 +118,7 @@ export function stockLeg(shares: number, averagePrice: number, id = ""): Leg {
     ivOverride: null,
     ratio: shares,
     right: null,
+    ...NO_LEG_COST,
   };
 }
 
@@ -154,6 +187,35 @@ function dateOf(raw: unknown): IsoDate | null {
   }
 }
 
+function optionalPrice(raw: Record<string, unknown>, key: string): number | null | "bad" {
+  if (!(key in raw) || raw[key] == null) return null;
+  const price = finite(raw[key]);
+  if (price == null || !(price > 0)) return "bad";
+  return price;
+}
+
+function optionalDate(raw: Record<string, unknown>, key: string): IsoDate | null | "bad" {
+  if (!(key in raw) || raw[key] == null) return null;
+  const date = dateOf(raw[key]);
+  return date ?? "bad";
+}
+
+function readCost(raw: Record<string, unknown>): LegCost | null {
+  const bookPrice = optionalPrice(raw, "bookPrice");
+  const manualPrice = optionalPrice(raw, "manualPrice");
+  const bookDate = optionalDate(raw, "bookDate");
+  const manualDate = optionalDate(raw, "manualDate");
+  if (bookPrice === "bad" || manualPrice === "bad" || bookDate === "bad" || manualDate === "bad") return null;
+  if ("missingCost" in raw && raw.missingCost != null && typeof raw.missingCost !== "boolean") return null;
+  return {
+    bookPrice,
+    bookDate,
+    manualPrice,
+    manualDate,
+    missingCost: raw.missingCost === true,
+  };
+}
+
 function parseEntry(raw: unknown, fallback: LegEntry): LegEntry | null {
   if (raw == null) return fallback;
   if (!isRecord(raw)) return null;
@@ -176,7 +238,9 @@ export function parseStoredLeg(raw: unknown, structureExpiry: IsoDate, entry: Le
     const price = stored?.price;
     if (price == null || !(price > 0)) return null;
     const id = typeof raw.id === "string" ? raw.id : "";
-    return { ...stockLeg(shares, price, id), entry: stored ?? { kind: "limit", price } };
+    const cost = readCost(raw);
+    if (!cost) return null;
+    return { ...stockLeg(shares, price, id), ...cost, entry: stored ?? { kind: "limit", price } };
   }
 
   if (raw.instrument === "call" || raw.instrument === "put" || raw.right === "C" || raw.right === "P") {
@@ -201,8 +265,10 @@ export function parseStoredLeg(raw: unknown, structureExpiry: IsoDate, entry: Le
     }
     const legEntry = parseEntry(raw.entry, entry);
     if (!legEntry) return null;
+    const cost = readCost(raw);
+    if (!cost) return null;
     const id = typeof raw.id === "string" ? raw.id : "";
-    return optionLeg({ right, strike, ratio, expiry, ivOverride, entry: legEntry, id });
+    return optionLeg({ right, strike, ratio, expiry, ivOverride, entry: legEntry, id, ...cost });
   }
   return null;
 }

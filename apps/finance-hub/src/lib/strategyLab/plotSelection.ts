@@ -10,6 +10,8 @@ export type PlotLists = {
 
 export type PlotAction =
   | { readonly kind: "toggle"; readonly chart: PlotChart; readonly id: string }
+  | { readonly kind: "add"; readonly chart: PlotChart; readonly id: string }
+  | { readonly kind: "only"; readonly chart: PlotChart; readonly id: string }
   | { readonly kind: "all"; readonly chart: PlotChart; readonly universe: readonly string[] }
   | { readonly kind: "none"; readonly chart: PlotChart }
   | { readonly kind: "invert"; readonly chart: PlotChart; readonly universe: readonly string[] }
@@ -35,6 +37,8 @@ export function invertPlotIds(ids: readonly string[], universe: readonly string[
 
 function nextIds(current: readonly string[], action: PlotAction): string[] {
   if (action.kind === "toggle") return togglePlotId(current, action.id);
+  if (action.kind === "add") return current.includes(action.id) ? [...current] : [...current, action.id];
+  if (action.kind === "only") return [action.id];
   if (action.kind === "all") return plotAll(action.universe);
   if (action.kind === "none") return plotNone();
   if (action.kind === "invert") return invertPlotIds(current, action.universe);
