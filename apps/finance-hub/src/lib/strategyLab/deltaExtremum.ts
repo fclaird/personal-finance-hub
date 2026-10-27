@@ -1,3 +1,5 @@
+import { formatInt } from "@/lib/format";
+
 /** Interior peak or trough of an effective-delta curve. Price is where the slope is zero. */
 export type DeltaExtremum = {
   readonly price: number;
@@ -11,6 +13,63 @@ export type DeltaSample = {
 };
 
 const VALUE_EPS = 1e-3;
+
+/**
+ * Vertical step between marker labels.
+ * A bold 13px label with a 3px dark halo measures about 23px tall, so the step
+ * leaves a gap when neighboring prices share the same horizontal span.
+ */
+export const OPTIMAL_LANE_PX = 28;
+
+/** Chart label: price and the effective delta at that price. */
+export function effectiveOptimalLabel(price: number, delta: number): string {
+  return `Effective optimal price $${price.toFixed(2)} · Δ ${formatInt(delta)}`;
+}
+
+/** Readout cell beside the optimal-price column. Same price and delta as the marker. */
+export function effectiveOptimalReadout(price: number, delta: number): string {
+  return `$${price.toFixed(2)} · Δ ${formatInt(delta)}`;
+}
+
+/** Approximate width of a bold 13px label, used to keep neighbors off the same row. */
+export function optimalLabelWidthPx(text: string): number {
+  return Math.ceil(text.length * 7.6) + 14;
+}
+
+/**
+ * Puts each marker on a row that does not cross another label or the spot tag.
+ * A label near the right edge hangs to the left of its line.
+ */
+export function assignOptimalLanes<T extends { price: number; label: string }>(
+  markers: readonly T[],
+  spotPrice: number,
+  xMin: number,
+  xMax: number,
+  widthPx: number,
+): (T & { lane: number; anchorEnd: boolean })[] {
+  const span = Math.max(xMax - xMin, 1);
+  const width = Math.max(widthPx, 1);
+  const toPx = (price: number) => ((price - xMin) / span) * width;
+  const band = (price: number, labelPx: number, anchorEnd: boolean): [number, number] => {
+    const x = toPx(price);
+    return anchorEnd ? [x - labelPx - 8, x + 4] : [x - 4, x + labelPx + 8];
+  };
+  const hits = (lane: number, range: [number, number], occupied: { lane: number; range: [number, number] }[]) =>
+    occupied.some((other) => other.lane === lane && other.range[0] < range[1] && range[0] < other.range[1]);
+
+  const occupied: { lane: number; range: [number, number] }[] = [{ lane: 0, range: band(spotPrice, 48, false) }];
+  const placed: (T & { lane: number; anchorEnd: boolean })[] = [];
+  for (const marker of markers) {
+    if (marker.price < xMin || marker.price > xMax) continue;
+    const anchorEnd = marker.price > xMin + span * 0.68;
+    const range = band(marker.price, optimalLabelWidthPx(marker.label), anchorEnd);
+    let lane = 0;
+    while (hits(lane, range, occupied)) lane += 1;
+    occupied.push({ lane, range });
+    placed.push({ ...marker, lane, anchorEnd });
+  }
+  return placed;
+}
 
 /**
  * Price where the sampled delta curve turns: slope goes from rising to falling, or the reverse.

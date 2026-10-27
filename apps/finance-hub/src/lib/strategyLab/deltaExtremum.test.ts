@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { formatInt } from "@/lib/format";
 import { spreadShareDelta } from "@/lib/strategyLab/callSpreadOptimizer";
-import { deltaExtremum, type DeltaSample } from "@/lib/strategyLab/deltaExtremum";
+import {
+  assignOptimalLanes,
+  deltaExtremum,
+  effectiveOptimalLabel,
+  effectiveOptimalReadout,
+  OPTIMAL_LANE_PX,
+  type DeltaSample,
+} from "@/lib/strategyLab/deltaExtremum";
 
 function grid(from: number, to: number, step: number, value: (price: number) => number): DeltaSample[] {
   const samples: DeltaSample[] = [];
@@ -77,5 +85,23 @@ describe("delta extremum", () => {
     assert.equal(expiry.kind, "peak");
     assert.ok(expiry.price > 100 && expiry.price < 140, `expiry ${expiry.price}`);
     assert.ok(Math.abs(expiry.price - today.price) > 0.5);
+    assert.equal(effectiveOptimalLabel(162.4, 3052), `Effective optimal price $162.40 · Δ ${formatInt(3052)}`);
+    assert.equal(effectiveOptimalReadout(162.4, 3052.4), `$162.40 · Δ ${formatInt(3052.4)}`);
+    assert.ok(OPTIMAL_LANE_PX >= 26);
+  });
+
+  it("staggers marker labels that would sit on top of each other", () => {
+    const markers = [
+      { key: "a", price: 70, label: effectiveOptimalLabel(70, 2800) },
+      { key: "b", price: 72, label: effectiveOptimalLabel(72, 3100) },
+      { key: "c", price: 250, label: effectiveOptimalLabel(250, 400) },
+    ];
+    const placed = assignOptimalLanes(markers, 50, 40, 280, 1000);
+    const near = placed.filter((marker) => marker.price < 100);
+    assert.equal(near.length, 2);
+    assert.notEqual(near[0]!.lane, near[1]!.lane);
+    const far = placed.find((marker) => marker.key === "c");
+    assert.equal(far?.lane, 0);
+    assert.equal(far?.anchorEnd, true);
   });
 });
