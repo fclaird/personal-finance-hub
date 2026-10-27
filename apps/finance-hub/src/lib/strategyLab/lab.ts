@@ -12,7 +12,6 @@ import {
 } from "@/lib/optionChain/chain";
 import { formatInt, formatUsd2 } from "@/lib/format";
 import {
-  describeVolShift,
   entryDollars,
   expiryPnl,
   expiryRisk,
@@ -28,8 +27,9 @@ import {
 } from "@/lib/strategyLab/internal/pricing";
 
 export type { Assumptions };
-export { describeVolShift };
-import { assignLegIds, legEntry, optionLeg, parityPackageDebit, stockLeg, syntheticShape, type Leg } from "@/lib/strategyLab/legs";
+import { forwardDateSteps, forwardStepId, forwardStepLabel } from "@/lib/strategyLab/dateSteps";
+import { daysHeldFromLegs, entryPackageDebit, legMissingBookCost, packageUsesEntryCost } from "@/lib/strategyLab/entryCost";
+import { assignLegIds, HELD_LEG_CAP, legCostOf, legEntry, OPTION_QTY_CAP, optionLeg, parityPackageDebit, stockLeg, syntheticShape, type Leg, type LegCost } from "@/lib/strategyLab/legs";
 import { structureDisplayNames } from "@/lib/strategyLab/displayNames";
 import { MODEL_DIVIDEND_YIELD, MODEL_RATE, underlyingModelIv } from "@/lib/strategyLab/modelAssumptions";
 import { catalogRequest, resolveTemplate, TEMPLATE_CATALOG, type TemplateId, type TemplateRequest } from "@/lib/strategyLab/internal/templates";
@@ -86,6 +86,8 @@ export type StructureSpec = {
   readonly slot: StructureSlot;
   readonly origin: { readonly request: TemplateRequest; readonly tracking: boolean } | null;
   readonly resolveError: string | null;
+  /** Book packages name their ticker. Hand-built structures leave this null and use the lab symbol. */
+  readonly underlying: string | null;
 };
 
 export type Basis =
@@ -100,7 +102,7 @@ export type HorizonSpec =
   | { readonly kind: "monthsFromEntry"; readonly months: number }
   | { readonly kind: "fractionToAnchor"; readonly fraction: number }
   | { readonly kind: "anchorExpiry" }
-  /** Today, then every three calendar months, through the earliest expiry. */
+  /** Today, three-month steps, then monthly and weekly steps into the latest expiry. */
   | { readonly kind: "quartersToAnchor" };
 
 export type SpotWindow =
@@ -140,6 +142,13 @@ export type LabEdit =
   | { readonly kind: "setStrike"; readonly id: string; readonly legIndex: number; readonly strike: number }
   | { readonly kind: "stepStrike"; readonly id: string; readonly legIndex: number; readonly steps: number }
   | { readonly kind: "setEntry"; readonly id: string; readonly entry: EntryBasis }
+  | {
+      readonly kind: "setLegCost";
+      readonly id: string;
+      readonly legIndex: number;
+      readonly manualPrice: number | null;
+      readonly manualDate: IsoDate | null;
+    }
   | { readonly kind: "setIvOverride"; readonly id: string; readonly legIndex: number; readonly iv: number | null }
   | { readonly kind: "setCapitalOverride"; readonly id: string; readonly dollars: number | null }
   | { readonly kind: "addLeg"; readonly id: string; readonly right: OptionRight; readonly strike: number; readonly ratio: number }
@@ -165,7 +174,20 @@ export type LabEdit =
       readonly netPerShare: number;
       readonly stock: { readonly shares: number; readonly averagePrice: number } | null;
     }
-  | { readonly kind: "retarget"; readonly id: string };
+  | { readonly kind: "retarget"; readonly id: string }
+  | {
+      readonly kind: "savePackage";
+      readonly label: string;
+      /** Ticker this package is priced against. Omitted packages use the loaded chain symbol. */
+      readonly underlying?: string | null;
+      readonly legs: readonly ({
+        readonly instrument: "call" | "put" | "stock";
+        readonly right: OptionRight | null;
+        readonly strike: number | null;
+        readonly ratio: number;
+        readonly expiry: IsoDate | null;
+      } & LegCost)[];
+    };
 
 export type CurvePoint = { readonly spot: number; readonly pnl: number };
 
@@ -224,6 +246,8 @@ export type PricedStructure = {
   readonly spec: StructureSpec;
   readonly legs: readonly PricedLeg[];
   readonly days: number;
+  /** Days from the earliest fill or typed entry date. Null when no date is known. */
+  readonly daysHeld: number | null;
   readonly ownHalfway: IsoDate;
   readonly midPerShare: number | null;
   readonly naturalPerShare: number | null;
@@ -361,6 +385,7 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
         slot,
         origin: null,
         resolveError: null,
+        underlying: null,
       };
       const spec = withLegs(chain, lab, blank, edit.request, listed, true);
       return { ...lab, seq: lab.seq + 1, structures: [...lab.structures, spec] };
@@ -414,6 +439,15 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
         ...spec,
         entry: edit.entry,
         legs: spec.legs.map((leg) => (leg.instrument === "stock" ? leg : { ...leg, entry: legEntry(edit.entry.kind) })),
+      }));
+    case "setLegCost":
+      return mapStructure(lab, edit.id, (spec) => ({
+        ...spec,
+        legs: spec.legs.map((leg, index) => {
+          if (index !== edit.legIndex) return leg;
+          const manualPrice = edit.manualPrice != null && edit.manualPrice > 0 ? edit.manualPrice : null;
+          return { ...leg, manualPrice, manualDate: edit.manualDate };
+        }),
       }));
     case "setIvOverride":
       return mapStructure(lab, edit.id, (spec) => ({
@@ -476,9 +510,9 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
           if (instrument === "stock") {
             if (!(quantity > 0) || quantity > 1_000_000) return leg;
             const price = leg.entry.price ?? chain.spot;
-            return { ...stockLeg(sign * quantity, price, leg.id), entry: { kind: "limit", price } };
+            return { ...stockLeg(sign * quantity, price, leg.id), ...legCostOf(leg), entry: { kind: "limit", price } };
           }
-          if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) return leg;
+          if (!Number.isInteger(quantity) || quantity < 1 || quantity > OPTION_QTY_CAP) return leg;
           const right: OptionRight = instrument === "put" ? "P" : "C";
           const expiry = edit.expiry ?? leg.expiry ?? spec.expiry;
           const listed = nearestExpiry(chain, expiry) ?? expiry;
@@ -492,6 +526,7 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
             ivOverride: leg.ivOverride,
             entry: leg.instrument === "stock" ? legEntry(spec.entry.kind) : leg.entry,
             id: leg.id,
+            ...legCostOf(leg),
           });
         }),
       }));
@@ -552,7 +587,7 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
       if (!Number.isFinite(edit.netPerShare) || edit.legs.length < 1) return lab;
       const stock = edit.stock;
       if (stock && (!Number.isFinite(stock.shares) || stock.shares === 0 || !(stock.averagePrice > 0))) return lab;
-      const ratiosOk = edit.legs.every((leg) => Number.isInteger(leg.ratio) && leg.ratio !== 0 && Math.abs(leg.ratio) <= 100);
+      const ratiosOk = edit.legs.every((leg) => Number.isInteger(leg.ratio) && leg.ratio !== 0 && Math.abs(leg.ratio) <= OPTION_QTY_CAP);
       if (!ratiosOk) return lab;
       const latest = edit.legs.reduce((far, leg) => ((leg.expiry ?? edit.expiry) > far ? (leg.expiry ?? edit.expiry) : far), edit.expiry);
       const listedExpiry = chain.expiries.some((expiry) => expiry.date === latest);
@@ -566,7 +601,7 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
       const reason = !listedExpiry
         ? `${latest} is not on this chain.`
         : `Not listed: ${missing.map((leg) => `${leg.strike} ${leg.right}`).join(", ")}.`;
-      if (edit.legs.length + (stock ? 1 : 0) > LAB_LIMITS.legs) return lab;
+      if (edit.legs.length + (stock ? 1 : 0) > HELD_LEG_CAP) return lab;
       const used = new Set(lab.structures.map((item) => item.slot));
       let slot: number | null = null;
       for (let candidate = 0; candidate < LAB_LIMITS.structures; candidate++) {
@@ -603,6 +638,7 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
           tracking: false,
         },
         resolveError: blocked ? reason : null,
+        underlying: null,
       };
       return { ...lab, seq: lab.seq + 1, structures: [...lab.structures, spec] };
     }
@@ -611,6 +647,87 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
         if (!spec.origin) return spec;
         return withLegs(chain, lab, spec, spec.origin.request, spec.expiry, true);
       });
+    case "savePackage": {
+      if (lab.structures.length >= LAB_LIMITS.structures) return lab;
+      if (edit.legs.length < 1 || edit.legs.length > HELD_LEG_CAP) return lab;
+      const options = edit.legs.filter((leg) => leg.instrument !== "stock");
+      const stocks = edit.legs.filter((leg) => leg.instrument === "stock");
+      const optionsOk = options.every(
+        (leg) =>
+          (leg.right === "C" || leg.right === "P") &&
+          leg.strike != null &&
+          leg.strike > 0 &&
+          leg.expiry != null &&
+          Number.isInteger(leg.ratio) &&
+          leg.ratio !== 0 &&
+          Math.abs(leg.ratio) <= OPTION_QTY_CAP,
+      );
+      const stocksOk = stocks.every((leg) => Number.isFinite(leg.ratio) && leg.ratio !== 0 && Math.abs(leg.ratio) <= 1_000_000);
+      if (!optionsOk || !stocksOk) return lab;
+      const latest = options.reduce<IsoDate | null>((far, leg) => {
+        const date = leg.expiry ?? far;
+        return far == null || (date != null && date > far) ? date : far;
+      }, null);
+      const listedExpiry = latest == null || chain.expiries.some((expiry) => expiry.date === latest);
+      const anchor = latest ?? chain.expiries.at(-1)?.date ?? chain.tradeDate;
+      const expiry = listedExpiry ? anchor : nearestExpiry(chain, anchor);
+      if (!expiry) return lab;
+      const missing = options.filter((leg) => {
+        const legExpiry = leg.expiry ?? expiry;
+        const right = leg.right === "P" ? "P" : "C";
+        return !listedStrikes(chain, legExpiry, right).some((strike) => Math.round(strike * 1000) === Math.round((leg.strike ?? 0) * 1000));
+      });
+      const blocked = !listedExpiry || missing.length > 0;
+      const reason = !listedExpiry
+        ? `${latest} is not on this chain.`
+        : `Not listed: ${missing.map((leg) => `${leg.strike} ${leg.right}`).join(", ")}.`;
+      const used = new Set(lab.structures.map((item) => item.slot));
+      let slot: number | null = null;
+      for (let candidate = 0; candidate < LAB_LIMITS.structures; candidate++) {
+        if (!used.has(candidate)) {
+          slot = candidate;
+          break;
+        }
+      }
+      if (slot == null) return lab;
+      const built = blocked
+        ? []
+        : edit.legs.flatMap((leg) => {
+            const cost = legCostOf(leg);
+            if (leg.instrument === "stock") {
+              const price = leg.manualPrice ?? leg.bookPrice ?? chain.spot;
+              if (!(price > 0)) return [];
+              return [{ ...stockLeg(leg.ratio, price), ...cost }];
+            }
+            return [
+              optionLeg({
+                right: leg.right === "P" ? "P" : "C",
+                strike: leg.strike ?? 0,
+                ratio: leg.ratio,
+                expiry: leg.expiry ?? expiry,
+                entry: legEntry("mid"),
+                ...cost,
+              }),
+            ];
+          });
+      const label = edit.label.trim().slice(0, 40) || "Book";
+      const named = (edit.underlying ?? "").trim().toUpperCase();
+      const underlying = named.length >= 1 && named.length <= 12 ? named : chain.symbol;
+      const spec: StructureSpec = {
+        id: `s${lab.seq}`,
+        label,
+        expiry,
+        snappedFrom: listedExpiry ? null : latest,
+        legs: assignLegIds(built),
+        entry: { kind: "mid" },
+        capitalOverride: null,
+        slot,
+        origin: null,
+        resolveError: blocked ? reason : null,
+        underlying,
+      };
+      return { ...lab, seq: lab.seq + 1, structures: [...lab.structures, spec] };
+    }
     default:
       return lab;
   }
@@ -662,48 +779,18 @@ function horizonViews(lab: LabScenario, chain: OptionChain): { horizons: Horizon
       continue;
     }
     if (spec.kind === "quartersToAnchor") {
-      if (!anchor) continue;
-      const steps: { months: number; date: IsoDate }[] = [];
-      for (let step = 0; step < 40; step++) {
-        const months = step * 3;
-        const date = months === 0 ? chain.tradeDate : addCalendarMonths(chain.tradeDate, months);
-        if (months > 0 && date >= anchor) break;
-        steps.push({ months, date });
-      }
-      for (const step of steps) {
-        const label =
-          step.months === 0
-            ? `Today · ${formatExpiryLabel(step.date)}`
-            : `+${step.months} mo · ${formatExpiryLabel(step.date)}`;
+      const latest = expiries.length ? expiries.reduce((a, b) => (a > b ? a : b)) : null;
+      if (!latest) continue;
+      const showDate = expiries.some((date) => date !== latest);
+      for (const step of forwardDateSteps(chain.tradeDate, latest)) {
         horizons.push({
-          id: `q:${step.months}:${step.date}`,
+          id: forwardStepId(step),
           date: step.date,
-          label,
+          label: forwardStepLabel(step, showDate),
           shared: true,
-          settlement: false,
+          settlement: step.kind === "expiry",
           structureId: null,
         });
-      }
-      if (allSame) {
-        horizons.push({
-          id: `q:expiry:${anchor}`,
-          date: anchor,
-          label: `Expiry · ${formatExpiryLabel(anchor)}`,
-          shared: true,
-          settlement: true,
-          structureId: null,
-        });
-      } else {
-        for (const structure of lab.structures) {
-          horizons.push({
-            id: `q:expiry:${structure.id}:${structure.expiry}`,
-            date: structure.expiry,
-            label: `Expiry · ${structure.label} · ${formatExpiryLabel(structure.expiry)}`,
-            shared: false,
-            settlement: true,
-            structureId: structure.id,
-          });
-        }
       }
       continue;
     }
@@ -998,23 +1085,53 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
         message: "Natural price needs a bid on short legs and an ask on long legs.",
       });
     }
-    const usedPerShare =
-      spec.entry.kind === "limit" ? spec.entry.netPerShare : spec.entry.kind === "natural" ? naturalPerShare : midPerShare;
+    const marks = spec.legs.map((leg, index) => (leg.instrument === "stock" ? chain.spot : quoted.legs[index]?.mid ?? null));
+    const fromBook = packageUsesEntryCost(spec.legs) ? entryPackageDebit(spec.legs, marks) : null;
+    if (packageUsesEntryCost(spec.legs) && fromBook == null) {
+      blocked.push({ status: "blocked", spec, reason: "No entry price." });
+      issues.push({ severity: "block", structureId: spec.id, code: "no-entry", message: "No entry price." });
+      continue;
+    }
+    const usedPerShare = fromBook
+      ? fromBook.optionPerShare
+      : spec.entry.kind === "limit"
+        ? spec.entry.netPerShare
+        : spec.entry.kind === "natural"
+          ? naturalPerShare
+          : midPerShare;
     if (usedPerShare == null) {
       blocked.push({ status: "blocked", spec, reason: "No entry price." });
       issues.push({ severity: "block", structureId: spec.id, code: "no-entry", message: "No entry price." });
       continue;
     }
-    const quotedDebit = entryDollars(usedPerShare) + Math.round(stockEntryDollars(spec.legs));
+    const quotedDebit = fromBook ? fromBook.debit : entryDollars(usedPerShare) + Math.round(stockEntryDollars(spec.legs));
     const shape = syntheticShape(spec.legs);
     const call = spec.legs.find((leg) => leg.instrument === "call");
     const years =
       call?.expiry == null ? 0 : calendarDaysBetween(chain.tradeDate, call.expiry) / 365;
     const parityDebit =
-      shape && call?.strike != null && spec.entry.kind !== "limit"
+      fromBook == null && shape && call?.strike != null && spec.entry.kind !== "limit"
         ? parityPackageDebit(chain.spot, call.strike, years, call.quantity, shape)
         : null;
     const debit = parityDebit ?? quotedDebit;
+    const missingCost = spec.legs.filter(legMissingBookCost);
+    if (missingCost.length === 1) {
+      const leg = missingCost[0]!;
+      const name = leg.instrument === "stock" ? "the shares" : `the ${leg.strike} ${leg.instrument}`;
+      issues.push({
+        severity: "warn",
+        structureId: spec.id,
+        code: "missing-cost",
+        message: `${spec.label}: no book cost for ${name}. That leg uses the mark.`,
+      });
+    } else if (missingCost.length > 1) {
+      issues.push({
+        severity: "warn",
+        structureId: spec.id,
+        code: "missing-cost",
+        message: `${spec.label}: ${missingCost.length} legs have no book cost. Those legs use the mark.`,
+      });
+    }
     const risk = expiryRisk(quoted.legs, debit, chain.spot);
     const budget = structurePackageCost(quoted.legs, debit, risk, spec.capitalOverride);
     const greeks = packageGreeks(chain, quoted.legs, modelAssumptions);
@@ -1026,6 +1143,7 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
       spec,
       legs: quoted.legs,
       days,
+      daysHeld: daysHeldFromLegs(spec.legs, chain.tradeDate),
       ownHalfway: addCalendarDays(chain.tradeDate, Math.floor(days / 2)),
       midPerShare,
       naturalPerShare,

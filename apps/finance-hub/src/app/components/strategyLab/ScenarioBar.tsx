@@ -32,11 +32,11 @@ export function ScenarioBar({
   evaluation,
   onRestore,
 }: {
-  lab: LabScenario;
+  lab: LabScenario | null;
   symbol: string;
-  chain: OptionChain;
-  evaluation: LabEvaluation;
-  onRestore: (scenario: LabScenario) => void;
+  chain: OptionChain | null;
+  evaluation: LabEvaluation | null;
+  onRestore: (scenario: LabScenario) => void | boolean | Promise<void | boolean>;
 }) {
   const [library, setLibrary] = useState<NamedScenario[]>([]);
   const [name, setName] = useState("");
@@ -79,6 +79,10 @@ export function ScenarioBar({
         type="button"
         className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
         onClick={() => {
+          if (!lab) {
+            setNote("Open an underlying before saving a scenario.");
+            return;
+          }
           const parsed = parseScenario(JSON.parse(JSON.stringify(lab)) as unknown);
           if (!parsed) {
             setNote("This scenario could not be saved.");
@@ -121,17 +125,15 @@ export function ScenarioBar({
             setNote("Choose a saved scenario.");
             return;
           }
-          if (item.scenario.symbol !== symbol) {
-            setNote(`Load ${item.scenario.symbol} before restoring ${item.name}.`);
-            return;
-          }
           const parsed = parseScenario(JSON.parse(JSON.stringify(item.scenario)) as unknown);
           if (!parsed) {
             setNote("That save could not be read.");
             return;
           }
-          onRestore(parsed);
-          setNote(`Restored ${item.name}.`);
+          setNote(`Loading ${parsed.symbol}…`);
+          void Promise.resolve(onRestore(parsed)).then((ok) => {
+            setNote(ok === false ? `Could not load ${parsed.symbol}.` : `Restored ${item.name}.`);
+          });
         }}
       >
         Restore
@@ -151,21 +153,31 @@ export function ScenarioBar({
       <button
         type="button"
         className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
-        onClick={() => downloadCsv(`${symbol.toLowerCase()}-strategy-lab-cube.csv`, evaluationCubeCsv(evaluation))}
+        disabled={!evaluation}
+        onClick={() => {
+          if (!evaluation) return;
+          downloadCsv(`${symbol.toLowerCase()}-strategy-lab-cube.csv`, evaluationCubeCsv(evaluation));
+        }}
       >
         Export P&L cube
       </button>
       <button
         type="button"
         className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
-        onClick={() => downloadCsv(`${symbol.toLowerCase()}-strategy-lab-entry.csv`, entryTableCsv(evaluation))}
+        disabled={!evaluation}
+        onClick={() => {
+          if (!evaluation) return;
+          downloadCsv(`${symbol.toLowerCase()}-strategy-lab-entry.csv`, entryTableCsv(evaluation));
+        }}
       >
         Export entry table
       </button>
       <button
         type="button"
         className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
+        disabled={!lab || !chain}
         onClick={() => {
+          if (!lab || !chain) return;
           void fetch("/api/strategy-lab/snapshots", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -221,12 +233,14 @@ export function ScenarioBar({
                 return;
               }
               const parsed = parseScenario(body.snapshot.scenario);
-              if (!parsed || parsed.symbol !== symbol) {
+              if (!parsed) {
                 setNote("That snapshot could not be read.");
                 return;
               }
-              onRestore(parsed);
-              setNote(`Loaded snapshot ${snapshotId}.`);
+              setNote(`Loading ${parsed.symbol}…`);
+              void Promise.resolve(onRestore(parsed)).then((ok) => {
+                setNote(ok === false ? `Could not load ${parsed.symbol}.` : `Loaded snapshot ${snapshotId}.`);
+              });
             })
             .catch(() => setNote("That snapshot could not be read."));
         }}

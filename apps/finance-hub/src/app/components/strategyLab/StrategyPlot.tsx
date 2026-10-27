@@ -119,16 +119,21 @@ function ChartTip({
   mask,
   structures,
   names,
+  expiryBlock = true,
+  seriesOrder = false,
 }: {
   active?: boolean;
   payload?: Array<{ name?: string; dataKey?: string | number; value?: number; color?: string; payload?: ChartRow }>;
   mask: boolean;
   structures: readonly PricedStructure[];
   names: ReadonlyMap<string, string>;
+  expiryBlock?: boolean;
+  /** Keep Today through Expiry in ramp order. Value order puts the largest P&L first. */
+  seriesOrder?: boolean;
 }) {
   if (!active || !payload?.length) return null;
   const spot = payload[0]?.payload?.spot;
-  const rows = [...payload].sort((a, b) => {
+  const rows = seriesOrder ? [...payload] : [...payload].sort((a, b) => {
     const left = typeof a.value === "number" && Number.isFinite(a.value) ? a.value : Number.NEGATIVE_INFINITY;
     const right = typeof b.value === "number" && Number.isFinite(b.value) ? b.value : Number.NEGATIVE_INFINITY;
     return right - left;
@@ -141,7 +146,7 @@ function ChartTip({
           {item.name} {money(typeof item.value === "number" ? item.value : undefined, mask)}
         </div>
       ))}
-      {spot != null ? (
+      {expiryBlock && spot != null ? (
         <div className="mt-1 border-t border-zinc-600 pt-1">
           <div className="text-zinc-300">At expiry</div>
           {structures.map((row) => (
@@ -206,6 +211,8 @@ export function StrategyPlot({
   header,
   footer,
   annotate = true,
+  showExpiryTip = true,
+  tipSeriesOrder = false,
   forceStrikes = false,
   stockName,
   role = "pnl",
@@ -240,6 +247,10 @@ export function StrategyPlot({
   header?: ReactNode;
   footer?: ReactNode;
   annotate?: boolean;
+  /** Waterfall already draws expiry as its own curve, so the tooltip skips the extra expiry block. */
+  showExpiryTip?: boolean;
+  /** Waterfall hover lists dates from early to late. */
+  tipSeriesOrder?: boolean;
   forceStrikes?: boolean;
   stockName?: string;
   role?: "pnl" | "delta";
@@ -581,7 +592,7 @@ export function StrategyPlot({
               tickLine={{ stroke: LAB_PALETTE.axisLine }}
             />
             <Tooltip
-              content={tooltip ?? <ChartTip mask={masked} structures={marked} names={displayNames} />}
+              content={tooltip ?? <ChartTip mask={masked} structures={marked} names={displayNames} expiryBlock={showExpiryTip} seriesOrder={tipSeriesOrder} />}
               cursor={{ stroke: LAB_PALETTE.spot, strokeWidth: 1.5 }}
             />
             {zones.map((zone) => (
@@ -721,7 +732,7 @@ export function StrategyPlot({
           />
         ) : null}
       </div>
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5" aria-label="Legend">
         {curves.map((curve) => {
           const focused = focusedKey === curve.key;
           const dimmed = useLook && focusedKey != null && !focused;
@@ -881,8 +892,11 @@ function chartFrame(
     0.08,
   );
   const structureIds = new Set(curves.map((curve) => curve.structureId));
+  const multiDate = new Set(curves.map((curve) => curve.horizonId)).size > 1;
   let wing: { min: number; max: number } | null = null;
-  if (yMode === "profit" && structureIds.size === 1) {
+  // One curve can frame its profit wing. Several dates need the shared window,
+  // or the home view clips every date except the largest swing.
+  if (yMode === "profit" && structureIds.size === 1 && !multiDate) {
     let magnitude = -1;
     for (const curve of curves) {
       const samples: ChartPoint[] = [];
@@ -902,7 +916,7 @@ function chartFrame(
   const profitX = wing ?? (profit.length > 0 ? paddedPriceSpan(profit.map((crossover) => crossover.spot)) : null);
   const homeX = profitX ?? { min: spotWindow.min, max: Math.max(spotWindow.max, spotWindow.min + 1e-6) };
   const profitY =
-    yMode === "profit" && profitX
+    yMode === "profit" && profitX && !multiDate
       ? profitRegionY(
           [...samples, ...profit.map((crossover) => ({ x: crossover.spot, y: crossover.pnl }))],
           profitX.min,

@@ -23,6 +23,7 @@ import {
   type TargetRead,
   type TileMetrics,
 } from "@/lib/strategyLab/targetMetrics";
+import { packageUsesEntryCost } from "@/lib/strategyLab/entryCost";
 import { labControl, labLabel, seriesColor } from "@/lib/strategyLab/palette";
 import {
   formatModelDelta,
@@ -335,6 +336,9 @@ export function StructureCard({
         </div>
       ) : null}
 
+      {packageUsesEntryCost(spec.legs) ? (
+        <p className="mb-3 text-sm text-zinc-100">Package debit uses each leg&apos;s book or manual price.</p>
+      ) : (
       <fieldset className={`mb-3 mt-3 ${labLabel}`}>
         <legend className="mb-1">Entry</legend>
         <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-900 dark:text-zinc-50">
@@ -380,6 +384,7 @@ export function StructureCard({
           </label>
         </div>
       </fieldset>
+      )}
 
       <DollarsAtRisk row={row} onEdit={onEdit} masked={masked} label={shown} />
 
@@ -400,6 +405,7 @@ export function StructureCard({
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <Stat label="Debit" value={usd(row.debit, masked)} />
+          {row.daysHeld != null ? <Stat label="Days held" value={String(row.daysHeld)} /> : null}
           {row.parityDebit != null ? (
             <Stat label="Quoted net" value={usd(row.quotedDebit, masked)} />
           ) : null}

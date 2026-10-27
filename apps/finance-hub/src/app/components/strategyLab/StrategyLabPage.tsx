@@ -8,16 +8,15 @@ import { ChainGrid } from "@/app/components/strategyLab/ChainGrid";
 import { SpreadOptimizer } from "@/app/components/strategyLab/SpreadOptimizer";
 import { LabCharts } from "@/app/components/strategyLab/LabCharts";
 import { ExpirySummary } from "@/app/components/strategyLab/ExpirySummary";
-import { HeldPositions } from "@/app/components/strategyLab/HeldPositions";
+import { BookPicker } from "@/app/components/strategyLab/BookPicker";
 import { ScenarioBar } from "@/app/components/strategyLab/ScenarioBar";
 import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
 import { TargetSection } from "@/app/components/strategyLab/TargetBoard";
 import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
-import { catalogRequest, describeVolShift, LAB_LIMITS, TEMPLATE_CATALOG, type HorizonSpec, type LabEdit, type TemplateId } from "@/lib/strategyLab/lab";
+import { catalogRequest, LAB_LIMITS, TEMPLATE_CATALOG, type HorizonSpec, type LabEdit, type LabScenario, type TemplateId } from "@/lib/strategyLab/lab";
 import type { SpreadCandidate } from "@/lib/strategyLab/callSpreadOptimizer";
 import { formatModelDelta, nearestDeltaStrike, strikeDeltas } from "@/lib/strategyLab/strikeDelta";
-import { modelAssumptionLabel, underlyingModelIv } from "@/lib/strategyLab/modelAssumptions";
-import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
+import { labControl, labLabel } from "@/lib/strategyLab/palette";
 import { useStrategyLab } from "@/lib/strategyLab/useStrategyLab";
 
 type TemplateChoice = TemplateId | "zebraDelta";
@@ -80,7 +79,7 @@ function HorizonBar({
             )
           }
         >
-          Quarters
+          Date steps
         </button>
         <button
           type="button"
@@ -188,7 +187,12 @@ function ageOf(iso: string): string {
 
 export function StrategyLabPage() {
   const privacy = usePrivacy();
-  const { chain, lab, evaluation, loading, error, hint, load, edit, replace } = useStrategyLab();
+  const { chain, lab, evaluation, loading, error, hint, load, ensureUnderlying, edit, replace } = useStrategyLab();
+  const [mode, setMode] = useState<"book" | "hypothetical">("hypothetical");
+  const pnlApi = useRef<{ overlay: (id: string) => void; alone: (id: string) => void } | null>(null);
+  const bindPnlPlot = useCallback((api: { overlay: (id: string) => void; alone: (id: string) => void }) => {
+    pnlApi.current = api;
+  }, []);
   const [symbol, setSymbol] = useState("NOW");
   const [template, setTemplate] = useState<TemplateChoice>("callDebit");
   const [expiryPick, setExpiryPick] = useState<string>("");
@@ -199,7 +203,6 @@ export function StrategyLabPage() {
   const [thirdStrike, setThirdStrike] = useState("");
   const [fourthStrike, setFourthStrike] = useState("");
   const [limit, setLimit] = useState("");
-  const [capitalDraft, setCapitalDraft] = useState("10000");
   const [targetHorizon, setTargetHorizon] = useState("expiry");
   const [targetText, setTargetText] = useState("");
   const [whatIf, setWhatIf] = useState<{ symbol: string; spot: number } | null>(null);
@@ -305,7 +308,44 @@ export function StrategyLabPage() {
     setLimit("");
   }
 
-  const capital = lab?.basis.kind === "equalCapital" ? lab.basis.capital : Number(capitalDraft) || 10_000;
+  const showAnalysis = useCallback(() => {
+    const scroll = () => document.getElementById("lab-analysis")?.scrollIntoView({ block: "start", behavior: "smooth" });
+    requestAnimationFrame(() => {
+      if (document.getElementById("lab-analysis")) scroll();
+      else requestAnimationFrame(scroll);
+    });
+  }, []);
+
+  const openUnderlying = useCallback(
+    async (next: string) => {
+      const loaded = await ensureUnderlying(next);
+      if (!loaded) return null;
+      setSymbol(loaded.symbol);
+      showAnalysis();
+      return loaded;
+    },
+    [ensureUnderlying, showAnalysis],
+  );
+
+  const handleUnderlyingSelected = useCallback(
+    (next: string) => {
+      void openUnderlying(next);
+    },
+    [openUnderlying],
+  );
+
+  const restoreScenario = useCallback(
+    async (scenario: LabScenario) => {
+      const loaded = await ensureUnderlying(scenario.symbol);
+      if (!loaded) return false;
+      setSymbol(loaded.symbol);
+      replace(scenario);
+      showAnalysis();
+      return true;
+    },
+    [ensureUnderlying, replace, showAnalysis],
+  );
+
   const needsStrikes = true;
   const needsShort = count >= 2;
   const needsThird = count >= 3;
@@ -400,6 +440,25 @@ export function StrategyLabPage() {
         ) : null}
       </header>
 
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Strategy lab mode" data-lab-mode={mode}>
+        <button
+          type="button"
+          aria-pressed={mode === "book"}
+          onClick={() => setMode("book")}
+          className={`rounded-full px-3 py-1.5 text-xs font-semibold ${mode === "book" ? "bg-zinc-100 text-zinc-950" : `${labControl}`}`}
+        >
+          From book (current holdings)
+        </button>
+        <button
+          type="button"
+          aria-pressed={mode === "hypothetical"}
+          onClick={() => setMode("hypothetical")}
+          className={`rounded-full px-3 py-1.5 text-xs font-semibold ${mode === "hypothetical" ? "bg-zinc-100 text-zinc-950" : `${labControl}`}`}
+        >
+          Hypothetical (new trade)
+        </button>
+      </div>
+
       <form
         className="flex flex-wrap items-end gap-2"
         onSubmit={(e) => {
@@ -437,141 +496,47 @@ export function StrategyLabPage() {
         </p>
       ) : null}
 
-      {lab && chain && evaluation ? (
-        <>
-          <section className={`${labCard} grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4`}>
-            <label className={labLabel}>
-              Rate %
-              <input
-                type="number"
-                readOnly
-                value="4"
-                aria-label="Rate percent"
-                className="mt-1 block w-full rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm tabular-nums"
-              />
-            </label>
-            <label className={labLabel}>
-              Dividend yield %
-              <input
-                aria-label="Dividend yield percent"
-                type="number"
-                readOnly
-                value="0"
-                className="mt-1 block w-full rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm tabular-nums"
-              />
-              <span className="mt-1 block text-[11px] text-zinc-700 dark:text-zinc-300">{modelAssumptionLabel(underlyingModelIv(chain))}</span>
-            </label>
-            <label className={labLabel}>
-              Vol shift
-              <select
-                aria-label="Vol shift mode"
-                value={lab.assumptions.volShift?.mode ?? "points"}
-                onChange={(event) =>
-                  edit({
-                    kind: "setAssumptions",
-                    patch: {
-                      volShift: {
-                        mode: event.target.value === "pct" ? "pct" : "points",
-                        amount: lab.assumptions.volShift?.amount ?? 0,
-                      },
-                    },
-                  })
-                }
-                className={`mt-1 block px-2 py-1.5 text-sm ${labControl}`}
-              >
-                <option value="points">Vol points</option>
-                <option value="pct">Percent of IV</option>
-              </select>
-            </label>
-            <label className={labLabel}>
-              Shift amount
-              <input
-                aria-label="Vol shift amount"
-                type="number"
-                step="1"
-                value={String(lab.assumptions.volShift?.amount ?? 0)}
-                onChange={(event) => {
-                  const amount = Number(event.target.value);
-                  if (!Number.isFinite(amount)) return;
-                  edit({
-                    kind: "setAssumptions",
-                    patch: { volShift: { mode: lab.assumptions.volShift?.mode ?? "points", amount } },
-                  });
-                }}
-                className={`mt-1 block w-24 px-2 py-1.5 text-sm tabular-nums ${labControl}`}
-              />
-              {describeVolShift(lab.assumptions.volShift) ? (
-                <span className="mt-1 block text-[11px] text-amber-200">{describeVolShift(lab.assumptions.volShift)}</span>
-              ) : null}
-            </label>
-            <label className={labLabel}>
-              IV source
-              <select
-                value={lab.assumptions.ivSource}
-                onChange={(e) =>
-                  edit({ kind: "setAssumptions", patch: { ivSource: e.target.value === "feed" ? "feed" : "mid" } })
-                }
-                className="mt-1 block w-full rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm"
-              >
-                <option value="mid">Solve from mid</option>
-                <option value="feed">Feed IV</option>
-              </select>
-            </label>
-            <label className={labLabel}>
-              Capital basis
-              <span className="mt-1 flex gap-2">
-                <select
-                  aria-label="Capital units"
-                  value={lab.basis.kind === "matchExpensive" ? "match" : lab.basis.kind === "perPackage" ? "package" : lab.basis.units}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    if (value === "match") edit({ kind: "setBasis", basis: { kind: "matchExpensive" } });
-                    else if (value === "package") edit({ kind: "setBasis", basis: { kind: "perPackage" } });
-                    else
-                      edit({
-                        kind: "setBasis",
-                        basis: {
-                          kind: "equalCapital",
-                          capital: evaluation.match?.capital ?? capital,
-                          units: value === "fractional" ? "fractional" : "whole",
-                        },
-                      });
-                  }}
-                  className="w-full rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm"
-                >
-                  <option value="match">Match most expensive</option>
-                  <option value="fractional">Manual dollars</option>
-                  <option value="whole">Whole contracts</option>
-                  <option value="package">Per package</option>
-                </select>
-                <input
-                  aria-label="Capital dollars"
-                  type="number"
-                  readOnly={lab.basis.kind === "matchExpensive"}
-                  value={
-                    lab.basis.kind === "equalCapital"
-                      ? lab.basis.capital
-                      : lab.basis.kind === "matchExpensive"
-                        ? (evaluation.match?.capital ?? "")
-                        : capitalDraft
-                  }
-                  onChange={(e) => {
-                    if (lab.basis.kind !== "equalCapital") {
-                      setCapitalDraft(e.target.value);
-                      return;
-                    }
-                    setCapitalDraft(e.target.value);
-                    const next = Number(e.target.value);
-                    if (Number.isFinite(next) && next > 0) {
-                      edit({ kind: "setBasis", basis: { kind: "equalCapital", capital: next, units: lab.basis.units } });
-                    }
-                  }}
-                  className="w-28 rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm tabular-nums"
-                />
-              </span>
-            </label>
-          </section>
+      {mode === "book" ? (
+        <BookPicker
+          chainSymbol={chain?.symbol ?? null}
+          full={lab != null && lab.structures.length >= LAB_LIMITS.structures}
+          structures={lab?.structures ?? []}
+          masked={privacy.masked}
+          onUnderlyingSelected={handleUnderlyingSelected}
+          onSave={async (edits, view) => {
+            const pack = edits.find((item) => item.kind === "savePackage");
+            const underlying = pack && pack.kind === "savePackage" ? pack.underlying : null;
+            if (!underlying) return false;
+            const same = chain?.symbol === underlying && lab?.symbol === underlying;
+            if (same && lab && lab.structures.length >= LAB_LIMITS.structures) return false;
+            const seq = same && lab ? lab.seq : 1;
+            const loaded = await ensureUnderlying(underlying);
+            if (!loaded) return false;
+            setSymbol(loaded.symbol);
+            const id = `s${seq}`;
+            edit(edits);
+            if (view === "alone") pnlApi.current?.alone(id);
+            else pnlApi.current?.overlay(id);
+            showAnalysis();
+            return true;
+          }}
+          onView={(id, view) => {
+            if (view === "alone") pnlApi.current?.alone(id);
+            else pnlApi.current?.overlay(id);
+          }}
+        />
+      ) : null}
 
+      <ScenarioBar
+        lab={lab}
+        symbol={chain?.symbol ?? symbol}
+        chain={chain}
+        evaluation={evaluation}
+        onRestore={restoreScenario}
+      />
+
+      {lab && chain && evaluation ? (
+        <div id="lab-analysis">
           <HorizonBar
             horizons={lab.horizons}
             views={evaluation.horizons}
@@ -582,10 +547,6 @@ export function StrategyLabPage() {
             onEdit={edit}
           />
 
-          <ScenarioBar lab={lab} symbol={chain.symbol} chain={chain} evaluation={evaluation} onRestore={replace} />
-
-          <HeldPositions symbol={chain.symbol} masked={privacy.masked} full={lab.structures.length >= LAB_LIMITS.structures} onImport={edit} />
-
           {evaluation.issues.length > 0 ? (
             <ul className="space-y-1 text-sm text-amber-800 dark:text-amber-200">
               {evaluation.issues.map((issue, index) => (
@@ -594,6 +555,8 @@ export function StrategyLabPage() {
             </ul>
           ) : null}
 
+          {mode === "hypothetical" ? (
+          <>
           <section className="rounded-xl border border-dashed border-zinc-400 p-4 dark:border-zinc-500">
             <h2 className="mb-3 text-sm font-semibold">Add a structure</h2>
             <div className="flex flex-wrap items-end gap-2">
@@ -792,9 +755,13 @@ export function StrategyLabPage() {
             structureCount={lab.structures.length}
             structureLimit={LAB_LIMITS.structures}
             masked={privacy.masked}
+            evaluation={evaluation}
+            plottedIds={deltaPlotted}
             onAdd={addOptimizedSpread}
             onRemove={removeOptimizedSpread}
           />
+          </>
+          ) : null}
 
           <TargetSection
             evaluation={evaluation}
@@ -826,9 +793,10 @@ export function StrategyLabPage() {
               onEdit={edit}
               onDeltaPlot={setDeltaPlotted}
               bindDeltaToggle={bindDeltaToggle}
+              bindPnlPlot={bindPnlPlot}
             />
           </div>
-        </>
+        </div>
       ) : null}
     </div>
   );

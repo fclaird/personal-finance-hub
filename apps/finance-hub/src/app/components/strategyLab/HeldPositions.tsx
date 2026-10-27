@@ -1,223 +1,223 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { formatUsd2 } from "@/lib/format";
 import type { LabEdit } from "@/lib/strategyLab/lab";
 import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
 import {
-  booksFor,
-  draftHeldSelection,
-  draftHeldStructure,
-  groupHeldPositions,
-  stockFor,
-  type HeldBook,
-  type HeldGroups,
+  draftHeldBook,
+  heldAccountChoices,
+  type HeldAccountChoice,
+  type HeldAccountRef,
   type HeldPositionRow,
 } from "@/lib/strategyLab/positionsImport";
+
+type Snapshot = {
+  readonly status: "loading" | "ready" | "error";
+  readonly positions: readonly HeldPositionRow[];
+  readonly accounts: readonly HeldAccountRef[];
+  readonly error: string | null;
+  readonly retry: () => void;
+};
 
 function money(n: number | null, masked: boolean): string {
   if (n == null) return "—";
   return formatUsd2(n, { mask: masked });
 }
 
+export function useSchwabPositions(): Snapshot {
+  const [status, setStatus] = useState<Snapshot["status"]>("loading");
+  const [positions, setPositions] = useState<readonly HeldPositionRow[]>([]);
+  const [accounts, setAccounts] = useState<readonly HeldAccountRef[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+
+  const retry = useCallback(() => {
+    setStatus("loading");
+    setError(null);
+    setAttempt((value) => value + 1);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const resp = await fetch("/api/positions", { cache: "no-store" });
+        const body = (await resp.json()) as {
+          ok?: boolean;
+          error?: string;
+          positions?: HeldPositionRow[];
+          accounts?: HeldAccountRef[];
+        };
+        if (cancelled) return;
+        if (!resp.ok || body.ok === false) {
+          setStatus("error");
+          setError(body.error ?? "Positions could not be read.");
+          setPositions([]);
+          setAccounts([]);
+          return;
+        }
+        setPositions(body.positions ?? []);
+        setAccounts(body.accounts ?? []);
+        setStatus("ready");
+      } catch (e) {
+        if (cancelled) return;
+        setStatus("error");
+        setError(e instanceof Error ? e.message : "Positions could not be read.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt]);
+
+  return { status, positions, accounts, error, retry };
+}
+
 export function HeldPositions({
   symbol,
   masked,
   full,
+  snapshot,
+  nextStructureId,
   onImport,
 }: {
   symbol: string;
   masked: boolean;
   full: boolean;
+  snapshot: Snapshot;
+  nextStructureId: string | null;
   onImport: (edits: readonly LabEdit[]) => void;
 }) {
-  const [groups, setGroups] = useState<HeldGroups | null>(null);
-  const [picked, setPicked] = useState<Record<string, boolean[]>>({});
-  const [withStock, setWithStock] = useState<Record<string, boolean>>({});
-  const [chartSize, setChartSize] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const [loadedId, setLoadedId] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const books = groups ? booksFor(groups, symbol) : [];
-  const stock = groups ? stockFor(groups, symbol) : null;
+  const choices = snapshot.status === "ready" ? heldAccountChoices(snapshot.positions, symbol, snapshot.accounts) : [];
+  const selected = choices.find((choice) => choice.id === accountId) ?? null;
+  const book =
+    selected == null
+      ? null
+      : draftHeldBook({
+          rows: snapshot.positions,
+          symbol,
+          accountId: selected.id,
+          accountLabel: selected.label,
+        });
 
-  async function loadPositions() {
-    setLoading(true);
-    setError(null);
-    setNote(null);
-    try {
-      const resp = await fetch("/api/positions", { cache: "no-store" });
-      const body = (await resp.json()) as { ok?: boolean; error?: string; positions?: HeldPositionRow[] };
-      if (!resp.ok || body.ok === false) {
-        setError(body.error ?? "Positions could not be read.");
-        return;
-      }
-      const next = groupHeldPositions(body.positions ?? []);
-      setGroups(next);
-      const initial: Record<string, boolean[]> = {};
-      const shares: Record<string, boolean> = {};
-      for (const book of booksFor(next, symbol)) {
-        initial[book.key] = book.legs.map(() => true);
-        const held = stockFor(next, symbol);
-        shares[book.key] = Boolean(held && held.shares > 0 && book.legs.some((leg) => leg.right === "C" && leg.quantity < 0));
-      }
-      setPicked(initial);
-      setWithStock(shares);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Positions could not be read.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function importBook(book: HeldBook) {
-    const flags = picked[book.key] ?? book.legs.map(() => true);
-    const indexes = book.legs.map((_, index) => index).filter((index) => flags[index]);
-    const draft = draftHeldStructure({
-      book,
-      legIndexes: indexes,
-      stock,
-      includeStock: withStock[book.key] ?? false,
-    });
-    if (!draft.ok) {
-      setError(draft.error);
+  function loadBook() {
+    if (!book || !book.ok) {
+      setError(book && !book.ok ? book.error : "Choose an account first.");
       return;
     }
-    const edits: LabEdit[] = [];
-    if (chartSize) edits.push({ kind: "setBasis", basis: { kind: "perPackage" } });
+    if (full && loadedId == null) {
+      setError("The lab is full. Remove a structure, then load this book.");
+      return;
+    }
+    const edits: LabEdit[] = [{ kind: "setBasis", basis: { kind: "perPackage" } }];
+    if (loadedId) edits.push({ kind: "removeStructure", id: loadedId });
     edits.push({
       kind: "importHeld",
-      expiry: draft.draft.expiry,
-      label: draft.draft.label,
-      legs: draft.draft.legs,
-      netPerShare: draft.draft.netPerShare,
-      stock: draft.draft.stock,
+      expiry: book.draft.expiry,
+      label: book.draft.label,
+      legs: book.draft.legs,
+      netPerShare: book.draft.netPerShare,
+      stock: book.draft.stock,
     });
     onImport(edits);
+    if (nextStructureId) setLoadedId(nextStructureId);
     setError(null);
-    setNote(`Loaded ${draft.draft.label} at average cost. Copy it to compare a different strike.`);
+    const shares = book.summary.shares == null ? "" : ` and ${book.summary.shares} shares`;
+    setNote(`Loaded ${book.draft.label}: ${book.summary.legs} legs${shares}. The main charts use this book.`);
   }
 
   return (
-    <section className={`${labCard} p-4`}>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Held positions</h2>
-        <button type="button" className={`px-3 py-1.5 text-xs font-semibold ${labControl}`} onClick={() => void loadPositions()}>
-          {loading ? "Reading" : groups ? "Refresh positions" : "Read open positions"}
-        </button>
-      </div>
-      <p className={`mb-3 ${labLabel}`}>
-        Open options for {symbol}, grouped by expiry. Loading uses average cost, not the mid, and does not write the strategies ledger.
-        A covered call needs the share leg.
+    <section className={`${labCard} p-4`} data-held-positions="">
+      <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Held positions</h2>
+      <p className={`mt-1 mb-3 ${labLabel}`}>
+        Schwab positions load in the background. They stay off the charts until you pick an account, or all accounts, and load that book.
+        Average cost is the entry. Nothing here places an order.
       </p>
-      {error ? <p className="mb-2 text-sm text-rose-400">{error}</p> : null}
-      {note ? <p className="mb-2 text-sm text-zinc-200">{note}</p> : null}
-      {groups && books.length === 0 ? <p className="text-sm text-zinc-200">No open option positions for {symbol}.</p> : null}
-      {groups && groups.unparsed > 0 ? (
-        <p className="mb-2 text-sm text-amber-200">{groups.unparsed} option symbol could not be parsed and was left out.</p>
+      {snapshot.status === "loading" ? <p className="text-sm text-zinc-300">Reading positions…</p> : null}
+      {snapshot.status === "error" ? (
+        <p className="text-sm text-zinc-200">
+          Positions are not loaded. {snapshot.error}{" "}
+          <button type="button" className="font-semibold text-zinc-50 underline" onClick={snapshot.retry}>
+            Try again
+          </button>
+        </p>
       ) : null}
-      {groups && groups.oversized > 0 ? (
-        <p className="mb-2 text-sm text-amber-200">{groups.oversized} leg above 100 contracts was left out.</p>
+      {snapshot.status === "ready" && choices.length === 0 ? (
+        <p className="text-sm text-zinc-200">No open option positions for {symbol}.</p>
       ) : null}
-      {books.map((book) => {
-        const flags = picked[book.key] ?? book.legs.map(() => true);
-        const include = withStock[book.key] ?? false;
-        return (
-          <fieldset key={book.key} className="mb-3 rounded-lg border border-zinc-500 p-3">
-            <legend className="px-1 text-xs font-semibold text-zinc-200">
-              {book.expiry}
-              {book.accountCount > 1 ? ` · ${book.accountCount} accounts` : ""}
-            </legend>
-            <ul className="mb-2 space-y-1">
-              {book.legs.map((leg, index) => (
-                <li key={`${book.key}-${index}`}>
-                  <label className="flex items-center gap-2 text-sm text-zinc-50">
-                    <input
-                      type="checkbox"
-                      checked={flags[index] ?? true}
-                      aria-label={`${book.expiry} ${leg.right} ${leg.strike}`}
-                      onChange={(event) => {
-                        const next = [...flags];
-                        next[index] = event.target.checked;
-                        setPicked((prev) => ({ ...prev, [book.key]: next }));
-                      }}
-                    />
-                    <span>
-                      {leg.quantity > 0 ? "Long" : "Short"} {Math.abs(leg.quantity)} {leg.right === "C" ? "call" : "put"} {leg.strike}
-                    </span>
-                    <span className="tabular-nums text-zinc-300">avg {money(leg.averagePrice, masked)}</span>
-                  </label>
-                </li>
-              ))}
-            </ul>
-            {stock ? (
-              <label className="mb-2 flex items-center gap-2 text-sm text-zinc-50">
-                <input
-                  type="checkbox"
-                  checked={include}
-                  aria-label={`Include ${stock.shares} shares`}
-                  onChange={(event) => setWithStock((prev) => ({ ...prev, [book.key]: event.target.checked }))}
-                />
-                <span>
-                  Include {stock.shares} shares at {money(stock.averagePrice, masked)}
-                </span>
-              </label>
-            ) : (
-              <p className="mb-2 text-xs text-zinc-300">No share position in this snapshot. Add a stock leg on the card if this is a covered call.</p>
-            )}
-            <label className="mb-2 flex items-center gap-2 text-sm text-zinc-50">
-              <input type="checkbox" checked={chartSize} onChange={(event) => setChartSize(event.target.checked)} />
-              Chart at this size (per package)
-            </label>
-            <button
-              type="button"
-              disabled={full}
-              className={`px-3 py-1.5 text-xs font-semibold ${labControl} disabled:opacity-40`}
-              onClick={() => importBook(book)}
-            >
-              Load into lab
-            </button>
-          </fieldset>
-        );
-      })}
-      {books.length > 1 ? (
-        <button
-          type="button"
-          disabled={full}
-          className={`px-3 py-1.5 text-xs font-semibold ${labControl} disabled:opacity-40`}
-          onClick={() => {
-            const draft = draftHeldSelection({
-              books: books.map((book) => {
-                const flags = picked[book.key] ?? book.legs.map(() => true);
-                return { book, legIndexes: book.legs.map((_, index) => index).filter((index) => flags[index]) };
-              }),
-              stock,
-              includeStock: Object.values(withStock).some(Boolean),
-            });
-            if (!draft.ok) {
-              setError(draft.error);
-              return;
-            }
-            const edits: LabEdit[] = [];
-            if (chartSize) edits.push({ kind: "setBasis", basis: { kind: "perPackage" } });
-            edits.push({
-              kind: "importHeld",
-              expiry: draft.draft.expiry,
-              label: draft.draft.label,
-              legs: draft.draft.legs,
-              netPerShare: draft.draft.netPerShare,
-              stock: draft.draft.stock,
-            });
-            onImport(edits);
-            setError(null);
-            setNote(`Loaded ${draft.draft.label} as one structure.`);
-          }}
-        >
-          Load checked expiries as one structure
-        </button>
+      {choices.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Held account">
+          {choices.map((choice) => (
+            <AccountChip key={choice.id} choice={choice} pressed={accountId === choice.id} onPick={() => setAccountId(choice.id)} />
+          ))}
+        </div>
+      ) : null}
+      {error ? <p className="mt-2 text-sm text-rose-300">{error}</p> : null}
+      {note ? <p className="mt-2 text-sm text-zinc-200">{note}</p> : null}
+      {selected && book?.ok ? (
+        <div className="mt-3 rounded-lg border border-zinc-400 bg-zinc-900 p-3" data-held-book={selected.id}>
+          <p className="text-sm font-semibold text-zinc-50">{selected.id === "all" ? "All accounts" : selected.label}</p>
+          <p className="mt-1 text-sm text-zinc-200">
+            {book.summary.legs} legs · {book.summary.contracts} contracts · {book.summary.expiries.length}{" "}
+            {book.summary.expiries.length === 1 ? "expiry" : "expiries"}
+            {book.summary.shares == null ? "" : ` · ${book.summary.shares} shares at ${money(book.draft.stock?.averagePrice ?? null, masked)}`}
+          </p>
+          {book.summary.stockOmitted ? (
+            <p className="mt-1 text-xs text-amber-200">The shares have no average cost, so the option legs load without them.</p>
+          ) : null}
+          <button
+            type="button"
+            disabled={full && loadedId == null}
+            className={`mt-3 px-3 py-1.5 text-xs font-semibold ${labControl} disabled:opacity-40`}
+            onClick={loadBook}
+          >
+            Load into analysis
+          </button>
+          <ul className="mt-3 max-h-64 space-y-1 overflow-auto text-sm text-zinc-100">
+            {book.draft.legs.map((leg) => (
+              <li key={`${leg.expiry}-${leg.right}-${leg.strike}-${leg.ratio}`} className="tabular-nums">
+                {leg.expiry} · {leg.ratio > 0 ? "Long" : "Short"} {Math.abs(leg.ratio)} {leg.right === "C" ? "call" : "put"} {leg.strike}
+              </li>
+            ))}
+            {book.draft.stock ? (
+              <li className="tabular-nums">
+                Stock · {book.draft.stock.shares} shares at {money(book.draft.stock.averagePrice, masked)}
+              </li>
+            ) : null}
+          </ul>
+        </div>
       ) : null}
     </section>
+  );
+}
+
+function AccountChip({
+  choice,
+  pressed,
+  onPick,
+}: {
+  choice: HeldAccountChoice;
+  pressed: boolean;
+  onPick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      onClick={onPick}
+      className={`rounded-full px-3 py-1 text-xs font-semibold ${
+        pressed ? "bg-zinc-100 text-zinc-950" : "border border-zinc-400 bg-zinc-900 text-zinc-50"
+      }`}
+    >
+      {choice.label}
+      <span className="ml-1 tabular-nums opacity-80">{choice.legs}</span>
+    </button>
   );
 }

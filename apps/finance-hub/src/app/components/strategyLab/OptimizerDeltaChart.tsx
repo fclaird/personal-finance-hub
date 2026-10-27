@@ -4,35 +4,75 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEven
 import { CartesianGrid, ComposedChart, Line, ReferenceLine, Tooltip, XAxis, YAxis } from "recharts";
 
 import {
-  OPTIMIZER_HORIZONS,
-  deltaPath,
-  deltaReadout,
+  READOUT_MOVES,
+  deltaAlong,
+  deltaReadoutAt,
   pathSpots,
-  type OptimizerHorizonId,
   type SpreadCandidate,
 } from "@/lib/strategyLab/callSpreadOptimizer";
+import { shortHorizon } from "@/lib/strategyLab/chartDisplay";
+import { forwardDateSteps, forwardStepId, forwardStepLabel, yearsUntilExpiry, type ForwardDateStep } from "@/lib/strategyLab/dateSteps";
+import type { IsoDate } from "@/lib/optionChain/chain";
 import { panView, zoomAroundCursor, type ChartPoint, type ChartView } from "@/lib/strategyLab/chartView";
+import {
+  assignOptimalLanes,
+  deltaExtremum,
+  effectiveOptimalLabel,
+  effectiveOptimalReadout,
+  OPTIMAL_LANE_PX,
+  type DeltaSample,
+} from "@/lib/strategyLab/deltaExtremum";
+import {
+  DELTA_SOURCE_LABEL,
+  analysisSeries,
+  analysisShareDelta,
+  type DeltaChartSource,
+} from "@/lib/strategyLab/deltaSource";
 import { seriesReactKey } from "@/lib/strategyLab/displayNames";
+import type { LabEvaluation } from "@/lib/strategyLab/lab";
 import { LAB_PALETTE, seriesColor } from "@/lib/strategyLab/palette";
 import { CHART_ENGAGE_HINT, CHART_SIZE_HEIGHT, type ChartSize } from "@/app/components/strategyLab/StrategyPlot";
 
 const BOX = { width: "100%", maxWidth: "100%", minWidth: 0, boxSizing: "border-box" as const };
 const SIZE_LABEL: Record<ChartSize, string> = { fit: "Fit", large: "Large", huge: "Huge" };
 
-type Series = { readonly key: string; readonly name: string; readonly color: string };
+type Series = { readonly key: string; readonly name: string; readonly color: string; readonly selected: boolean };
 
 export function OptimizerDeltaChart({
   rows,
   spot,
   years,
+  tradeDate,
+  expiry,
   preview,
+  anchored,
+  source,
+  onSource,
+  evaluation,
+  plottedIds,
 }: {
   rows: readonly SpreadCandidate[];
   spot: number;
   years: number;
+  tradeDate: IsoDate;
+  expiry: IsoDate | null;
   preview: boolean;
+  anchored: boolean;
+  source: DeltaChartSource;
+  onSource: (source: DeltaChartSource) => void;
+  evaluation: LabEvaluation | null;
+  plottedIds: readonly string[] | null;
 }) {
-  const [horizon, setHorizon] = useState<OptimizerHorizonId>("today");
+  const steps = useMemo(() => (expiry ? forwardDateSteps(tradeDate, expiry) : []), [tradeDate, expiry]);
+  const [pickedStep, setPickedStep] = useState<string | null>(null);
+  const horizon = steps.some((step) => forwardStepId(step) === pickedStep) ? pickedStep! : steps[0] ? forwardStepId(steps[0]) : null;
+  const remainYears = (id: string | null): number => {
+    if (!expiry || !id) return years;
+    const step = steps.find((item) => forwardStepId(item) === id);
+    return step ? yearsUntilExpiry(step, expiry) : years;
+  };
+  const stepById = (id: string | null): ForwardDateStep | null => steps.find((item) => forwardStepId(item) === id) ?? null;
+  const [analysisHorizon, setAnalysisHorizon] = useState<string | null>(null);
   const [allDates, setAllDates] = useState(false);
   const [chartSize, setChartSize] = useState<ChartSize>("fit");
   const [engaged, setEngaged] = useState(false);
@@ -43,39 +83,142 @@ export function OptimizerDeltaChart({
   const sectionRef = useRef<HTMLElement>(null);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; origin: ChartView; grid: DOMRect } | null>(null);
 
-  const single = rows.length === 1 ? rows[0]! : null;
-  const showAll = allDates && single != null;
+  const analysisRows = useMemo(
+    () => (evaluation ? analysisSeries(evaluation, plottedIds) : []),
+    [evaluation, plottedIds],
+  );
+  const analysisHorizons = useMemo(() => evaluation?.horizons ?? [], [evaluation]);
+  const analysisFocus = analysisHorizons.some((item) => item.id === analysisHorizon)
+    ? analysisHorizon
+    : (analysisHorizons[0]?.id ?? null);
+  const single = source === "optimizer" && rows.length === 1 ? rows[0]! : null;
+  const analysisSingle = source === "analysis" && analysisRows.length === 1 ? analysisRows[0]! : null;
+  const showAll = allDates && (single != null || analysisSingle != null);
   const series = useMemo<Series[]>(() => {
-    if (showAll && single) {
-      return OPTIMIZER_HORIZONS.map((item, index) => ({
-        key: item.id,
-        name: item.label,
-        color: seriesColor(index),
+    if (source === "analysis") {
+      if (showAll && analysisSingle) {
+        return analysisHorizons.map((item, index) => ({
+          key: item.id,
+          name: shortHorizon(item.label),
+          color: seriesColor(index),
+          selected: false,
+        }));
+      }
+      return analysisRows.map((row) => ({
+        key: row.id,
+        name: row.label,
+        color: seriesColor(row.slot),
+        selected: false,
       }));
     }
-    return rows.map((row, index) => ({
+    if (showAll && single) {
+      return steps.map((item, index) => ({
+        key: forwardStepId(item),
+        name: shortHorizon(forwardStepLabel(item, false)),
+        color: seriesColor(index),
+        selected: false,
+      }));
+    }
+    const drawn = rows.map((row, index) => ({
       key: row.key,
-      name: `${strikeText(row.longStrike)}/${strikeText(row.shortStrike)}`,
-      color: seriesColor(index),
+      name: row.selected
+        ? `${strikeText(row.longStrike)}/${strikeText(row.shortStrike)} · selected`
+        : `${strikeText(row.longStrike)}/${strikeText(row.shortStrike)}`,
+      color: row.selected ? "#fbbf24" : seriesColor(index),
+      selected: row.selected,
     }));
-  }, [rows, showAll, single]);
+    return [...drawn.filter((item) => !item.selected), ...drawn.filter((item) => item.selected)];
+  }, [source, rows, showAll, single, analysisRows, analysisHorizons, analysisSingle, steps]);
 
-  const spots = useMemo(() => pathSpots(spot, rows), [spot, rows]);
+  const spots = useMemo(() => {
+    if (source === "analysis" && evaluation) {
+      const strikes = evaluation.structures
+        .filter((row) => analysisRows.some((item) => item.id === row.spec.id))
+        .flatMap((row) => row.spec.legs.map((leg) => leg.strike).filter((strike): strike is number => strike != null));
+      return pathSpots(
+        spot,
+        strikes.map((strike) => ({ longStrike: strike, shortStrike: strike })),
+      );
+    }
+    return pathSpots(spot, rows);
+  }, [source, evaluation, analysisRows, spot, rows]);
   const data = useMemo(() => {
     return spots.map((price) => {
       const point: Record<string, number> = { spot: price };
+      if (source === "analysis" && evaluation) {
+        if (showAll && analysisSingle) {
+          for (const item of analysisHorizons) {
+            const value = analysisShareDelta(evaluation, analysisSingle.id, item.id, price);
+            if (value != null) point[item.id] = value;
+          }
+        } else if (analysisFocus) {
+          for (const row of analysisRows) {
+            const value = analysisShareDelta(evaluation, row.id, analysisFocus, price);
+            if (value != null) point[row.id] = value;
+          }
+        }
+        return point;
+      }
       if (showAll && single) {
-        for (const item of OPTIMIZER_HORIZONS) {
-          point[item.id] = deltaPath(single, [price], years, item.id)[0]?.delta ?? 0;
+        for (const item of steps) {
+          point[forwardStepId(item)] = deltaAlong(single, [price], expiry ? yearsUntilExpiry(item, expiry) : years)[0]?.delta ?? 0;
         }
       } else {
         for (const row of rows) {
-          point[row.key] = deltaPath(row, [price], years, horizon)[0]?.delta ?? 0;
+          point[row.key] = deltaAlong(row, [price], remainYears(horizon))[0]?.delta ?? 0;
         }
       }
       return point;
     });
-  }, [spots, rows, years, horizon, showAll, single]);
+  }, [spots, rows, years, horizon, showAll, single, source, evaluation, analysisRows, analysisHorizons, analysisSingle, analysisFocus, steps, expiry]);
+
+  const optima = useMemo(() => {
+    return series.flatMap((item) => {
+      const found = deltaExtremum(curveSamples(data, item.key), (price) => {
+        if (source === "analysis" && evaluation) {
+          const structureId = showAll && analysisSingle ? analysisSingle.id : item.key;
+          const horizonId = showAll && analysisSingle ? item.key : analysisFocus;
+          if (!horizonId) return null;
+          const value = analysisShareDelta(evaluation, structureId, horizonId, price);
+          return value == null || !Number.isFinite(value) ? null : value;
+        }
+        const row = showAll && single ? single : rows.find((candidate) => candidate.key === item.key);
+        const horizonId = showAll && single ? item.key : horizon;
+        if (!row) return null;
+        const value = deltaAlong(row, [price], remainYears(horizonId))[0]?.delta;
+        return value == null || !Number.isFinite(value) ? null : value;
+      });
+      return found ? [{ key: item.key, color: item.color, price: found.price, delta: found.delta }] : [];
+    });
+  }, [series, data, source, evaluation, showAll, analysisSingle, analysisFocus, single, rows, years, horizon, steps, expiry]);
+
+  const readoutOptimal = useMemo(() => {
+    const prices = new Map<string, { price: number; delta: number }>();
+    if (!showAll) {
+      for (const item of optima) prices.set(item.key, { price: item.price, delta: item.delta });
+      return prices;
+    }
+    if (source === "analysis" && evaluation && analysisFocus) {
+      for (const row of analysisRows) {
+        const samples = spots.flatMap((price) => {
+          const delta = analysisShareDelta(evaluation, row.id, analysisFocus, price);
+          return delta == null || !Number.isFinite(delta) ? [] : [{ price, delta }];
+        });
+        const found = deltaExtremum(samples, (price) => analysisShareDelta(evaluation, row.id, analysisFocus, price));
+        if (found) prices.set(row.id, { price: found.price, delta: found.delta });
+      }
+      return prices;
+    }
+    for (const row of rows) {
+      const samples = deltaAlong(row, spots, remainYears(horizon)).map((point) => ({ price: point.spot, delta: point.delta }));
+      const found = deltaExtremum(samples, (price) => {
+        const value = deltaAlong(row, [price], remainYears(horizon))[0]?.delta;
+        return value == null || !Number.isFinite(value) ? null : value;
+      });
+      if (found) prices.set(row.key, { price: found.price, delta: found.delta });
+    }
+    return prices;
+  }, [showAll, optima, source, evaluation, analysisFocus, analysisRows, spots, rows, years, horizon, steps, expiry]);
 
   const home = useMemo(() => frameOf(data, series.map((item) => item.key)), [data, series]);
   const shown = view ?? home;
@@ -98,7 +241,7 @@ export function OptimizerDeltaChart({
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [chartSize, rows.length]);
+  }, [chartSize, rows.length, source, analysisRows.length]);
 
   useEffect(() => {
     const node = plotRef.current;
@@ -140,8 +283,12 @@ export function OptimizerDeltaChart({
     };
   }, [engaged]);
 
-  const readoutHorizon = horizon;
-  const readoutRows = rows.slice(0, 4);
+  const readoutStep = stepById(horizon);
+  const readoutYears = remainYears(horizon);
+  const readoutLabel = readoutStep ? shortHorizon(forwardStepLabel(readoutStep, false)) : "Date";
+  const readoutRows = source === "optimizer" ? (anchored ? rows.filter((row) => row.selected).concat(rows.filter((row) => !row.selected)) : rows).slice(0, 8) : [];
+  const analysisReadout = source === "analysis" && evaluation && analysisFocus ? analysisRows.slice(0, 8) : [];
+  const empty = source === "analysis" ? analysisRows.length === 0 : rows.length === 0;
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!engaged || event.button !== 0) return;
@@ -169,8 +316,25 @@ export function OptimizerDeltaChart({
     setDragging(false);
   };
 
-  if (rows.length === 0) {
-    return <p className="text-sm text-zinc-300">No spreads match these filters.</p>;
+  const sourceToggle = (
+    <div className="mb-3 inline-flex max-w-full flex-wrap gap-1 rounded-full border border-zinc-400 bg-zinc-900 p-1" role="group" aria-label="Effective delta source">
+      {(Object.keys(DELTA_SOURCE_LABEL) as DeltaChartSource[]).map((id) => (
+        <Chip key={id} label={DELTA_SOURCE_LABEL[id]} pressed={source === id} onClick={() => onSource(id)} />
+      ))}
+    </div>
+  );
+
+  if (empty) {
+    return (
+      <section className="rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100" data-optimizer-chart="" data-delta-source={source}>
+        {sourceToggle}
+        <p className="text-sm text-zinc-200">
+          {source === "analysis"
+            ? "Nothing in the main analysis is ready to plot. Load a held book or add a structure, then come back to this chart."
+            : "No spreads match these filters."}
+        </p>
+      </section>
+    );
   }
 
   return (
@@ -181,8 +345,10 @@ export function OptimizerDeltaChart({
       }`}
       style={BOX}
       data-optimizer-chart=""
+      data-delta-source={source}
       data-chart-engaged={engaged ? "true" : "false"}
     >
+      {sourceToggle}
       <div className="mb-2 flex min-w-0 flex-wrap items-center gap-1.5" role="toolbar" aria-label="Optimizer chart">
         <Chip label="Interact" pressed={engaged} onClick={() => setEngaged((on) => !on)} />
         <Chip label="Zoom in" onClick={() => shown && setView(zoomAroundCursor(shown, mid(shown), 1.25, home))} />
@@ -198,35 +364,53 @@ export function OptimizerDeltaChart({
         {engaged ? CHART_ENGAGE_HINT : "Wheel and touch scroll the page. Click the chart or Interact to zoom."}
       </p>
       <div className="mb-2 flex min-w-0 flex-wrap gap-1.5" role="group" aria-label="Delta horizon">
-        {OPTIMIZER_HORIZONS.map((item) => (
-          <Chip
-            key={item.id}
-            label={item.label}
-            pressed={!showAll && horizon === item.id}
-            onClick={() => {
-              setAllDates(false);
-              setHorizon(item.id);
-              setView(null);
-            }}
-          />
-        ))}
+        {source === "analysis"
+          ? analysisHorizons.map((item) => (
+              <Chip
+                key={item.id}
+                label={shortHorizon(item.label)}
+                pressed={!showAll && analysisFocus === item.id}
+                onClick={() => {
+                  setAllDates(false);
+                  setAnalysisHorizon(item.id);
+                  setView(null);
+                }}
+              />
+            ))
+          : steps.map((item) => (
+              <Chip
+                key={forwardStepId(item)}
+                label={shortHorizon(forwardStepLabel(item, false))}
+                pressed={!showAll && horizon === forwardStepId(item)}
+                onClick={() => {
+                  setAllDates(false);
+                  setPickedStep(forwardStepId(item));
+                  setView(null);
+                }}
+              />
+            ))}
         <Chip
           label="All dates"
           pressed={showAll}
           onClick={() => {
-            if (!single) return;
+            if (source === "analysis" ? !analysisSingle : !single) return;
             setAllDates(true);
             setView(null);
           }}
         />
       </div>
-      <p className="mb-2 text-xs text-zinc-300">
-        {preview
-          ? "Preview of the top spreads. Check a row to put that spread on the delta chart."
-          : showAll
-            ? "One spread at today, each quarter, and expiry. Constant IV."
-            : "Net share-equivalent delta versus price. Constant IV."}{" "}
-        {single == null && allDates ? "All dates needs a single spread." : ""}
+      <p className="mb-2 text-xs text-zinc-200">
+        {source === "analysis"
+          ? "Effective delta of the positions loaded in the main analysis. Same share count as that chart."
+          : anchored
+            ? "The amber line is the spread you picked. The others step both strikes, or move one strike to change the width. Constant IV."
+            : preview
+              ? "Preview of the top spreads. Check a row to put that spread on the delta chart."
+              : showAll
+                ? "One spread at each date step through expiry. Constant IV."
+                : "Net share-equivalent delta versus price. Constant IV."}{" "}
+        {(source === "analysis" ? analysisSingle == null : single == null) && allDates ? "All dates needs a single position." : ""}{" "}
+        When a curve turns inside the window, a dashed line marks its effective optimal price.
       </p>
       <div
         ref={plotRef}
@@ -291,15 +475,40 @@ export function OptimizerDeltaChart({
                 }}
               />
               <ReferenceLine x={spot} stroke={LAB_PALETTE.spot} strokeDasharray="5 5" label={{ value: "Spot", fill: LAB_PALETTE.spot, fontSize: 12 }} />
+              {shown
+                ? assignOptimalLanes(
+                    optima.map((marker) => ({ ...marker, label: effectiveOptimalLabel(marker.price, marker.delta) })),
+                    spot,
+                    shown.xMin,
+                    shown.xMax,
+                    plotPx.width,
+                  ).map((marker) => (
+                    <ReferenceLine
+                      key={marker.key}
+                      x={marker.price}
+                      stroke={marker.color}
+                      strokeDasharray="5 5"
+                      label={optimalPriceLabel(marker.label, marker.color, marker.lane, marker.anchorEnd)}
+                    />
+                  ))
+                : null}
               {series.map((item) => (
                 <Line
                   key={item.key}
-                  type={showAll && item.key === "expiry" ? "stepAfter" : horizon === "expiry" ? "stepAfter" : "linear"}
+                  type={
+                    showAll && (stepById(item.key)?.kind === "expiry" || analysisHorizons.some((horizonItem) => horizonItem.id === item.key && horizonItem.settlement))
+                      ? "stepAfter"
+                      : source === "optimizer" && stepById(horizon)?.kind === "expiry"
+                        ? "stepAfter"
+                        : source === "analysis" && analysisHorizons.some((horizonItem) => horizonItem.id === analysisFocus && horizonItem.settlement)
+                          ? "stepAfter"
+                          : "linear"
+                  }
                   dataKey={item.key}
                   name={item.name}
                   stroke={item.color}
                   dot={false}
-                  strokeWidth={2.5}
+                  strokeWidth={item.selected ? 4.5 : 2.75}
                   isAnimationActive={false}
                 />
               ))}
@@ -308,35 +517,77 @@ export function OptimizerDeltaChart({
         ) : null}
       </div>
       <div className="mt-3 min-w-0 max-w-full overflow-x-auto">
-        <table className="w-full text-left text-xs text-zinc-100">
-          <caption className="mb-1 text-left text-xs font-semibold text-zinc-300">
-            Delta readout · {OPTIMIZER_HORIZONS.find((item) => item.id === readoutHorizon)?.label}
-          </caption>
-          <thead>
-            <tr className="text-zinc-400">
-              <th className="py-1 pr-3 font-semibold">Spread</th>
-              {deltaReadout(readoutRows[0]!, spot, years, readoutHorizon).map((cell) => (
-                <th key={cell.label} className="py-1 pr-3 font-semibold">
-                  {cell.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {readoutRows.map((row) => (
-              <tr key={row.key} className="border-t border-zinc-700">
-                <td className="py-1 pr-3 font-semibold">
-                  {strikeText(row.longStrike)}/{strikeText(row.shortStrike)}
-                </td>
-                {deltaReadout(row, spot, years, readoutHorizon).map((cell) => (
-                  <td key={cell.label} className="py-1 pr-3 tabular-nums">
-                    {cell.delta.toFixed(1)}
-                  </td>
+        {source === "analysis" && evaluation && analysisFocus ? (
+          <table className="w-full text-left text-xs text-zinc-100">
+            <caption className="mb-1 text-left text-xs font-semibold text-zinc-200">
+              Delta readout · {shortHorizon(analysisHorizons.find((item) => item.id === analysisFocus)?.label ?? "Date")}
+            </caption>
+            <thead>
+              <tr className="text-zinc-300">
+                <th className="py-1 pr-3 font-semibold">Position</th>
+                {READOUT_MOVES.map((move) => (
+                  <th key={move} className="py-1 pr-3 font-semibold">
+                    {move === 0 ? "Spot" : `${move > 0 ? "+" : ""}${Math.round(move * 100)}%`}
+                  </th>
                 ))}
+                <th className="py-1 pr-3 font-semibold" title="Price where this curve's slope is zero, and the effective delta there">
+                  Optimal price
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {analysisReadout.map((row) => (
+                <tr key={row.id} className="border-t border-zinc-700">
+                  <td className="py-1 pr-3 font-semibold">{row.label}</td>
+                  {READOUT_MOVES.map((move) => {
+                    const value = analysisShareDelta(evaluation, row.id, analysisFocus, spot * (1 + move));
+                    return (
+                      <td key={move} className="py-1 pr-3 tabular-nums">
+                        {value == null ? "—" : value.toFixed(1)}
+                      </td>
+                    );
+                  })}
+                  <OptimalPriceCell read={readoutOptimal.get(row.id) ?? null} color={series.find((item) => item.key === row.id)?.color} />
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : readoutRows[0] ? (
+          <table className="w-full text-left text-xs text-zinc-100">
+            <caption className="mb-1 text-left text-xs font-semibold text-zinc-200">
+              Delta readout · {readoutLabel}
+            </caption>
+            <thead>
+              <tr className="text-zinc-300">
+                <th className="py-1 pr-3 font-semibold">Spread</th>
+                {deltaReadoutAt(readoutRows[0], spot, readoutYears).map((cell) => (
+                  <th key={cell.label} className="py-1 pr-3 font-semibold">
+                    {cell.label}
+                  </th>
+                ))}
+                <th className="py-1 pr-3 font-semibold" title="Price where this curve's slope is zero, and the effective delta there">
+                  Optimal price
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {readoutRows.map((row) => (
+                <tr key={row.key} className={row.selected ? "border-t border-amber-300 bg-zinc-800" : "border-t border-zinc-700"}>
+                  <td className="py-1 pr-3 font-semibold text-zinc-50">
+                    {strikeText(row.longStrike)}/{strikeText(row.shortStrike)}
+                    {row.selected ? <span className="ml-2 rounded bg-amber-300 px-1.5 py-0.5 text-[10px] font-bold text-zinc-950">Selected</span> : null}
+                  </td>
+                  {deltaReadoutAt(row, spot, readoutYears).map((cell) => (
+                    <td key={cell.label} className="py-1 pr-3 tabular-nums">
+                      {cell.delta.toFixed(1)}
+                    </td>
+                  ))}
+                  <OptimalPriceCell read={readoutOptimal.get(row.key) ?? null} color={series.find((item) => item.key === row.key)?.color} />
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : null}
       </div>
     </section>
   );
@@ -357,8 +608,51 @@ function Chip({ label, pressed, onClick }: { label: string; pressed?: boolean; o
   );
 }
 
+function OptimalPriceCell({ read, color }: { read: { price: number; delta: number } | null; color?: string }) {
+  return (
+    <td
+      className="py-1 pr-3 font-semibold tabular-nums"
+      data-optimal-price={read == null ? "" : read.price.toFixed(2)}
+      data-optimal-delta={read == null ? "" : String(Math.round(read.delta))}
+      style={{ color: color ?? "#fafafa" }}
+    >
+      {read == null ? "—" : effectiveOptimalReadout(read.price, read.delta)}
+    </td>
+  );
+}
+
 function strikeText(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(2);
+}
+
+function curveSamples(data: readonly Record<string, number>[], key: string): DeltaSample[] {
+  return data.flatMap((row) => {
+    const delta = row[key];
+    return typeof row.spot === "number" && typeof delta === "number" ? [{ price: row.spot, delta }] : [];
+  });
+}
+
+function optimalPriceLabel(text: string, fill: string, lane: number, anchorEnd: boolean) {
+  function OptimalPriceLabel({ viewBox }: { viewBox?: { x?: number; y?: number } }) {
+    const x = viewBox?.x ?? 0;
+    const y = (viewBox?.y ?? 0) + 14 + lane * OPTIMAL_LANE_PX;
+    return (
+      <text
+        x={anchorEnd ? x - 6 : x + 6}
+        y={y}
+        fill={fill}
+        stroke="#09090b"
+        strokeWidth={3}
+        paintOrder="stroke"
+        fontSize={13}
+        fontWeight={700}
+        textAnchor={anchorEnd ? "end" : "start"}
+      >
+        {text}
+      </text>
+    );
+  }
+  return OptimalPriceLabel;
 }
 
 function mid(view: ChartView): ChartPoint {
