@@ -38,6 +38,27 @@ export function newestSourceMtimeMs(root) {
   return newest;
 }
 
+/**
+ * Native check and build finish before anything binds.
+ * kill-port is the first action that stops a working listener, and it comes
+ * after ensure-native and build.
+ */
+export function launchActions(steps) {
+  const actions = ["ensure-native"];
+  let killArmed = false;
+  for (const step of steps) {
+    if (step === "build") actions.push("build");
+    if (step === "start" || step === "dev") {
+      if (!killArmed) {
+        actions.push("kill-port");
+        killArmed = true;
+      }
+      actions.push(step);
+    }
+  }
+  return actions;
+}
+
 export function readLaunchInputs(root, env = process.env) {
   const buildId = path.join(root, ".next", "BUILD_ID");
   let buildIdMtimeMs = null;
@@ -58,5 +79,5 @@ if (isDirectRun()) {
   const mode = (process.argv[2] ?? "prod").trim() || "prod";
   const root = process.argv[3] ? path.resolve(process.argv[3]) : path.join(path.dirname(new URL(import.meta.url).pathname), "..");
   const steps = productionSteps({ mode, ...readLaunchInputs(root) });
-  process.stdout.write(`${steps.join("\n")}\n`);
+  process.stdout.write(`${launchActions(steps).join("\n")}\n`);
 }
