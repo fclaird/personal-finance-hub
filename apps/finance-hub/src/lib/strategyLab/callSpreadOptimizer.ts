@@ -277,13 +277,11 @@ export function spreadShareDelta(
 
 export const READOUT_MOVES = [-0.2, -0.1, -0.05, 0, 0.05, 0.1, 0.2] as const;
 
-export function deltaReadout(
+export function deltaReadoutAt(
   row: SpreadCandidate,
   spot: number,
-  fullYears: number,
-  horizon: OptimizerHorizonId,
+  years: number,
 ): readonly { readonly label: string; readonly spot: number; readonly delta: number }[] {
-  const years = yearsRemaining(fullYears, horizon);
   const moves = READOUT_MOVES.map((move) => {
     const at = spot * (1 + move);
     const label = move === 0 ? "Spot" : `${move > 0 ? "+" : ""}${Math.round(move * 100)}%`;
@@ -299,17 +297,34 @@ export function deltaReadout(
   ];
 }
 
+export function deltaReadout(
+  row: SpreadCandidate,
+  spot: number,
+  fullYears: number,
+  horizon: OptimizerHorizonId,
+): readonly { readonly label: string; readonly spot: number; readonly delta: number }[] {
+  return deltaReadoutAt(row, spot, yearsRemaining(fullYears, horizon));
+}
+
+/** Share-equivalent delta along a spot path at one remaining maturity. */
+export function deltaAlong(
+  row: SpreadCandidate,
+  spots: readonly number[],
+  years: number,
+): readonly { readonly spot: number; readonly delta: number }[] {
+  return spots.map((spot) => ({
+    spot,
+    delta: spreadShareDelta(row.longStrike, row.shortStrike, spot, years, row.iv),
+  }));
+}
+
 export function deltaPath(
   row: SpreadCandidate,
   spots: readonly number[],
   fullYears: number,
   horizon: OptimizerHorizonId,
 ): readonly { readonly spot: number; readonly delta: number }[] {
-  const years = yearsRemaining(fullYears, horizon);
-  return spots.map((spot) => ({
-    spot,
-    delta: spreadShareDelta(row.longStrike, row.shortStrike, spot, years, row.iv),
-  }));
+  return deltaAlong(row, spots, yearsRemaining(fullYears, horizon));
 }
 
 export function pathSpots(spot: number, rows: readonly Pick<SpreadCandidate, "longStrike" | "shortStrike">[]): number[] {

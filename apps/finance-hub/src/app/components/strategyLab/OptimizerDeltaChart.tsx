@@ -4,15 +4,15 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEven
 import { CartesianGrid, ComposedChart, Line, ReferenceLine, Tooltip, XAxis, YAxis } from "recharts";
 
 import {
-  OPTIMIZER_HORIZONS,
   READOUT_MOVES,
-  deltaPath,
-  deltaReadout,
+  deltaAlong,
+  deltaReadoutAt,
   pathSpots,
-  type OptimizerHorizonId,
   type SpreadCandidate,
 } from "@/lib/strategyLab/callSpreadOptimizer";
 import { shortHorizon } from "@/lib/strategyLab/chartDisplay";
+import { forwardDateSteps, forwardStepId, forwardStepLabel, yearsUntilExpiry, type ForwardDateStep } from "@/lib/strategyLab/dateSteps";
+import type { IsoDate } from "@/lib/optionChain/chain";
 import { panView, zoomAroundCursor, type ChartPoint, type ChartView } from "@/lib/strategyLab/chartView";
 import {
   assignOptimalLanes,
@@ -42,6 +42,8 @@ export function OptimizerDeltaChart({
   rows,
   spot,
   years,
+  tradeDate,
+  expiry,
   preview,
   anchored,
   source,
@@ -52,6 +54,8 @@ export function OptimizerDeltaChart({
   rows: readonly SpreadCandidate[];
   spot: number;
   years: number;
+  tradeDate: IsoDate;
+  expiry: IsoDate | null;
   preview: boolean;
   anchored: boolean;
   source: DeltaChartSource;
@@ -59,7 +63,15 @@ export function OptimizerDeltaChart({
   evaluation: LabEvaluation | null;
   plottedIds: readonly string[] | null;
 }) {
-  const [horizon, setHorizon] = useState<OptimizerHorizonId>("today");
+  const steps = useMemo(() => (expiry ? forwardDateSteps(tradeDate, expiry) : []), [tradeDate, expiry]);
+  const [pickedStep, setPickedStep] = useState<string | null>(null);
+  const horizon = steps.some((step) => forwardStepId(step) === pickedStep) ? pickedStep! : steps[0] ? forwardStepId(steps[0]) : null;
+  const remainYears = (id: string | null): number => {
+    if (!expiry || !id) return years;
+    const step = steps.find((item) => forwardStepId(item) === id);
+    return step ? yearsUntilExpiry(step, expiry) : years;
+  };
+  const stepById = (id: string | null): ForwardDateStep | null => steps.find((item) => forwardStepId(item) === id) ?? null;
   const [analysisHorizon, setAnalysisHorizon] = useState<string | null>(null);
   const [allDates, setAllDates] = useState(false);
   const [chartSize, setChartSize] = useState<ChartSize>("fit");
@@ -100,9 +112,9 @@ export function OptimizerDeltaChart({
       }));
     }
     if (showAll && single) {
-      return OPTIMIZER_HORIZONS.map((item, index) => ({
-        key: item.id,
-        name: item.label,
+      return steps.map((item, index) => ({
+        key: forwardStepId(item),
+        name: shortHorizon(forwardStepLabel(item, false)),
         color: seriesColor(index),
         selected: false,
       }));
@@ -116,7 +128,7 @@ export function OptimizerDeltaChart({
       selected: row.selected,
     }));
     return [...drawn.filter((item) => !item.selected), ...drawn.filter((item) => item.selected)];
-  }, [source, rows, showAll, single, analysisRows, analysisHorizons, analysisSingle]);
+  }, [source, rows, showAll, single, analysisRows, analysisHorizons, analysisSingle, steps]);
 
   const spots = useMemo(() => {
     if (source === "analysis" && evaluation) {
@@ -148,17 +160,17 @@ export function OptimizerDeltaChart({
         return point;
       }
       if (showAll && single) {
-        for (const item of OPTIMIZER_HORIZONS) {
-          point[item.id] = deltaPath(single, [price], years, item.id)[0]?.delta ?? 0;
+        for (const item of steps) {
+          point[forwardStepId(item)] = deltaAlong(single, [price], expiry ? yearsUntilExpiry(item, expiry) : years)[0]?.delta ?? 0;
         }
       } else {
         for (const row of rows) {
-          point[row.key] = deltaPath(row, [price], years, horizon)[0]?.delta ?? 0;
+          point[row.key] = deltaAlong(row, [price], remainYears(horizon))[0]?.delta ?? 0;
         }
       }
       return point;
     });
-  }, [spots, rows, years, horizon, showAll, single, source, evaluation, analysisRows, analysisHorizons, analysisSingle, analysisFocus]);
+  }, [spots, rows, years, horizon, showAll, single, source, evaluation, analysisRows, analysisHorizons, analysisSingle, analysisFocus, steps, expiry]);
 
   const optima = useMemo(() => {
     return series.flatMap((item) => {
@@ -171,14 +183,14 @@ export function OptimizerDeltaChart({
           return value == null || !Number.isFinite(value) ? null : value;
         }
         const row = showAll && single ? single : rows.find((candidate) => candidate.key === item.key);
-        const horizonId = (showAll && single ? item.key : horizon) as OptimizerHorizonId;
+        const horizonId = showAll && single ? item.key : horizon;
         if (!row) return null;
-        const value = deltaPath(row, [price], years, horizonId)[0]?.delta;
+        const value = deltaAlong(row, [price], remainYears(horizonId))[0]?.delta;
         return value == null || !Number.isFinite(value) ? null : value;
       });
       return found ? [{ key: item.key, color: item.color, price: found.price, delta: found.delta }] : [];
     });
-  }, [series, data, source, evaluation, showAll, analysisSingle, analysisFocus, single, rows, years, horizon]);
+  }, [series, data, source, evaluation, showAll, analysisSingle, analysisFocus, single, rows, years, horizon, steps, expiry]);
 
   const readoutOptimal = useMemo(() => {
     const prices = new Map<string, { price: number; delta: number }>();
@@ -198,15 +210,15 @@ export function OptimizerDeltaChart({
       return prices;
     }
     for (const row of rows) {
-      const samples = deltaPath(row, spots, years, horizon).map((point) => ({ price: point.spot, delta: point.delta }));
+      const samples = deltaAlong(row, spots, remainYears(horizon)).map((point) => ({ price: point.spot, delta: point.delta }));
       const found = deltaExtremum(samples, (price) => {
-        const value = deltaPath(row, [price], years, horizon)[0]?.delta;
+        const value = deltaAlong(row, [price], remainYears(horizon))[0]?.delta;
         return value == null || !Number.isFinite(value) ? null : value;
       });
       if (found) prices.set(row.key, { price: found.price, delta: found.delta });
     }
     return prices;
-  }, [showAll, optima, source, evaluation, analysisFocus, analysisRows, spots, rows, years, horizon]);
+  }, [showAll, optima, source, evaluation, analysisFocus, analysisRows, spots, rows, years, horizon, steps, expiry]);
 
   const home = useMemo(() => frameOf(data, series.map((item) => item.key)), [data, series]);
   const shown = view ?? home;
@@ -271,7 +283,9 @@ export function OptimizerDeltaChart({
     };
   }, [engaged]);
 
-  const readoutHorizon = horizon;
+  const readoutStep = stepById(horizon);
+  const readoutYears = remainYears(horizon);
+  const readoutLabel = readoutStep ? shortHorizon(forwardStepLabel(readoutStep, false)) : "Date";
   const readoutRows = source === "optimizer" ? (anchored ? rows.filter((row) => row.selected).concat(rows.filter((row) => !row.selected)) : rows).slice(0, 8) : [];
   const analysisReadout = source === "analysis" && evaluation && analysisFocus ? analysisRows.slice(0, 8) : [];
   const empty = source === "analysis" ? analysisRows.length === 0 : rows.length === 0;
@@ -363,14 +377,14 @@ export function OptimizerDeltaChart({
                 }}
               />
             ))
-          : OPTIMIZER_HORIZONS.map((item) => (
+          : steps.map((item) => (
               <Chip
-                key={item.id}
-                label={item.label}
-                pressed={!showAll && horizon === item.id}
+                key={forwardStepId(item)}
+                label={shortHorizon(forwardStepLabel(item, false))}
+                pressed={!showAll && horizon === forwardStepId(item)}
                 onClick={() => {
                   setAllDates(false);
-                  setHorizon(item.id);
+                  setPickedStep(forwardStepId(item));
                   setView(null);
                 }}
               />
@@ -393,7 +407,7 @@ export function OptimizerDeltaChart({
             : preview
               ? "Preview of the top spreads. Check a row to put that spread on the delta chart."
               : showAll
-                ? "One spread at today, each quarter, and expiry. Constant IV."
+                ? "One spread at each date step through expiry. Constant IV."
                 : "Net share-equivalent delta versus price. Constant IV."}{" "}
         {(source === "analysis" ? analysisSingle == null : single == null) && allDates ? "All dates needs a single position." : ""}{" "}
         When a curve turns inside the window, a dashed line marks its effective optimal price.
@@ -482,9 +496,9 @@ export function OptimizerDeltaChart({
                 <Line
                   key={item.key}
                   type={
-                    showAll && (item.key === "expiry" || analysisHorizons.some((horizonItem) => horizonItem.id === item.key && horizonItem.settlement))
+                    showAll && (stepById(item.key)?.kind === "expiry" || analysisHorizons.some((horizonItem) => horizonItem.id === item.key && horizonItem.settlement))
                       ? "stepAfter"
-                      : source === "optimizer" && horizon === "expiry"
+                      : source === "optimizer" && stepById(horizon)?.kind === "expiry"
                         ? "stepAfter"
                         : source === "analysis" && analysisHorizons.some((horizonItem) => horizonItem.id === analysisFocus && horizonItem.settlement)
                           ? "stepAfter"
@@ -541,12 +555,12 @@ export function OptimizerDeltaChart({
         ) : readoutRows[0] ? (
           <table className="w-full text-left text-xs text-zinc-100">
             <caption className="mb-1 text-left text-xs font-semibold text-zinc-200">
-              Delta readout · {OPTIMIZER_HORIZONS.find((item) => item.id === readoutHorizon)?.label}
+              Delta readout · {readoutLabel}
             </caption>
             <thead>
               <tr className="text-zinc-300">
                 <th className="py-1 pr-3 font-semibold">Spread</th>
-                {deltaReadout(readoutRows[0], spot, years, readoutHorizon).map((cell) => (
+                {deltaReadoutAt(readoutRows[0], spot, readoutYears).map((cell) => (
                   <th key={cell.label} className="py-1 pr-3 font-semibold">
                     {cell.label}
                   </th>
@@ -563,7 +577,7 @@ export function OptimizerDeltaChart({
                     {strikeText(row.longStrike)}/{strikeText(row.shortStrike)}
                     {row.selected ? <span className="ml-2 rounded bg-amber-300 px-1.5 py-0.5 text-[10px] font-bold text-zinc-950">Selected</span> : null}
                   </td>
-                  {deltaReadout(row, spot, years, readoutHorizon).map((cell) => (
+                  {deltaReadoutAt(row, spot, readoutYears).map((cell) => (
                     <td key={cell.label} className="py-1 pr-3 tabular-nums">
                       {cell.delta.toFixed(1)}
                     </td>

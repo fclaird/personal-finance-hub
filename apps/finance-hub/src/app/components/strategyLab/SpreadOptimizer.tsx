@@ -456,6 +456,8 @@ export function SpreadOptimizer({
         rows={chartRows}
         spot={chain.spot}
         years={scan?.years ?? 0}
+        tradeDate={chain.tradeDate}
+        expiry={expiry}
         preview={!anchor && chosen.length === 0}
         anchored={anchor != null}
         source={deltaSource}

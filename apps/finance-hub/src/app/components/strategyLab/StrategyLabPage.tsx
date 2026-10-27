@@ -80,7 +80,7 @@ function HorizonBar({
             )
           }
         >
-          Quarters
+          Date steps
         </button>
         <button
           type="button"

@@ -40,7 +40,7 @@ import { applyPlotAction, type PlotAction, type PlotChart } from "@/lib/strategy
 import { labControl, labLabel, seriesColor } from "@/lib/strategyLab/palette";
 
 const MODE_HINT: Record<ChartMode, string> = {
-  waterfall: "Every three-month step from today through expiry. Expiry is the thick bright line. Hover a price to read each date.",
+  waterfall: "Three-month steps from today, then monthly and weekly steps in the final three months. Expiry is the thick bright line. Hover a price to read each date.",
   single: "One date. Picking another date replaces the curve. Each plotted structure is one line.",
 };
 

@@ -29,6 +29,7 @@ import {
 
 export type { Assumptions };
 export { describeVolShift };
+import { forwardDateSteps, forwardStepId, forwardStepLabel } from "@/lib/strategyLab/dateSteps";
 import { daysHeldFromLegs, entryPackageDebit, legMissingBookCost, packageUsesEntryCost } from "@/lib/strategyLab/entryCost";
 import { assignLegIds, HELD_LEG_CAP, legCostOf, legEntry, OPTION_QTY_CAP, optionLeg, parityPackageDebit, stockLeg, syntheticShape, type Leg, type LegCost } from "@/lib/strategyLab/legs";
 import { structureDisplayNames } from "@/lib/strategyLab/displayNames";
@@ -101,7 +102,7 @@ export type HorizonSpec =
   | { readonly kind: "monthsFromEntry"; readonly months: number }
   | { readonly kind: "fractionToAnchor"; readonly fraction: number }
   | { readonly kind: "anchorExpiry" }
-  /** Today, then every three calendar months, through the earliest expiry. */
+  /** Today, three-month steps, then monthly and weekly steps into the latest expiry. */
   | { readonly kind: "quartersToAnchor" };
 
 export type SpotWindow =
@@ -771,48 +772,18 @@ function horizonViews(lab: LabScenario, chain: OptionChain): { horizons: Horizon
       continue;
     }
     if (spec.kind === "quartersToAnchor") {
-      if (!anchor) continue;
-      const steps: { months: number; date: IsoDate }[] = [];
-      for (let step = 0; step < 40; step++) {
-        const months = step * 3;
-        const date = months === 0 ? chain.tradeDate : addCalendarMonths(chain.tradeDate, months);
-        if (months > 0 && date >= anchor) break;
-        steps.push({ months, date });
-      }
-      for (const step of steps) {
-        const label =
-          step.months === 0
-            ? `Today · ${formatExpiryLabel(step.date)}`
-            : `+${step.months} mo · ${formatExpiryLabel(step.date)}`;
+      const latest = expiries.length ? expiries.reduce((a, b) => (a > b ? a : b)) : null;
+      if (!latest) continue;
+      const showDate = expiries.some((date) => date !== latest);
+      for (const step of forwardDateSteps(chain.tradeDate, latest)) {
         horizons.push({
-          id: `q:${step.months}:${step.date}`,
+          id: forwardStepId(step),
           date: step.date,
-          label,
+          label: forwardStepLabel(step, showDate),
           shared: true,
-          settlement: false,
+          settlement: step.kind === "expiry",
           structureId: null,
         });
-      }
-      if (allSame) {
-        horizons.push({
-          id: `q:expiry:${anchor}`,
-          date: anchor,
-          label: `Expiry · ${formatExpiryLabel(anchor)}`,
-          shared: true,
-          settlement: true,
-          structureId: null,
-        });
-      } else {
-        for (const structure of lab.structures) {
-          horizons.push({
-            id: `q:expiry:${structure.id}:${structure.expiry}`,
-            date: structure.expiry,
-            label: `Expiry · ${structure.label} · ${formatExpiryLabel(structure.expiry)}`,
-            shared: false,
-            settlement: true,
-            structureId: structure.id,
-          });
-        }
       }
       continue;
     }
