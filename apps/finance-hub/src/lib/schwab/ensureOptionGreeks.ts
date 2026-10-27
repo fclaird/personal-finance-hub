@@ -183,6 +183,22 @@ export function ensureOptionGreeksOnLatestSnapshots(db?: Database.Database): {
 
 let lastOptionDataRefreshAt = 0;
 
+/**
+ * A missing delta used to skip this throttle, so every allocation and positions
+ * request started another Schwab refresh while that contract stayed unresolved.
+ * Refresh on the interval unless the caller passes force.
+ */
+export function shouldThrottleOptionDataRefresh(input: {
+  force?: boolean;
+  lastRefreshAt: number;
+  now: number;
+  minIntervalMs: number;
+}): boolean {
+  if (input.force) return false;
+  if (!(input.lastRefreshAt > 0)) return false;
+  return input.now - input.lastRefreshAt < input.minIntervalMs;
+}
+
 async function runOptionDataRefresh(
   db: Database.Database,
   freshness: OptionDataFreshness,
@@ -246,10 +262,12 @@ export async function ensureFreshOptionData(options?: {
   const rthOpen = isUsEquityRegularSessionOpen();
   const minIntervalMs = schwabStaleThresholdMs(rthOpen);
   if (
-    !options?.force &&
-    lastOptionDataRefreshAt > 0 &&
-    Date.now() - lastOptionDataRefreshAt < minIntervalMs &&
-    freshness.missingDeltaCount === 0
+    shouldThrottleOptionDataRefresh({
+      force: options?.force,
+      lastRefreshAt: lastOptionDataRefreshAt,
+      now: Date.now(),
+      minIntervalMs,
+    })
   ) {
     return { refreshed: false, holdingsSynced: false, greeksSynced: false, reason: "throttled", freshness };
   }

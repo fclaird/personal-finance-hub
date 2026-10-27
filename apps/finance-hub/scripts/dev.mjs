@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Start Next dev with a Node binary that matches the better-sqlite3 native build.
- * On Apple Silicon, `npm run dev` often uses Homebrew x64 Node while postinstall built arm64.
+ * On Apple Silicon, prefer ~/.local/opt/node-arm64 (see scripts/resolveNode.mjs).
+ * Homebrew x64 Node under Rosetta is the fallback when that install is missing.
  */
 import { spawn, spawnSync, execSync } from "node:child_process";
 import fs from "node:fs";
@@ -9,10 +10,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadEnvLocal } from "./loadEnvLocal.mjs";
+import { reexecFinanceHubNode, resolveFinanceHubNode } from "./resolveNode.mjs";
 import { devNextArgs, resolveListen } from "./schwabListen.mjs";
 
 const root = path.join(fileURLToPath(new URL(".", import.meta.url)), "..");
 loadEnvLocal(root);
+if (reexecFinanceHubNode(process.argv.slice(1))) {
+  /* Child process is the arm64 server. This x64 parent waits on that child. */
+} else {
+  runDev();
+}
+
+function runDev() {
 const DEV_PORT = Number(process.env.PORT ?? 3000) || 3000;
 const lockPath = path.join(root, ".next", "dev", "lock");
 
@@ -118,24 +127,7 @@ function ensureSingleDevServer(protocol, bindHost) {
   }
 }
 
-/** arm64 Node bundled with Cursor; override with FINANCE_HUB_NODE. */
-const CURSOR_ARM64_NODE =
-  "/Applications/Cursor.app/Contents/Resources/app/resources/helpers/node";
-
-function resolveDevNode() {
-  if (process.env.FINANCE_HUB_NODE?.trim()) return process.env.FINANCE_HUB_NODE.trim();
-  if (process.platform === "darwin" && process.arch === "x64") {
-    try {
-      const arch = spawnSync(CURSOR_ARM64_NODE, ["-p", "process.arch"], { encoding: "utf8" }).stdout?.trim();
-      if (arch === "arm64") return CURSOR_ARM64_NODE;
-    } catch {
-      /* fall through */
-    }
-  }
-  return process.execPath;
-}
-
-const nodeBin = resolveDevNode();
+const nodeBin = resolveFinanceHubNode();
 
 const ensure = spawnSync(nodeBin, ["scripts/ensure-sqlite-native.mjs"], {
   cwd: root,
@@ -175,3 +167,4 @@ child.on("exit", (code, signal) => {
   if (signal) process.kill(process.pid, signal);
   process.exit(code ?? 0);
 });
+}

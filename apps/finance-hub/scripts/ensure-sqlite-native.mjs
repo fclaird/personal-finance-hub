@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Fail fast when better-sqlite3 was built for a different CPU arch than this Node binary.
- * Common on Apple Silicon when `npm install` used arm64 Node but `npm run dev` uses Homebrew x64 Node.
+ * Do not pin @tailwindcss/oxide-darwin-x64 or lightningcss-darwin-x64 in package.json.
+ * Those Intel packages forced Rosetta. This script installs the matching darwin arch.
  */
 import { execSync, spawnSync } from "node:child_process";
 import fs from "node:fs";

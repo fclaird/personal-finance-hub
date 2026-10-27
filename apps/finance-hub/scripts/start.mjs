@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { listenLoopbackHttp, listenTls } from "./localHttps.mjs";
 import { loopbackHealthOk } from "./loopbackHealth.mjs";
 import { loadEnvLocal } from "./loadEnvLocal.mjs";
+import { reexecFinanceHubNode } from "./resolveNode.mjs";
 import { certFiles, certsPresent, missingCertMessage, resolveListen, wrongProtocolMessage } from "./schwabListen.mjs";
 
 const root = path.join(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -98,6 +99,7 @@ async function bootProductionHttps({ bindHost, port, keyPath, certPath }) {
 
 async function main() {
   loadEnvLocal(root);
+  if (reexecFinanceHubNode(process.argv.slice(1))) return;
 
   const bindHost = resolveBindHost();
   const port = Number(process.env.PORT ?? 3000) || 3000;
@@ -149,6 +151,12 @@ async function main() {
     console.error(missingCertMessage(redirectUri?.trim() || plan.origin, files.keyPath, files.certPath));
     process.exit(1);
   }
+
+  const ensure = spawnSync(process.execPath, ["scripts/ensure-sqlite-native.mjs"], {
+    cwd: root,
+    stdio: "inherit",
+  });
+  if (ensure.status !== 0) process.exit(ensure.status ?? 1);
 
   console.log(`Finance Hub (next start) ${plan.origin}/`);
   if (!isLoopback(bindHost)) {

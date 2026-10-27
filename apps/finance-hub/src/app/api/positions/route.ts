@@ -14,6 +14,7 @@ import {
   optionMarketValueFromMark,
   resolveOptionContractMultiplier,
 } from "@/lib/options/optionContractMultiplier";
+import { readThroughPortfolioCache } from "@/lib/server/portfolioReadCache";
 import { ensureFreshOptionData } from "@/lib/schwab/ensureOptionGreeks";
 import { schwabCurrentDayProfitLoss } from "@/lib/schwab/schwabPositionDayPl";
 import { buildLiveEquityMarkMap, resolveEquityMarkPx } from "@/lib/market/liveEquityMarks";
@@ -404,19 +405,88 @@ function nonIndividualSecuritySymbolsForSnapshots(db: ReturnType<typeof getDb>, 
   return collectNonIndividualSecuritySymbols(rows);
 }
 
+type PositionsPayload = {
+  ok: true;
+  snapshotId: string | null;
+  snapshots: string[];
+  positions: Array<{ accountId: string }>;
+  accounts: Array<{
+    id: string;
+    name: string;
+    nickname: string | null;
+    type: string;
+    connection_id: string;
+    accountBucket: string | null;
+  }>;
+  nonIndividualSecuritySymbols: string[];
+};
+
+const EMPTY_POSITIONS: PositionsPayload = {
+  ok: true,
+  snapshotId: null,
+  snapshots: [],
+  positions: [],
+  accounts: [],
+  nonIndividualSecuritySymbols: [],
+};
+
+async function loadPositionsPayload(
+  db: ReturnType<typeof getDb>,
+  flavor: Awaited<ReturnType<typeof resolveViewScope>>["flavor"],
+  mode: Awaited<ReturnType<typeof resolveViewScope>>["dataMode"],
+  snapshotId: string | null,
+): Promise<PositionsPayload> {
+  if (snapshotId == null) await ensureFreshOptionData({ db });
+  const latest = latestSnapshotId(db, mode);
+  let snaps: string[] = [];
+  let responseSnapshotLabel: string | null = null;
+
+  if (snapshotId != null) {
+    snaps = [snapshotId];
+    responseSnapshotLabel = snapshotId;
+  } else {
+    snaps = latestSyncedSnapshotIds(db, latestSnapshotScopeForMode(mode), flavor);
+    responseSnapshotLabel = latest ?? null;
+  }
+
+  if (snaps.length === 0 && !latest && snapshotId == null) return EMPTY_POSITIONS;
+  if (snaps.length === 0) {
+    return { ...EMPTY_POSITIONS, snapshotId: responseSnapshotLabel };
+  }
+
+  const out = await buildPositionsForSnapshots(db, snaps);
+  const nonIndividualSecuritySymbols = nonIndividualSecuritySymbolsForSnapshots(db, snaps);
+  const accounts = (
+    db
+      .prepare(
+        `
+        SELECT id, name, nickname, type, connection_id, account_bucket AS accountBucket
+        FROM accounts
+        ORDER BY name ASC
+      `,
+      )
+      .all() as PositionsPayload["accounts"]
+  ).filter((a) => isAccountInFlavor(flavor, a.id));
+
+  return {
+    ok: true,
+    snapshotId: snapshotId ?? responseSnapshotLabel ?? latest ?? null,
+    snapshots: snaps,
+    positions: out,
+    accounts,
+    nonIndividualSecuritySymbols,
+  };
+}
+
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const accountIdParam = url.searchParams.get("accountId");
     const snapshotId = url.searchParams.get("snapshotId");
+    const force = url.searchParams.get("refresh") === "1";
 
     const db = getDb();
     const { flavor, dataMode: mode } = await resolveViewScope();
-    await ensureFreshOptionData({ db });
-    const latest = latestSnapshotId(db, mode);
-
-    let snaps: string[] = [];
-    let responseSnapshotLabel: string | null = null;
 
     if (accountIdParam) {
       if (!isAccountInFlavor(flavor, accountIdParam)) {
@@ -428,66 +498,32 @@ export async function GET(req: Request) {
         }
         return NextResponse.json({ ok: false, error: "Account not in active flavor scope" }, { status: 400 });
       }
-      const snap = db
-        .prepare(
-          `SELECT id FROM holding_snapshots WHERE account_id = ? ORDER BY as_of DESC LIMIT 1`,
-        )
-        .get(accountIdParam) as { id: string } | undefined;
-      snaps = snap ? [snap.id] : [];
-      responseSnapshotLabel = snap?.id ?? null;
-    } else if (snapshotId != null) {
-      snaps = [snapshotId];
-      responseSnapshotLabel = snapshotId;
+    }
+
+    let payload: PositionsPayload;
+    let asOf = new Date().toISOString();
+    let stale = false;
+    let refreshing = false;
+
+    if (snapshotId != null) {
+      payload = await loadPositionsPayload(db, flavor, mode, snapshotId);
     } else {
-      snaps = latestSyncedSnapshotIds(db, latestSnapshotScopeForMode(mode), flavor);
-      responseSnapshotLabel = latest ?? null;
+      const cached = await readThroughPortfolioCache(
+        `positions:${flavor}:${mode}`,
+        () => loadPositionsPayload(getDb(), flavor, mode, null),
+        force,
+      );
+      payload = cached.value;
+      asOf = cached.asOf;
+      stale = cached.stale;
+      refreshing = cached.refreshing;
     }
 
-    if (snaps.length === 0 && !latest && !accountIdParam) {
-      return NextResponse.json({ ok: true, snapshotId: null, positions: [], accounts: [], nonIndividualSecuritySymbols: [] });
-    }
+    const positions = accountIdParam
+      ? payload.positions.filter((row) => row.accountId === accountIdParam)
+      : payload.positions;
 
-    if (snaps.length === 0) {
-      return NextResponse.json({
-        ok: true,
-        snapshotId: responseSnapshotLabel,
-        snapshots: [],
-        positions: [],
-        accounts: [],
-        nonIndividualSecuritySymbols: [],
-      });
-    }
-
-    const out = await buildPositionsForSnapshots(db, snaps);
-    const nonIndividualSecuritySymbols = nonIndividualSecuritySymbolsForSnapshots(db, snaps);
-
-    const accounts = (
-      db
-        .prepare(
-          `
-        SELECT id, name, nickname, type, connection_id, account_bucket AS accountBucket
-        FROM accounts
-        ORDER BY name ASC
-      `,
-        )
-        .all() as Array<{
-        id: string;
-        name: string;
-        nickname: string | null;
-        type: string;
-        connection_id: string;
-        accountBucket: string | null;
-      }>
-    ).filter((a) => isAccountInFlavor(flavor, a.id));
-
-    return NextResponse.json({
-      ok: true,
-      snapshotId: snapshotId ?? responseSnapshotLabel ?? latest ?? null,
-      snapshots: snaps,
-      positions: out,
-      accounts,
-      nonIndividualSecuritySymbols,
-    });
+    return NextResponse.json({ ...payload, positions, asOf, stale, refreshing });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     logError("api_positions_get", e);

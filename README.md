@@ -58,7 +58,24 @@ npm install
 npm run build && npm start         # same scheme as SCHWAB_REDIRECT_URI, on 127.0.0.1:3000
 ```
 
-Day-to-day, point a Dock icon at `apps/finance-hub/scripts/open-finance-hub.command` (it does not build). `npm start` listens with the scheme in `SCHWAB_REDIRECT_URI`. An `https://127.0.0.1:3000/api/schwab/callback` URI serves HTTPS with the mkcert files `npm run dev` writes under `apps/finance-hub/certificates/`. An `http://` URI stays plain HTTP. Leave `FINANCE_HUB_ALLOW_BROKER_ORDERS` unset. Do not leave `npm run dev` running — Turbopack dev RSS grows to many GB.
+Day-to-day, run `apps/finance-hub/scripts/launch-financial-bridge.sh` (or point `~/bin/launch-financial-bridge.sh` at it). That kills anything on port 3000, builds when sources are newer than `.next`, and starts the production server on the arm64 Node at `~/.local/opt/node-arm64` when that binary exists. `… dev` keeps the dev server. `npm start` listens with the scheme in `SCHWAB_REDIRECT_URI`. An `https://127.0.0.1:3000/api/schwab/callback` URI serves HTTPS with the mkcert files `npm run dev` writes under `apps/finance-hub/certificates/`. An `http://` URI stays plain HTTP. Leave `FINANCE_HUB_ALLOW_BROKER_ORDERS` unset. Do not leave `npm run dev` running — Turbopack dev RSS grows to many GB.
+
+On the Mac, the Dock launcher should be a one-line exec of that script. Interactive `npm` needs the arm64 Node first on `PATH`, then a native rebuild:
+
+```bash
+# ~/bin/launch-financial-bridge.sh
+exec "$HOME/Projects/personal-finance-hub/apps/finance-hub/scripts/launch-financial-bridge.sh" "$@"
+
+export PATH="$HOME/.local/opt/node-arm64/bin:$PATH"
+hash -r
+node -p "process.arch + ' ' + process.execPath"   # must print arm64
+cd apps/finance-hub
+npm install
+npm rebuild better-sqlite3
+node scripts/ensure-sqlite-native.mjs
+```
+
+If `~/.local/opt/node-arm64` is missing or is not arm64, the launcher falls back to Cursor's bundled arm64 Node, then to whatever `node` invoked the script. `FINANCE_HUB_NODE` overrides that. `FINANCE_HUB_REBUILD=1` forces a production build. `… start` skips the build.
 
 From the repo root you can also run `npm run start` (delegates to `apps/finance-hub`).
 

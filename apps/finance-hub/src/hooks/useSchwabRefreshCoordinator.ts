@@ -22,11 +22,21 @@ export function useSchwabRefreshCoordinator(opts: {
 }) {
   const { onTick, enabled = true, resetKey = "" } = opts;
   const refreshInFlight = useRef(false);
+  const tickInFlight = useRef(false);
   const onTickRef = useRef(onTick);
 
   useEffect(() => {
     onTickRef.current = onTick;
   });
+
+  const runTick = useCallback(() => {
+    const tick = onTickRef.current;
+    if (!tick || tickInFlight.current) return;
+    tickInFlight.current = true;
+    void Promise.resolve(tick()).finally(() => {
+      tickInFlight.current = false;
+    });
+  }, []);
 
   const ensureFresh = useCallback(async () => {
     if (!enabled || refreshInFlight.current) return;
@@ -53,20 +63,13 @@ export function useSchwabRefreshCoordinator(opts: {
 
   useEffect(() => {
     if (!enabled) return;
-    const tick = onTickRef.current;
-    if (tick) {
-      void Promise.resolve(tick()).finally(() => {
-        void ensureFresh();
-      });
-    } else {
-      void ensureFresh();
-    }
-  }, [enabled, ensureFresh, resetKey]);
+    runTick();
+    void ensureFresh();
+  }, [enabled, ensureFresh, resetKey, runTick]);
 
   useMarketAwareInterval(
     () => {
-      if (!onTick) return;
-      void onTick();
+      runTick();
     },
     60_000,
     600_000,

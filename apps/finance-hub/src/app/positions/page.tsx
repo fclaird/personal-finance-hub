@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
+import { DataAsOfBar } from "@/app/components/DataAsOfBar";
 import { EditablePageHeading } from "@/app/components/EditableHeading";
 import {
   AddManualAccountDialog,
@@ -22,12 +23,16 @@ import {
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator";
 import { bucketFromAccount, type AccountBucket } from "@/lib/accountBuckets";
+import { loadPositionsBook } from "@/lib/client/positionsBook";
 import { isManualAccountId } from "@/lib/manual/isManualAccountId";
 import { underPxMapFromNormalizedQuotes } from "@/lib/market/equityMarkPrice";
 
 export default function PositionsPage() {
   const privacy = usePrivacy();
   const [rows, setRows] = useState<Row[]>([]);
+  const [asOf, setAsOf] = useState<string | null>(null);
+  const [dataStale, setDataStale] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sortColumn, setSortColumn] = useState<SortColumn>("symbol");
   const [sortAsc, setSortAsc] = useState(true);
@@ -68,16 +73,14 @@ export default function PositionsPage() {
     setManualAccounts(manual);
   }
 
-  async function load() {
-    const resp = await fetch("/api/positions", { cache: "no-store" });
-    const json = (await resp.json()) as {
-      ok: boolean;
-      positions?: Row[];
-      accounts?: Array<{ id: string; nickname: string | null; name: string; accountBucket: string | null }>;
-      error?: string;
-    };
+  async function load(force = false) {
+    if (force) setRefreshing(true);
+    const json = await loadPositionsBook({ refresh: force });
     if (!json.ok) throw new Error(json.error ?? "Failed to load positions");
-    setRows(json.positions ?? []);
+    setRows((json.positions ?? []) as Row[]);
+    setAsOf(json.asOf ?? null);
+    setDataStale(json.stale === true);
+    setRefreshing(false);
     await applyAccounts(json.accounts);
   }
 
@@ -120,12 +123,12 @@ export default function PositionsPage() {
     setUnderPx(underPxMapFromNormalizedQuotes(json.quotes ?? []));
   }
 
-  useEffect(() => {
-    void load().catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, []);
-
   useSchwabRefreshCoordinator({
-    onTick: () => load().catch((e) => setError(e instanceof Error ? e.message : String(e))),
+    onTick: () =>
+      load().catch((e) => {
+        setRefreshing(false);
+        setError(e instanceof Error ? e.message : String(e));
+      }),
   });
 
   useEffect(() => {
@@ -460,7 +463,18 @@ export default function PositionsPage() {
             Individual holdings from Schwab sync and manually entered external accounts.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <DataAsOfBar
+            asOf={asOf}
+            stale={dataStale}
+            busy={refreshing}
+            onRefresh={() =>
+              void load(true).catch((e) => {
+                setRefreshing(false);
+                setError(e instanceof Error ? e.message : String(e));
+              })
+            }
+          />
           <button
             type="button"
             onClick={() => setAddAccountOpen(true)}
