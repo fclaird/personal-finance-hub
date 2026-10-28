@@ -1,9 +1,11 @@
 import { scheduleColdStartupDataPullOnce } from "@/lib/coldStartupDataPull";
 import { logError, logLine } from "@/lib/log";
 import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
+import { revalidateStalePortfolioCache } from "@/lib/server/portfolioReadCache";
 import { runSchwabRefreshSchedulerTick } from "@/lib/schwab/refreshOrchestrator";
 import { maybeSyncBookForwardSnapsOnSchedulerTick } from "@/lib/dividends/bookForwardSnapScheduler";
 import { maybeSyncRealEstateMonthly } from "@/lib/realEstate/monthly";
+import { createTickGate } from "@/lib/tickGate";
 import { warmGlanceCache } from "@/lib/terminal/glanceCache";
 
 type SchedulerState = {
@@ -53,27 +55,32 @@ export function startSchedulerOnce() {
   s.started = true;
   logLine("scheduler_start");
   scheduleColdStartupDataPullOnce();
+  const runExclusive = createTickGate();
 
   async function tick() {
-    try {
-      s.lastTickAt = Date.now();
-      const { lastSlowRunAt, lastAccountValueRunAt } = await runSchwabRefreshSchedulerTick({
-        lastSlowRunAt: s.lastSlowRunAt,
-        lastAccountValueRunAt: s.lastAccountValueRunAt,
-        slowIntervalMs: SLOW_MS,
-        accountValueIntervalMs: ACCOUNT_VALUE_RTH_MS,
-      });
-      s.lastSlowRunAt = lastSlowRunAt;
-      s.lastAccountValueRunAt = lastAccountValueRunAt;
-    } catch (e) {
-      logError("scheduler_schwab_refresh_tick_failed", e);
-    }
-    void maybeSyncBookForwardSnapsOnSchedulerTick().catch((e) =>
-      logError("scheduler_book_forward_snap_failed", e),
-    );
-    void maybeSyncRealEstateMonthly().catch((e) => logError("scheduler_real_estate_failed", e));
-    // Keep the terminal quick-glance payload warm so page opens are a local cache read.
-    void warmGlanceCache().catch((e) => logError("scheduler_glance_warm_failed", e));
+    const ran = await runExclusive(async () => {
+      try {
+        s.lastTickAt = Date.now();
+        const { lastSlowRunAt, lastAccountValueRunAt } = await runSchwabRefreshSchedulerTick({
+          lastSlowRunAt: s.lastSlowRunAt,
+          lastAccountValueRunAt: s.lastAccountValueRunAt,
+          slowIntervalMs: SLOW_MS,
+          accountValueIntervalMs: ACCOUNT_VALUE_RTH_MS,
+        });
+        s.lastSlowRunAt = lastSlowRunAt;
+        s.lastAccountValueRunAt = lastAccountValueRunAt;
+      } catch (e) {
+        logError("scheduler_schwab_refresh_tick_failed", e);
+      }
+      await maybeSyncBookForwardSnapsOnSchedulerTick().catch((e) =>
+        logError("scheduler_book_forward_snap_failed", e),
+      );
+      await maybeSyncRealEstateMonthly().catch((e) => logError("scheduler_real_estate_failed", e));
+      // Keep the terminal quick-glance payload warm so page opens are a local cache read.
+      await warmGlanceCache().catch((e) => logError("scheduler_glance_warm_failed", e));
+      await revalidateStalePortfolioCache().catch((e) => logError("scheduler_portfolio_cache_failed", e));
+    });
+    if (!ran) logLine("scheduler_tick_skipped_overlap");
   }
 
   const jitterMs = () => Math.floor(Math.random() * 5_000);

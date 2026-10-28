@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { AccountPositionsForAllocation } from "@/app/components/AccountPositionsForAllocation";
+import { DataAsOfBar } from "@/app/components/DataAsOfBar";
+import type { Row } from "@/app/components/PositionsGroupedTable";
 import { DraggableColumnHeader, DRAGGABLE_COLUMN_HEADER_GRAB_CLASS } from "@/app/components/DraggableColumnHeader";
 import { ColumnLabel } from "@/app/components/ColumnLabel";
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
@@ -15,6 +17,7 @@ import { AllocationWeightingChart } from "@/app/components/allocation/Allocation
 import { FinancePiePanel } from "@/app/components/FinancePiePanel";
 import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator";
 import { usePrivacy } from "@/app/components/PrivacyProvider";
+import { loadPositionsBook } from "@/lib/client/positionsBook";
 import { assignEarthToneColorsBySymbols } from "@/lib/charts/pieEarthTones";
 import { formatUsd2 } from "@/lib/format";
 import { usePersistedColumnOrder } from "@/lib/usePersistedColumnOrder";
@@ -286,10 +289,51 @@ function pieMetricChartSubtitle(metric: PieMetric): string {
 const BTN_CLASSES =
   "flex h-8 w-full min-w-0 items-center justify-center whitespace-nowrap rounded-md px-2 text-xs font-semibold tracking-tight";
 
+function AccountAllocationDetails({
+  accountId,
+  accountName,
+  totalMarketValue,
+  byAssetClass,
+  positionRows,
+  masked,
+}: {
+  accountId: string;
+  accountName: string;
+  totalMarketValue: number;
+  byAssetClass: Array<{ key: string; marketValue: number; weight: number }>;
+  positionRows: readonly Row[];
+  masked: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details
+      className="rounded-xl border border-zinc-400 bg-white p-4 open:bg-zinc-50 dark:bg-zinc-950 dark:open:bg-zinc-950"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="cursor-pointer list-none">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">{accountName}</div>
+          <div className={"text-sm text-zinc-800 dark:text-zinc-200 " + posNegClass(totalMarketValue)}>
+            {usd2Masked(totalMarketValue, masked)}
+          </div>
+        </div>
+      </summary>
+      <div className="mt-3 overflow-x-auto">
+        <AccountAssetClassTable rows={byAssetClass} masked={masked} />
+      </div>
+      {open ? <AccountPositionsForAllocation accountId={accountId} rows={positionRows} /> : null}
+    </details>
+  );
+}
+
 export default function AllocationPage() {
   const privacy = usePrivacy();
   const [rows, setRows] = useState<ExposureRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [asOf, setAsOf] = useState<string | null>(null);
+  const [dataStale, setDataStale] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [positionRows, setPositionRows] = useState<Row[]>([]);
   const [pieView, setPieView] = useState<"net" | "retirement" | "brokerage" | "529">("net");
   const [pieMetric, setPieMetric] = useState<PieMetric>("net");
   /** Pie + bar charts only: delta-weighted synthetic MV vs options liquidating value (contract marks). Table % / Net MV stay delta-based. */
@@ -329,9 +373,14 @@ export default function AllocationPage() {
     DEFAULT_EXPOSURE_COLUMN_ORDER,
   );
 
-  async function load() {
+  async function load(force = false) {
     setError(null);
-    const pageDataResp = await fetch(`/api/allocation/page-data?synthetic=1`);
+    if (force) setRefreshing(true);
+    const pageDataPromise = fetch(
+      force ? `/api/allocation/page-data?synthetic=1&refresh=1` : `/api/allocation/page-data?synthetic=1`,
+    );
+    const bookPromise = loadPositionsBook({ refresh: force }).catch(() => null);
+    const pageDataResp = await pageDataPromise;
 
     async function safeJson(resp: Response) {
       const text = await resp.text();
@@ -357,8 +406,15 @@ export default function AllocationPage() {
         byAssetClass: Array<{ key: string; marketValue: number; weight: number }>;
       }>;
       error?: string;
+      asOf?: string;
+      stale?: boolean;
     };
     if (!pageDataJson.ok) throw new Error(pageDataJson.error ?? "Failed to load allocation page data");
+    const book = await bookPromise;
+    if (book?.ok) setPositionRows((book.positions ?? []) as Row[]);
+    setAsOf(pageDataJson.asOf ?? book?.asOf ?? null);
+    setDataStale(pageDataJson.stale === true);
+    setRefreshing(false);
     setRows(
       (pageDataJson.exposure ?? []).map((r) => ({
         ...r,
@@ -380,7 +436,11 @@ export default function AllocationPage() {
   }
 
   useSchwabRefreshCoordinator({
-    onTick: () => load().catch((e) => setError(e instanceof Error ? e.message : String(e))),
+    onTick: () =>
+      load().catch((e) => {
+        setRefreshing(false);
+        setError(e instanceof Error ? e.message : String(e));
+      }),
   });
 
   function toggleSort(col: SortColumn) {
@@ -796,10 +856,14 @@ export default function AllocationPage() {
             has the same pie controls for sector / market cap / geography.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <DataAsOfBar asOf={asOf} stale={dataStale} busy={refreshing} onRefresh={() => void load(true).catch((e) => {
+            setRefreshing(false);
+            setError(e instanceof Error ? e.message : String(e));
+          })} />
           <Link
             href="/connections"
-            className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-white/5"
+            className="rounded-full border border-zinc-400 bg-white px-4 py-2 text-sm font-medium text-zinc-950 hover:bg-zinc-100 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
           >
             Connections
           </Link>
@@ -1121,23 +1185,15 @@ export default function AllocationPage() {
               <>
         <div className="grid gap-4">
           {accounts.map((a) => (
-            <details
+            <AccountAllocationDetails
               key={a.accountId}
-              className="rounded-xl border border-zinc-300 p-4 open:bg-zinc-50 dark:border-white/20 dark:open:bg-black/30"
-            >
-              <summary className="cursor-pointer list-none">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-sm font-semibold">{a.accountName}</div>
-                  <div className={"text-sm text-zinc-600 dark:text-zinc-400 " + posNegClass(a.totalMarketValue)}>
-                    {usd2Masked(a.totalMarketValue, privacy.masked)}
-                  </div>
-                </div>
-              </summary>
-              <div className="mt-3 overflow-x-auto">
-                <AccountAssetClassTable rows={a.byAssetClass} masked={privacy.masked} />
-              </div>
-              <AccountPositionsForAllocation accountId={a.accountId} />
-            </details>
+              accountId={a.accountId}
+              accountName={a.accountName}
+              totalMarketValue={a.totalMarketValue}
+              byAssetClass={a.byAssetClass}
+              positionRows={positionRows}
+              masked={privacy.masked}
+            />
           ))}
           {accounts.length === 0 ? (
             <div className="text-sm text-zinc-600 dark:text-zinc-400">No accounts yet.</div>

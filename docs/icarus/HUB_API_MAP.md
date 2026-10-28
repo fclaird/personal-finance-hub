@@ -14,7 +14,7 @@ Base: `https://127.0.0.1:3000` (or Electron `3049`). When `FINANCE_HUB_API_KEY` 
 | `/api/strategy-trades` | Classified TRADE ledger (`?category=&format=csv`) |
 | `/api/alerts/events` | Persisted alert events |
 | `/api/alerts/rules` | Rule list (GET) |
-| `/api/positions` | Latest snapshots + option marks |
+| `/api/positions` | Latest snapshots + option marks. Cached; `?refresh=1` rebuilds; JSON includes `asOf`. `?accountId=` filters that one book |
 | `/api/exposure` | Underlying exposure rollup |
 | `/api/allocation` | Allocation |
 | `/api/reports` | Period P&L / realized |
@@ -27,7 +27,7 @@ Base: `https://127.0.0.1:3000` (or Electron `3049`). When `FINANCE_HUB_API_KEY` 
 | `/api/strategy-lab/snapshots` | List saved lab snapshots for a symbol (`?symbol=`). One row (`?id=`) includes the scenario, compact quotes, and provenance. The id is stable so a future journal entry can cite it. Local SQLite only. Not on the MCP allowlist |
 | `/api/strategy-lab/book` | Open equity and option legs for the Strategy Lab picker, with cost basis and fill dates reconstructed from local positions and `broker_transactions`. Local SQLite only. Not on the MCP allowlist |
 
-Other `GET /api/*` pages (terminal, dividends, earnings, taxonomy, …) are also read-only.
+Other `GET /api/*` pages (terminal, dividends, earnings, taxonomy, …) are also read-only. `/api/allocation/page-data` is the allocation screen payload (same cache as positions: `asOf`, `stale`, `?refresh=1`).
 
 ## Local writes (SQLite / sync — not broker orders)
 

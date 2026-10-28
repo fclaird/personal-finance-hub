@@ -2,6 +2,7 @@
 
 import { PAGE_FRAME } from "@/app/components/pageFrame";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Line, LineChart, ResponsiveContainer } from "recharts";
 
@@ -10,19 +11,13 @@ import { useMarketAwareInterval } from "@/hooks/useMarketAwareInterval";
 import { useSchwabRefreshCoordinator } from "@/hooks/useSchwabRefreshCoordinator";
 import { isUsEquityExtendedFuturesPollWindow, isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import type { NormalizedQuote as ApiNormalizedQuote } from "@/app/api/quotes/route";
-import { HeatmapGrid, type HeatmapItem } from "@/app/components/HeatmapGrid";
+import type { HeatmapItem } from "@/app/components/HeatmapGrid";
 import { ColumnLabel } from "@/app/components/ColumnLabel";
 import { DraggableColumnHeader, DRAGGABLE_COLUMN_HEADER_GRAB_CLASS } from "@/app/components/DraggableColumnHeader";
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { type UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
-import { NewsDigestSection } from "@/app/components/terminal/NewsDigestSection";
-import {
-  OptionFlowPanel,
-  type OptionFlowPayload,
-} from "@/app/components/terminal/OptionFlowPanel";
-import { OptionRiskPanel } from "@/app/components/terminal/OptionRiskPanel";
-import { PortfolioTreemapSection } from "@/app/components/terminal/PortfolioTreemapSection";
+import type { OptionFlowPayload } from "@/app/components/terminal/OptionFlowPanel";
 import { TerminalPerfDisplayControls } from "@/app/components/terminal/TerminalPerfDisplayControls";
 import { Sparkline } from "@/app/components/terminal/Sparkline";
 import {
@@ -44,8 +39,8 @@ import {
   writeVolumeLeadersMode,
   writeWatchlistId,
 } from "@/app/components/terminal/terminalDisplayPrefs";
-import { UsMarketsPanel } from "@/app/components/terminal/UsMarketsPanel";
 import { SymbolLink } from "@/app/components/SymbolLink";
+import { loadPositionsBook, type PositionsBookPosition } from "@/lib/client/positionsBook";
 import { formatUsd2 } from "@/lib/format";
 import {
   type ExposurePieMetric,
@@ -69,6 +64,38 @@ import {
 import { shouldHideNonIndividualSymbol } from "@/lib/terminal/individualSecurityFilter";
 import { aggregateUnderlyingDayPlFromPositions } from "@/lib/schwab/schwabPositionDayPl";
 import { usePersistedColumnOrder } from "@/lib/usePersistedColumnOrder";
+
+function TerminalPanelFallback({ label }: { label: string }) {
+  return (
+    <div className="rounded-xl border border-zinc-400 bg-zinc-950 px-3 py-6 text-sm text-zinc-200">
+      Loading {label}…
+    </div>
+  );
+}
+
+const UsMarketsPanel = dynamic(
+  () => import("@/app/components/terminal/UsMarketsPanel").then((m) => m.UsMarketsPanel),
+  { loading: () => <TerminalPanelFallback label="markets" /> },
+);
+const HeatmapGrid = dynamic(() => import("@/app/components/HeatmapGrid").then((m) => m.HeatmapGrid), {
+  loading: () => <TerminalPanelFallback label="heatmap" />,
+});
+const PortfolioTreemapSection = dynamic(
+  () => import("@/app/components/terminal/PortfolioTreemapSection").then((m) => m.PortfolioTreemapSection),
+  { loading: () => <TerminalPanelFallback label="treemap" /> },
+);
+const NewsDigestSection = dynamic(
+  () => import("@/app/components/terminal/NewsDigestSection").then((m) => m.NewsDigestSection),
+  { loading: () => <TerminalPanelFallback label="news" /> },
+);
+const OptionFlowPanel = dynamic(
+  () => import("@/app/components/terminal/OptionFlowPanel").then((m) => m.OptionFlowPanel),
+  { loading: () => <TerminalPanelFallback label="option flow" /> },
+);
+const OptionRiskPanel = dynamic(
+  () => import("@/app/components/terminal/OptionRiskPanel").then((m) => m.OptionRiskPanel),
+  { loading: () => <TerminalPanelFallback label="options risk" /> },
+);
 
 type WatchlistRow = { id: string; name: string; createdAt: string; itemCount: number };
 
@@ -636,11 +663,7 @@ export default function TerminalPage() {
 
   useEffect(() => {
     const t = setTimeout(() => {
-      void Promise.all([
-        refreshAll(watchlistId),
-        loadExposureWeighting(),
-        loadUsMarkets(),
-      ]);
+      void Promise.all([refreshAll(watchlistId), loadUsMarkets()]);
     }, 0);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -657,16 +680,45 @@ export default function TerminalPage() {
       return;
     }
     void loadUniverse(watchlistId).catch(() => null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchlistId]);
+
+  function applyPositionsBook(posJson: {
+    ok: boolean;
+    positions?: PositionsBookPosition[];
+    nonIndividualSecuritySymbols?: string[];
+  }) {
+    if (!posJson.ok) return;
+    setNonIndividualSymbols(new Set((posJson.nonIndividualSecuritySymbols ?? []).map((s) => s.toUpperCase())));
+    const mvBySym = new Map<string, number>();
+    for (const p of posJson.positions ?? []) {
+      const sym = (p.symbol ?? "").toUpperCase().trim();
+      if (!sym || sym === "CASH") continue;
+      const mv = p.marketValue;
+      if (mv == null || !Number.isFinite(mv) || mv === 0) continue;
+      mvBySym.set(sym, (mvBySym.get(sym) ?? 0) + mv);
+    }
+    setPositionMvBySym(mvBySym);
+    setUnderlyingDayPlBySym(
+      aggregateUnderlyingDayPlFromPositions(
+        (posJson.positions ?? []).map((p) => ({
+          ...p,
+          symbol: p.symbol ?? null,
+          securityType: p.securityType ?? "",
+        })),
+      ),
+    );
+  }
 
   useSchwabRefreshCoordinator({
     onTick: () => {
+      void loadPositionsBook()
+        .then(applyPositionsBook)
+        .catch(() => null);
+      void loadExposureWeighting();
       const sym = symbolsRef.current;
       if (sym.length === 0) return;
       if (Date.now() - lastPrimaryLoadAtRef.current < 55_000) return;
       void runTerminalPrimaryLoad(sym, watchlistId).catch(() => null);
-      void loadExposureWeighting();
     },
     resetKey: marketPollResetKey,
   });
@@ -725,23 +777,6 @@ export default function TerminalPage() {
   }, [watchlists, watchlistId]);
 
   useEffect(() => {
-    void (async () => {
-      try {
-        const posResp = await fetch("/api/positions", { cache: "no-store" });
-        const posJson = await terminalFetchJson<{ ok: boolean; nonIndividualSecuritySymbols?: string[] }>(
-          posResp,
-          "positions",
-        );
-        if (posJson.ok) {
-          setNonIndividualSymbols(new Set((posJson.nonIndividualSecuritySymbols ?? []).map((s) => s.toUpperCase())));
-        }
-      } catch {
-        // ignore
-      }
-    })();
-  }, []);
-
-  useEffect(() => {
     if (!displayPrefsHydrated) return;
     try {
       localStorage.setItem("terminal_treemap_scope_v1", treemapScope);
@@ -769,51 +804,6 @@ export default function TerminalPage() {
       setError(e instanceof Error ? e.message : String(e));
     });
   }, [symbolsKey, watchlistId]);
-
-  useEffect(() => {
-    if (quotes.length === 0) return;
-    const t = setTimeout(() => {
-      void (async () => {
-        try {
-          const posResp = await fetch("/api/positions", { cache: "no-store" });
-          const posJson = await terminalFetchJson<{
-            ok: boolean;
-            positions?: Array<{
-              symbol: string | null;
-              securityType: string;
-              underlyingSymbol: string | null;
-              effectiveUnderlyingSymbol?: string | null;
-              marketValue: number | null;
-              metadataJson?: string | null;
-            }>;
-            nonIndividualSecuritySymbols?: string[];
-          }>(posResp, "positions");
-          if (!posJson.ok) {
-            setPositionMvBySym(new Map());
-            setUnderlyingDayPlBySym(new Map());
-            return;
-          }
-          setNonIndividualSymbols(new Set((posJson.nonIndividualSecuritySymbols ?? []).map((s) => s.toUpperCase())));
-          const mvBySym = new Map<string, number>();
-          for (const p of posJson.positions ?? []) {
-            const sym = (p.symbol ?? "").toUpperCase().trim();
-            if (!sym || sym === "CASH") continue;
-            const mv = p.marketValue;
-            if (mv == null || !Number.isFinite(mv) || mv === 0) continue;
-            mvBySym.set(sym, (mvBySym.get(sym) ?? 0) + mv);
-          }
-
-          setPositionMvBySym(mvBySym);
-          setUnderlyingDayPlBySym(aggregateUnderlyingDayPlFromPositions(posJson.positions ?? []));
-          void loadExposureWeighting();
-        } catch {
-          // ignore
-        }
-      })();
-    }, 5000);
-    return () => clearTimeout(t);
-  }, [quotes, lastUpdatedAt]);
-
 
   useMarketAwareInterval(() => void loadUsMarkets(), 60_000, 600_000, "us-markets", true);
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { evaluateOptionDataFreshness } from "@/lib/schwab/ensureOptionGreeks";
+import { evaluateOptionDataFreshness, shouldThrottleOptionDataRefresh } from "@/lib/schwab/ensureOptionGreeks";
 import { schwabStaleThresholdMs } from "@/lib/schwab/schwabStaleThreshold";
 
 test("evaluateOptionDataFreshness flags stale greeks and holdings", () => {
@@ -36,4 +36,20 @@ test("evaluateOptionDataFreshness is fresh when no option positions", () => {
   assert.equal(freshness.hasOptionPositions, false);
   assert.equal(freshness.needsGreeksRefresh, false);
   assert.equal(freshness.needsHoldingsRefresh, false);
+});
+
+test("option refresh stays throttled while a delta is still missing", () => {
+  const now = 1_000_000;
+  assert.equal(
+    shouldThrottleOptionDataRefresh({ lastRefreshAt: now - 1_000, now, minIntervalMs: 60_000 }),
+    true,
+  );
+  assert.equal(
+    shouldThrottleOptionDataRefresh({ force: true, lastRefreshAt: now - 1_000, now, minIntervalMs: 60_000 }),
+    false,
+  );
+  assert.equal(
+    shouldThrottleOptionDataRefresh({ lastRefreshAt: 0, now, minIntervalMs: 60_000 }),
+    false,
+  );
 });

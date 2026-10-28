@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { loadPositionsBook } from "@/lib/client/positionsBook";
 import { formatUsd2 } from "@/lib/format";
 import type { LabEdit } from "@/lib/strategyLab/lab";
 import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
@@ -43,23 +44,17 @@ export function useSchwabPositions(): Snapshot {
     let cancelled = false;
     void (async () => {
       try {
-        const resp = await fetch("/api/positions", { cache: "no-store" });
-        const body = (await resp.json()) as {
-          ok?: boolean;
-          error?: string;
-          positions?: HeldPositionRow[];
-          accounts?: HeldAccountRef[];
-        };
+        const body = await loadPositionsBook();
         if (cancelled) return;
-        if (!resp.ok || body.ok === false) {
+        if (body.ok === false) {
           setStatus("error");
           setError(body.error ?? "Positions could not be read.");
           setPositions([]);
           setAccounts([]);
           return;
         }
-        setPositions(body.positions ?? []);
-        setAccounts(body.accounts ?? []);
+        setPositions((body.positions ?? []) as HeldPositionRow[]);
+        setAccounts((body.accounts ?? []) as HeldAccountRef[]);
         setStatus("ready");
       } catch (e) {
         if (cancelled) return;

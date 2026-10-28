@@ -4,6 +4,15 @@ export type SchwabQuotesResponse = Record<string, unknown>;
 
 const QUOTE_TTL_MS = 15_000;
 const BATCH_SIZE = 50;
+/** Bound the idle quote map. A session only needs the live universe, not every symbol ever asked. */
+export const QUOTE_CACHE_MAX = 1_500;
+
+export function evictOldestQuoteCache<T extends { at: number }>(cache: Map<string, T>, max = QUOTE_CACHE_MAX): void {
+  if (cache.size <= max) return;
+  const overflow = cache.size - max;
+  const oldest = [...cache.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, overflow);
+  for (const [key] of oldest) cache.delete(key);
+}
 
 type CacheRow = { at: number; entry: unknown };
 
@@ -25,6 +34,7 @@ async function fetchMissingQuoteBatches(missing: string[], now: number): Promise
       const entry = resp[sym] ?? resp[sym.toUpperCase()];
       if (entry !== undefined) {
         quoteCache.set(sym, { at: now, entry });
+        evictOldestQuoteCache(quoteCache);
         fetched[sym] = entry;
       }
     }
