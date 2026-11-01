@@ -8,9 +8,13 @@ import { logError } from "@/lib/log";
 import { authorizeCronRequest } from "@/lib/internalCronAuth";
 
 /**
- * POST — snapshot allocation into allocation_daily_underlying for one NY trade_date (default: last NY weekday).
+ * POST — snapshot allocation into allocation_daily_underlying for the NY session
+ * whose cash close has finished (16:00 ET today). Weekends, holidays, and the
+ * open session do not write. A second call the same evening does not replace
+ * the first post-close snapshot.
  * Auth: Bearer CRON_SECRET / x-cron-secret header only.
  * Optional JSON body: { "tradeDate": "YYYY-MM-DD", "modes": ["auto","schwab"] }
+ * `tradeDate` is written only when it is that finished session.
  */
 export async function POST(req: Request) {
   if (!authorizeCronRequest(req)) {
@@ -38,7 +42,13 @@ export async function POST(req: Request) {
 
     const db = getDb();
     const { rowsWritten } = recordAllocationDailyCloseModes(db, tradeDate, modes);
-    return NextResponse.json({ ok: true, tradeDate, modes: [...modes], rowsWritten });
+    return NextResponse.json({
+      ok: true,
+      tradeDate,
+      modes: [...modes],
+      rowsWritten,
+      skipped: rowsWritten === 0,
+    });
   } catch (e) {
     logError("allocation_daily_close_post_failed", e);
     return NextResponse.json(
