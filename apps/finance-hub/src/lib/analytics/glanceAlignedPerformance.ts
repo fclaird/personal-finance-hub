@@ -227,6 +227,15 @@ export function getGlanceAlignedPortfolioValueSeriesByBucket(
   return mergeGlanceAlignedDailyTotals(schwab, external);
 }
 
+/**
+ * `portfolio_snapshots` is the main book only. The weekly writer calls
+ * `getPortfolioValueSeriesByBucket` without a flavor, and the table has no flavor
+ * column. A Rorie or Peyton gap must not be filled with those dollars.
+ */
+export function mainBookSnapshotRows<T>(flavor: FlavorId, rows: readonly T[]): T[] {
+  return flavor === "main" ? [...rows] : [];
+}
+
 /** Fill trading days that have a weekly snapshot but no liquidation/external point. */
 export function mergeMissingSnapshotDays(
   series: PortfolioValuePoint[],

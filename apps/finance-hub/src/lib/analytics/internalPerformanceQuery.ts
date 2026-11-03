@@ -3,6 +3,7 @@ import type Database from "better-sqlite3";
 import {
   filterSeriesFromBaseline,
   getGlanceAlignedPortfolioValueSeriesByBucket,
+  mainBookSnapshotRows,
   mergeMissingSnapshotDays,
   resolvePerformanceTrackingBaselineYmd,
 } from "@/lib/analytics/glanceAlignedPerformance";
@@ -245,14 +246,14 @@ function earliestShareSnapshots(rows: ShareSnapshotRow[]): ShareHoldingSnapshot[
 }
 
 function portfolioRows(db: Database.Database, flavor: FlavorId, bucket: InternalPerformanceBucket, now: Date) {
-  const snapshots =
-    flavor === "main"
-      ? (db
-          .prepare(
-            `SELECT snapshot_date, total_value FROM portfolio_snapshots WHERE bucket = ? ORDER BY snapshot_date ASC`,
-          )
-          .all(bucket) as Array<{ snapshot_date: string; total_value: number }>)
-      : [];
+  const snapshots = mainBookSnapshotRows(
+    flavor,
+    db
+      .prepare(
+        `SELECT snapshot_date, total_value FROM portfolio_snapshots WHERE bucket = ? ORDER BY snapshot_date ASC`,
+      )
+      .all(bucket) as Array<{ snapshot_date: string; total_value: number }>,
+  );
   const denseAll = mergeMissingSnapshotDays(getGlanceAlignedPortfolioValueSeriesByBucket(bucket, db, flavor), snapshots);
   const tradingAll = collapseToTradingDays(denseAll);
   const { baselineYmd } = resolvePerformanceTrackingBaselineYmd(tradingAll, now);

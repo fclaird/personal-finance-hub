@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getGlanceAlignedPortfolioValueSeriesByBucket, resolvePerformanceTrackingBaselineYmd, filterSeriesFromBaseline, mergeMissingSnapshotDays, PERFORMANCE_BACKFILL_LOOKBACK_DAYS } from "@/lib/analytics/glanceAlignedPerformance";
+import { getGlanceAlignedPortfolioValueSeriesByBucket, resolvePerformanceTrackingBaselineYmd, filterSeriesFromBaseline, mergeMissingSnapshotDays, mainBookSnapshotRows, PERFORMANCE_BACKFILL_LOOKBACK_DAYS } from "@/lib/analytics/glanceAlignedPerformance";
 import { resolveViewScope } from "@/lib/viewScope";
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
@@ -62,12 +62,13 @@ export async function GET(req: Request) {
 
     const denseAll = mergeMissingSnapshotDays(
       getGlanceAlignedPortfolioValueSeriesByBucket(bucket as "combined" | "retirement" | "brokerage", db, flavor),
-      (
+      mainBookSnapshotRows(
+        flavor,
         db
           .prepare(
             `SELECT snapshot_date, total_value FROM portfolio_snapshots WHERE bucket = ? ORDER BY snapshot_date ASC`,
           )
-          .all(bucket) as Array<{ snapshot_date: string; total_value: number }>
+          .all(bucket) as Array<{ snapshot_date: string; total_value: number }>,
       ),
     );
     const tradingDaySeriesAll = collapseToTradingDays(denseAll);
@@ -99,30 +100,33 @@ export async function GET(req: Request) {
       }
     }
 
-    const snapRows = (
-      cutoff
-        ? db.prepare(
-            `
+    const snapRows = mainBookSnapshotRows(
+      flavor,
+      (
+        cutoff
+          ? db.prepare(
+              `
         SELECT snapshot_date, total_value, spy_close, qqq_close
         FROM portfolio_snapshots
         WHERE bucket = ? AND snapshot_date >= ?
         ORDER BY snapshot_date ASC
       `,
-          )
-        : db.prepare(
-            `
+            )
+          : db.prepare(
+              `
         SELECT snapshot_date, total_value, spy_close, qqq_close
         FROM portfolio_snapshots
         WHERE bucket = ?
         ORDER BY snapshot_date ASC
       `,
-          )
-    ).all(...(cutoff ? [bucket, cutoff] : [bucket])) as Array<{
-      snapshot_date: string;
-      total_value: number;
-      spy_close: number | null;
-      qqq_close: number | null;
-    }>;
+            )
+      ).all(...(cutoff ? [bucket, cutoff] : [bucket])) as Array<{
+        snapshot_date: string;
+        total_value: number;
+        spy_close: number | null;
+        qqq_close: number | null;
+      }>,
+    );
 
     const benchSpy = getCachedBenchmarkSeriesLocal(db, "SPY");
     const benchQq = getCachedBenchmarkSeriesLocal(db, "QQQ");
