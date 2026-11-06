@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { paddedPriceSpan } from "@/lib/strategyLab/chartView";
 import { calendarDaysBetween, formatExpiryLabel, isoDate, makeOptionChain, type ChainDraft, type DraftContract, type OptionChain } from "@/lib/optionChain/chain";
 import { bsmGreeks } from "@/lib/options/blackScholes";
 import { sampleStructureDelta } from "@/lib/strategyLab/deltaCurves";
@@ -11,6 +12,7 @@ import {
   CHART_MODES,
   combinedDateCurves,
   crossoverCallouts,
+  positiveCrossovers,
   structurePanelCurves,
   defaultChartChrome,
   everyNthHorizonIds,
@@ -234,6 +236,21 @@ describe("chart display selector", () => {
       assert.doesNotMatch(callout.text, /\n/);
     });
     for (let i = 1; i < callouts.length; i++) assert.ok(callouts[i - 1]!.spot <= callouts[i]!.spot);
+    const profit = positiveCrossovers(ev, curves);
+    assert.ok(profit.length > 0);
+    assert.ok(profit.length <= callouts.length);
+    for (const hit of profit) {
+      assert.ok(hit.pnl > 0);
+      assert.ok(callouts.some((callout) => Math.abs(callout.spot - hit.spot) < 1e-4));
+    }
+    const span = paddedPriceSpan(profit.map((hit) => hit.spot));
+    assert.ok(span);
+    const axisLo = ev.axis[0]!;
+    const axisHi = ev.axis.at(-1)!;
+    assert.ok(span.min >= axisLo - 1);
+    assert.ok(span.max <= axisHi + 1 || span.max < axisHi);
+    assert.ok(span.min <= Math.min(...profit.map((hit) => hit.spot)));
+    assert.ok(span.max >= Math.max(...profit.map((hit) => hit.spot)));
     const waterfall = crossoverCallouts(ev, visibleCurves(ev, initial));
     assert.deepEqual(
       waterfall.map((callout) => callout.spot),

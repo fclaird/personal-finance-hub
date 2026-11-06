@@ -105,6 +105,68 @@ export function boxZoomView(a: ChartPoint, b: ChartPoint, limits: ChartView): Ch
   return clampView({ xMin, xMax, yMin, yMax }, limits);
 }
 
+const MODEST_PAD = 0.08;
+
+/**
+ * Price window from the first crossover to the last, with a little room on each side.
+ * A single price gets a narrow window so the crossing is not a hairline.
+ */
+export function paddedPriceSpan(spots: readonly number[]): { min: number; max: number } | null {
+  const finite = spots.filter((spot) => Number.isFinite(spot) && spot > 0);
+  if (finite.length === 0) return null;
+  const rawLo = Math.min(...finite);
+  const rawHi = Math.max(...finite);
+  const span = Math.max(rawHi - rawLo, rawHi * 0.05, 1);
+  const pad = span * MODEST_PAD;
+  const min = Math.max(0.01, rawLo - pad);
+  const max = rawHi + pad;
+  return { min, max: max > min ? max : min + 1 };
+}
+
+/**
+ * Vertical span of the profit side inside a price window.
+ * Losses are left out so the profitable part fills the chart. When profit comes
+ * down near zero, the zero line stays in view with a little room below it.
+ * When every profit is well above zero, the span stays tight around those values.
+ */
+export function profitRegionY(
+  samples: readonly ChartPoint[],
+  xMin: number,
+  xMax: number,
+): { min: number; max: number } | null {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const sample of samples) {
+    if (sample.x < xMin || sample.x > xMax || !(sample.y > 0) || !Number.isFinite(sample.y)) continue;
+    if (sample.y < lo) lo = sample.y;
+    if (sample.y > hi) hi = sample.y;
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+  const span = Math.max(hi - lo, Math.abs(hi) * 0.05, 1);
+  if (lo <= span * 0.25) lo = 0;
+  const pad = Math.max((hi - lo) * 0.06, 1);
+  const min = lo - pad;
+  const max = hi + pad;
+  return { min, max: max > min ? max : min + 1 };
+}
+
+/** Default chart window: first-to-last profit-side crossover on x, profit region on y. */
+export function profitCrossoverView(
+  crossovers: readonly { spot: number; pnl: number }[],
+  samples: readonly ChartPoint[],
+  limits: ChartView,
+): ChartView | null {
+  const span = paddedPriceSpan(crossovers.map((crossover) => crossover.spot));
+  if (!span) return null;
+  const y = profitRegionY(
+    [...samples, ...crossovers.map((crossover) => ({ x: crossover.spot, y: crossover.pnl }))],
+    span.min,
+    span.max,
+  );
+  if (!y) return null;
+  return clampView({ xMin: span.min, xMax: span.max, yMin: y.min, yMax: y.max }, limits);
+}
+
 /** P&L extent of samples whose price is inside the window, with a little padding. */
 export function ySpanForX(samples: readonly ChartPoint[], xMin: number, xMax: number): { min: number; max: number } | null {
   let min = Infinity;

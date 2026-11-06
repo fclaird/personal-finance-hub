@@ -5,7 +5,10 @@ import {
   boxZoomView,
   clampView,
   fitView,
+  paddedPriceSpan,
   panView,
+  profitCrossoverView,
+  profitRegionY,
   resetView,
   sharePriceWindow,
   ySpanForX,
@@ -90,6 +93,51 @@ describe("chart view transforms", () => {
     assert.ok(collapsed.xMax > collapsed.xMin);
     assert.ok(collapsed.yMax > collapsed.yMin);
     assert.ok(collapsed.xMin >= limits.xMin && collapsed.xMax <= limits.xMax);
+  });
+
+  it("fits the opening view to profit-side crossovers instead of the full price range", () => {
+    const limits: ChartView = { xMin: 147, xMax: 1199, yMin: -80_000, yMax: 120_000 };
+    const crossovers = [
+      { spot: 170, pnl: 900 },
+      { spot: 210, pnl: 4000 },
+      { spot: 390, pnl: 12_000 },
+    ];
+    const samples = [
+      { x: 150, y: -20_000 },
+      { x: 170, y: 900 },
+      { x: 250, y: 8000 },
+      { x: 390, y: 12_000 },
+      { x: 1100, y: 100_000 },
+    ];
+    const view = profitCrossoverView(crossovers, samples, limits);
+    assert.ok(view);
+    assert.ok(view.xMin < 170 && view.xMin > 147);
+    assert.ok(view.xMax > 390 && view.xMax < 500);
+    assert.ok(view.yMin < 0 && view.yMin > -5_000);
+    assert.ok(view.yMax > 12_000 && view.yMax < 20_000);
+    assert.deepEqual(resetView(view, limits), view);
+  });
+
+  it("pads a single profit crossover without spanning the whole axis", () => {
+    const span = paddedPriceSpan([180]);
+    assert.ok(span);
+    assert.ok(span.max - span.min < 40);
+    assert.ok(span.min < 180 && span.max > 180);
+  });
+
+  it("keeps the profit vertical span tight when every value is well above zero", () => {
+    const span = profitRegionY(
+      [
+        { x: 200, y: 20_000 },
+        { x: 300, y: 24_000 },
+        { x: 250, y: -8_000 },
+      ],
+      180,
+      320,
+    );
+    assert.ok(span);
+    assert.ok(span.min > 15_000);
+    assert.ok(span.max < 28_000);
   });
 
   it("shares the price window and keeps the other chart's vertical scale", () => {

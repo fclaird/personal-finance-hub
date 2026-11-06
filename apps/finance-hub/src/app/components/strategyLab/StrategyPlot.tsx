@@ -22,11 +22,15 @@ import {
   stockHorizonId,
   type ChartChrome,
   type CurveView,
+  type ProfitCrossover,
 } from "@/lib/strategyLab/chartDisplay";
 import {
   boxZoomView,
   clampView,
+  paddedPriceSpan,
   panView,
+  profitRegionY,
+  sameView,
   ySpanForX,
   zoomAroundCursor,
   type ChartPoint,
@@ -174,6 +178,8 @@ export function StrategyPlot({
   view,
   onView,
   onHome,
+  onFullRange,
+  profitCrossovers = [],
   focusedKey,
   onFocus,
   useLook,
@@ -203,7 +209,10 @@ export function StrategyPlot({
   whatIfSpot: number | null;
   view: ChartView | null;
   onView: (next: ChartView | null) => void;
-  onHome: (next: ChartView) => void;
+  onHome: (next: ChartView, limits: ChartView) => void;
+  onFullRange?: () => void;
+  /** Profit-side crossings. When present, the opening view and Reset view fit them. */
+  profitCrossovers?: readonly ProfitCrossover[];
   focusedKey: string | null;
   onFocus: (key: string | null) => void;
   useLook: boolean;
@@ -227,12 +236,12 @@ export function StrategyPlot({
     [rowsOverride, evaluation, curves, chrome.showStock],
   );
   const frame = useMemo(
-    () => chartFrame(rows, curves, evaluation.spotWindow, chrome.yAxis),
-    [rows, curves, evaluation.spotWindow, chrome.yAxis],
+    () => chartFrame(rows, curves, evaluation.spotWindow, chrome.yAxis, profitCrossovers, role === "pnl" ? "profit" : "data"),
+    [rows, curves, evaluation.spotWindow, chrome.yAxis, profitCrossovers, role],
   );
   useEffect(() => {
-    onHome(frame.home);
-  }, [frame.home, onHome]);
+    onHome(frame.home, frame.limits);
+  }, [frame.home, frame.limits, onHome]);
 
   const shown = view ?? frame.home;
   const shownRef = useRef(shown);
@@ -417,6 +426,7 @@ export function StrategyPlot({
       data-chart-role={role}
       data-chart-size={chartSize}
       data-chart-engaged={engaged ? "true" : "false"}
+      data-chart-range={view == null ? (profitCrossovers.length > 0 ? "profit" : "home") : sameView(view, frame.limits) ? "full" : "custom"}
       aria-label={title}
     >
       <div className="mb-2 flex min-w-0 flex-wrap items-center gap-1.5" role="toolbar" aria-label="Chart navigation">
@@ -426,6 +436,7 @@ export function StrategyPlot({
         <NavButton label="Zoom in" onClick={() => zoomBy(1.25)} />
         <NavButton label="Zoom out" onClick={() => zoomBy(0.8)} />
         <NavButton label="Reset view" onClick={() => onView(null)} />
+        <NavButton label="Show full range" onClick={() => (onFullRange ? onFullRange() : onView(frame.limits))} />
         {onChartSize ? (
           <div className="flex gap-1" role="group" aria-label="Chart size">
             {(Object.keys(SIZE_LABEL) as ChartSize[]).map((size) => (
@@ -699,6 +710,8 @@ function chartFrame(
   curves: readonly CurveView[],
   spotWindow: { min: number; max: number },
   yAxis: ChartChrome["yAxis"],
+  profit: readonly ProfitCrossover[],
+  yMode: "profit" | "data",
 ): { limits: ChartView; home: ChartView } {
   const xs = rows.map((row) => row.spot);
   let xMin = xs.length > 0 ? Math.min(...xs) : spotWindow.min;
@@ -719,7 +732,18 @@ function chartFrame(
     samples.map((sample) => sample.y),
     0.08,
   );
-  const windowY = yAxis.kind === "manual" ? { min: yAxis.min, max: yAxis.max } : (ySpanForX(samples, spotWindow.min, spotWindow.max) ?? dataY);
+  const profitX = profit.length > 0 ? paddedPriceSpan(profit.map((crossover) => crossover.spot)) : null;
+  const homeX = profitX ?? { min: spotWindow.min, max: Math.max(spotWindow.max, spotWindow.min + 1e-6) };
+  const profitY =
+    yMode === "profit" && profitX
+      ? profitRegionY(
+          [...samples, ...profit.map((crossover) => ({ x: crossover.spot, y: crossover.pnl }))],
+          profitX.min,
+          profitX.max,
+        )
+      : null;
+  const autoY = profitY ?? ySpanForX(samples, homeX.min, homeX.max) ?? dataY;
+  const windowY = yAxis.kind === "manual" ? { min: yAxis.min, max: yAxis.max } : autoY;
   let yMin = Math.min(dataY.min, windowY.min);
   let yMax = Math.max(dataY.max, windowY.max);
   if (!(yMax > yMin)) {
@@ -727,16 +751,14 @@ function chartFrame(
     yMax += 1;
   }
   const limits: ChartView = { xMin, xMax, yMin, yMax };
+  const homeY = { min: windowY.min, max: Math.max(windowY.max, windowY.min + 1e-6) };
+  // Clamp price into the data. Keep the profit vertical span intact: clamping it
+  // against the full loss-to-gain range would reopen the empty loss region.
   return {
     limits,
     home: clampView(
-      {
-        xMin: spotWindow.min,
-        xMax: Math.max(spotWindow.max, spotWindow.min + 1e-6),
-        yMin: windowY.min,
-        yMax: Math.max(windowY.max, windowY.min + 1e-6),
-      },
-      limits,
+      { xMin: homeX.min, xMax: Math.max(homeX.max, homeX.min + 1e-6), yMin: homeY.min, yMax: homeY.max },
+      { xMin, xMax, yMin: homeY.min, yMax: homeY.max },
     ),
   };
 }

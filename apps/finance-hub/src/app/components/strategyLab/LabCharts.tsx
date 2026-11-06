@@ -15,6 +15,7 @@ import {
   isPlottableStructure,
   initialChartSelection,
   policyFromIds,
+  positiveCrossovers,
   readChartSettings,
   reconcileChartSelection,
   setChartMode,
@@ -89,6 +90,7 @@ export function LabCharts({
   const [yMinDraft, setYMinDraft] = useState<string | null>(null);
   const [view, setView] = useState<ChartView | null>(null);
   const [home, setHome] = useState<ChartView | null>(null);
+  const [pnlLimits, setPnlLimits] = useState<ChartView | null>(null);
   const [yMaxDraft, setYMaxDraft] = useState<string | null>(null);
   const [linkX, setLinkX] = useState(true);
   const [deltaView, setDeltaView] = useState<ChartView | null>(null);
@@ -107,6 +109,8 @@ export function LabCharts({
   const hydrated = useRef(false);
   const pnlHomeRef = useRef<ChartView | null>(null);
   const deltaHomeRef = useRef<ChartView | null>(null);
+  const pnlLimitsRef = useRef<ChartView | null>(null);
+  const deltaLimitsRef = useRef<ChartView | null>(null);
   const pendingDeltaX = useRef<{ xMin: number; xMax: number } | null>(null);
   const linkPlotsRef = useRef(true);
   const knownStructures = useRef<string[] | null>(null);
@@ -227,10 +231,13 @@ export function LabCharts({
   useEffect(() => {
     bindDeltaToggle?.((id) => commitRef.current({ kind: "toggle", chart: "delta", id }));
   }, [bindDeltaToggle]);
-  const onHome = useCallback((next: ChartView) => {
+  const onHome = useCallback((next: ChartView, limits: ChartView) => {
+    pnlLimitsRef.current = limits;
+    setPnlLimits((prev) => (sameView(prev, limits) ? prev : limits));
     setHome((prev) => (sameView(prev, next) ? prev : next));
-  }, [setHome]);
-  const onDeltaHome = useCallback((next: ChartView) => {
+  }, [setHome, setPnlLimits]);
+  const onDeltaHome = useCallback((next: ChartView, limits: ChartView) => {
+    deltaLimitsRef.current = limits;
     setDeltaHome((prev) => (sameView(prev, next) ? prev : next));
     const keep = pendingDeltaX.current;
     if (!keep) return;
@@ -240,6 +247,17 @@ export function LabCharts({
       return sameView(prev, merged) ? prev : merged;
     });
   }, [setDeltaHome, setDeltaView]);
+  const showFullRange = useCallback((source: "pnl" | "delta") => {
+    const pnl = pnlLimitsRef.current;
+    const delta = deltaLimitsRef.current;
+    if (!linkX) {
+      if (source === "pnl" && pnl) setView((prev) => (sameView(prev, pnl) ? prev : pnl));
+      if (source === "delta" && delta) setDeltaView((prev) => (sameView(prev, delta) ? prev : delta));
+      return;
+    }
+    if (pnl) setView((prev) => (sameView(prev, pnl) ? prev : pnl));
+    if (delta) setDeltaView((prev) => (sameView(prev, delta) ? prev : delta));
+  }, [linkX, setView, setDeltaView]);
   useLayoutEffect(() => {
     pnlHomeRef.current = home;
     deltaHomeRef.current = deltaHome;
@@ -324,6 +342,10 @@ export function LabCharts({
     });
   }, [showPeak, deltaMeasure, deltaCurves, deltaRows, priced]);
   const shown = view ?? home;
+  const profit = useMemo(
+    () => (evaluation.spotWindow.source === "fit" ? positiveCrossovers(evaluation, pnlCurves) : []),
+    [evaluation, pnlCurves],
+  );
   const quiet = evaluation.structures.filter(
     (row): row is PricedStructure => row.status === "priced" && row.sizing.status === "sized" && row.sizing.packages === 0,
   );
@@ -454,7 +476,7 @@ export function LabCharts({
           }}
           className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
         >
-          Fit all crossovers
+          Profit crossovers
         </button>
         <Toggle
           on={linkX}
@@ -477,11 +499,15 @@ export function LabCharts({
           label="Link selection"
         />
         <p className="pb-1 text-xs text-zinc-700 dark:text-zinc-300">
-          {view && shown
-            ? `Zoomed. Visible price ${spotText(shown.xMin)}–${spotText(shown.xMax)}.`
-            : evaluation.spotWindow.source === "fit"
-              ? "Fitted to crossovers, breakevens, strikes, and spot."
-              : "Typed spot window."}{" "}
+          {view && shown && pnlLimits && sameView(view, pnlLimits)
+            ? `Full price range ${spotText(shown.xMin)}–${spotText(shown.xMax)}.`
+            : view && shown
+              ? `Zoomed. Visible price ${spotText(shown.xMin)}–${spotText(shown.xMax)}.`
+              : profit.length > 0
+                ? "Fitted to profit-side crossovers. Reset view returns here."
+                : evaluation.spotWindow.source === "fit"
+                  ? "Fitted to crossovers, breakevens, strikes, and spot."
+                  : "Typed spot window."}{" "}
           Spot stays on.
         </p>
         <ChartLookControls
@@ -539,6 +565,8 @@ export function LabCharts({
             view={view}
             onView={(next) => pushView("pnl", next)}
             onHome={onHome}
+            onFullRange={() => showFullRange("pnl")}
+            profitCrossovers={profit}
             focusedKey={chrome.focusedCurveKey}
             onFocus={(key) => restyle({ ...chrome, focusedCurveKey: key })}
             useLook={useLook}
@@ -573,6 +601,8 @@ export function LabCharts({
             view={deltaView}
             onView={(next) => pushView("delta", next)}
             onHome={onDeltaHome}
+            onFullRange={() => showFullRange("delta")}
+            profitCrossovers={profit}
             focusedKey={deltaFocus}
             onFocus={setDeltaFocus}
             useLook={useLook}
