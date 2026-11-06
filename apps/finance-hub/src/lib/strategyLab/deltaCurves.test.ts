@@ -162,6 +162,9 @@ describe("delta scales", () => {
     assert.equal(presentDelta(100, 1, 1000, 80, "shares", "cost"), 10);
     assert.equal(presentDelta(250, 2.5, 5000, 80, "package", "cost"), 20);
     assert.equal(presentDelta(0.4, 1, 1000, 80, "shares", "cost"), null);
+    assert.equal(presentDelta(100, 1, 1000, 100, "shares", "omega"), 10);
+    assert.equal(presentDelta(250, 2.5, 5000, 80, "package", "omega"), 4);
+    assert.equal(presentDelta(0.4, 1, 1000, 80, "shares", "omega"), null);
   });
 
   it("marks 100 shares, and the first peak", () => {
@@ -254,5 +257,13 @@ describe("sampled lab delta", () => {
     const stock = sampleStockDelta(evaluation, 200, "shares", "delta");
     assert.equal(stock, 100);
     assert.equal(sampleStockDelta(evaluation, 200, "shares", "cost"), evaluation.spot);
+    const omega = sampleStructureDelta(evaluation, row.spec.id, today.id, spot, "shares", "omega");
+    assert.ok(omega != null && live != null && row.sizing.status !== "needsCapitalOverride");
+    if (row.sizing.status === "needsCapitalOverride") return;
+    assert.ok(Math.abs((omega ?? 0) - (live * spot) / (row.debit * row.sizing.packages)) < 1e-6);
+    assert.equal(sampleStructureDelta(evaluation, row.spec.id, today.id, spot, "package", "omega"), omega);
+    assert.equal(sampleStructureDelta(evaluation, row.spec.id, expiryHorizon.id, 110, "shares", "omega"), null);
+    assert.equal(sampleStockDelta(evaluation, evaluation.spot, "shares", "omega"), 1);
+    assert.equal(sampleStockDelta(evaluation, 200, "shares", "omega"), 2);
   });
 });

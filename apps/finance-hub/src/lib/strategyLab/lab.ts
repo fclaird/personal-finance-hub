@@ -658,10 +658,9 @@ function stockSeries(
 }
 
 /**
- * Entry leverage: today's share-equivalent exposure (package delta × packages × spot)
+ * Entry omega (the tile's Leverage now): today's share-equivalent delta times spot,
  * divided by dollars invested. Dollars invested is the net debit of the packages bought.
- * Idle cash is not in the denominator. The tile headline uses the short-strike-at-expiry basis;
- * this field is the "at entry" line.
+ * Idle cash is not in the denominator.
  */
 function exposureStats(packages: number, invested: number, delta: number | null, spot: number): { leverage: number | null; pnlPerPercent: number | null } {
   if (delta == null) return { leverage: null, pnlPerPercent: null };

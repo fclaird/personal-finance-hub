@@ -559,7 +559,11 @@ export function LabCharts({
           <StrategyPlot
             title="Position delta vs underlying price"
             metric=""
-            subtitle="Sticky entry IV on every date and price. Each date uses that structure's own time to expiry. Expiry draws each structure at its own expiry."
+            subtitle={
+              deltaMeasure === "omega"
+                ? "Omega versus underlying price: model delta at each price, times that price, divided by the debit. This uses the date drawn on the chart. Peak leverage on the tile uses today's date only."
+                : "Sticky entry IV on every date and price. Each date uses that structure's own time to expiry. Expiry draws each structure at its own expiry."
+            }
             evaluation={evaluation}
             priced={priced}
             curves={deltaCurves}
@@ -957,6 +961,7 @@ function TextButton({ onClick, children }: { onClick: () => void; children: stri
 }
 
 function deltaUnit(scale: DeltaScale, measure: DeltaMeasure): string {
+  if (measure === "omega") return "omega";
   if (measure === "exposure") return "dollar exposure";
   if (measure === "cost") return "cost per delta";
   if (scale === "package") return "per package";
@@ -967,6 +972,7 @@ function deltaUnit(scale: DeltaScale, measure: DeltaMeasure): string {
 function formatDeltaValue(value: number | undefined, scale: DeltaScale, measure: DeltaMeasure, mask: boolean): string {
   if (mask) return "XXXXX";
   if (value == null || !Number.isFinite(value)) return "—";
+  if (measure === "omega") return `${value.toFixed(2)}×`;
   if (measure === "exposure" || measure === "cost") return formatSignedUsd2(value);
   const digits = Math.abs(value - Math.round(value)) < 0.05 ? 0 : 1;
   const body = formatNum(value, digits);
@@ -1005,11 +1011,12 @@ function DeltaTip({
   );
 }
 
-function DarkChip({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) {
+function DarkChip({ on, onClick, label, title }: { on: boolean; onClick: () => void; label: string; title?: string }) {
   return (
     <button
       type="button"
       aria-pressed={on}
+      title={title}
       onClick={onClick}
       className={`rounded-full px-3 py-1 text-xs font-semibold ${
         on ? "bg-zinc-100 text-zinc-950" : "border border-zinc-500 text-zinc-100 hover:border-zinc-200"
@@ -1066,6 +1073,12 @@ function DeltaScaleBar({
         <DarkChip on={measure === "delta"} onClick={() => onMeasure("delta")} label="Delta" />
         <DarkChip on={measure === "exposure"} onClick={() => onMeasure("exposure")} label="Dollar exposure" />
         <DarkChip on={measure === "cost"} onClick={() => onMeasure("cost")} label="Cost per delta" />
+        <DarkChip
+          on={measure === "omega"}
+          onClick={() => onMeasure("omega")}
+          label="Omega"
+          title="Omega versus underlying price: model delta at each price, times that price, divided by the debit. Uses the date drawn on this chart."
+        />
       </div>
       <DarkChip on={showHundred} onClick={onHundred} label="100 line" />
       <DarkChip on={showPeak} onClick={onPeak} label="Max delta" />
