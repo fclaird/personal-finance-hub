@@ -66,14 +66,15 @@ function Stat({ label, value, hint, headline = false }: { label: string; value: 
 const MOVE_HINT =
   "Approximate P&L if the stock moves 1% from today's spot, using today's share-equivalent exposure times 1%. Gamma is not included.";
 
-function DollarsAtRisk({ row, onEdit }: { row: StructureEval; onEdit: (edit: LabEdit) => void }) {
+function DollarsAtRisk({ row, onEdit, masked }: { row: StructureEval; onEdit: (edit: LabEdit) => void; masked: boolean }) {
   const spec = row.spec;
+  if (row.status !== "priced") return null;
   const templateName = spec.origin?.request.template;
-  const unbounded = row.status === "priced" && row.risk.maxLoss === "unbounded";
-  const synthetic = templateName === "syntheticLong";
-  const strangle = templateName === "shortStrangle";
-  if (!unbounded && !synthetic && !strangle) return null;
-  const required = unbounded || strangle;
+  const synthetic = templateName === "syntheticLong" || (row.debit > 0 && row.risk.slopeAbove > 0 && row.risk.slopeBelow > 0);
+  const nakedPuts = row.putProxy > 0 && row.risk.slopeBelow > 0 && !row.callRiskRequired && !synthetic;
+  if (!row.callRiskRequired && !nakedPuts && !synthetic) return null;
+  const required = row.callRiskRequired;
+  const proxy = usd(row.putProxy, masked);
   return (
     <label className={`mb-3 block ${labLabel}`}>
       Dollars at risk
@@ -97,10 +98,12 @@ function DollarsAtRisk({ row, onEdit }: { row: StructureEval; onEdit: (edit: Lab
       />
       <span className="mt-1 block text-[11px] text-zinc-700 dark:text-zinc-300">
         {required
-          ? "Required. Undefined risk. No broker margin."
-          : synthetic
-            ? "Blank sizes on the parity debit. Loss at spot 0 stays on the card."
-            : "Blank uses the loss at spot 0."}
+          ? row.putProxy > 0
+            ? `Required on the call side. Put side cash-secured proxy ${proxy}. Package cost adds them. No broker margin.`
+            : "Required. Undefined risk. No broker margin."
+          : nakedPuts
+            ? `Cash-secured proxy ${proxy}. Blank uses that. Editable. No broker margin.`
+            : "Blank sizes on the parity debit. Loss at spot 0 stays on the card."}
       </span>
     </label>
   );
@@ -413,7 +416,7 @@ export function StructureCard({
         </div>
       </fieldset>
 
-      <DollarsAtRisk row={row} onEdit={onEdit} />
+      <DollarsAtRisk row={row} onEdit={onEdit} masked={masked} />
 
       {row.status === "blocked" ? (
         <p className="text-sm text-rose-600">{row.reason}</p>
@@ -437,6 +440,11 @@ export function StructureCard({
           ) : null}
           <Stat label="Breakeven" value={row.risk.breakevens.map((b) => b.toFixed(2)).join(", ") || "—"} />
           <Stat label="Max loss" value={row.risk.maxLoss === "unbounded" ? "Unbounded" : usd(row.risk.maxLoss, masked)} />
+          <Stat label="Upside" value={row.risk.maxLossUp === "unbounded" ? "Unbounded" : usd(row.risk.maxLossUp, masked)} />
+          <Stat
+            label="Downside"
+            value={row.risk.maxLossDown === "flat" ? "Flat" : `to zero ${usd(row.risk.maxLossDown, masked)}`}
+          />
           <Stat label="Max gain" value={row.risk.maxGain === "unbounded" ? "Uncapped" : usd(row.risk.maxGain, masked)} />
           <Stat label="Intrinsic" value={usd(row.risk.intrinsic, masked)} />
           <Stat label="Extrinsic" value={usd(row.risk.extrinsic, masked)} />

@@ -20,6 +20,7 @@ import {
   packageGreeks,
   priceLegs,
   stockEntryDollars,
+  structurePackageCost,
   type Assumptions,
   type ExpiryRisk,
   type PricedLeg,
@@ -209,6 +210,9 @@ export type PricedStructure = {
   /** Parity debit when the structure is a synthetic. Null otherwise. */
   readonly parityDebit: number | null;
   readonly risk: ExpiryRisk;
+  readonly packageCost: number | null;
+  readonly putProxy: number;
+  readonly callRiskRequired: boolean;
   readonly greeks: { readonly delta: number; readonly gamma: number; readonly theta: number; readonly vega: number } | null;
   readonly sizing: Sizing;
   readonly curves: readonly { readonly horizonId: string; readonly points: readonly CurvePoint[] }[];
@@ -621,9 +625,13 @@ export function zeroPackageNotice(label: string, capital: number, packageCost: n
   return `${label}: 0 packages on ${labDollars(capital)} (package costs ${cost}); raise capital or use fractional units`;
 }
 
-export function packageCostOf(row: { spec: { capitalOverride: number | null }; risk: { maxLoss: number | "unbounded" } }): number | null {
-  if (row.spec.capitalOverride != null && row.spec.capitalOverride > 0) return row.spec.capitalOverride;
-  return typeof row.risk.maxLoss === "number" && row.risk.maxLoss > 0 ? row.risk.maxLoss : null;
+export function packageCostOf(row: {
+  spec: { capitalOverride: number | null };
+  debit: number;
+  legs: readonly PricedLeg[];
+  risk: ExpiryRisk;
+}): number | null {
+  return structurePackageCost(row.legs, row.debit, row.risk, row.spec.capitalOverride).cost;
 }
 
 function attachCurves(
@@ -708,7 +716,13 @@ function exposureStats(packages: number, invested: number, delta: number | null,
  * Cash to open one package. A positive debit is that cash. A credit uses defined max loss.
  * A typed dollars-at-risk number wins.
  */
-export function packageOutlay(debit: number, maxLoss: number | "unbounded", override: number | null): number | null {
+export function packageOutlay(
+  debit: number,
+  maxLoss: number | "unbounded",
+  override: number | null,
+  detail?: { legs: readonly PricedLeg[]; slopeAbove: number; slopeBelow: number },
+): number | null {
+  if (detail) return structurePackageCost(detail.legs, debit, { ...detail, maxLoss }, override).cost;
   if (override != null && override > 0) return override;
   if (debit > 0) return debit;
   if (typeof maxLoss === "number" && maxLoss > 0) return maxLoss;
@@ -717,21 +731,17 @@ export function packageOutlay(debit: number, maxLoss: number | "unbounded", over
 
 function sizeOf(
   basis: Basis,
-  maxLoss: number | "unbounded",
-  override: number | null,
+  cost: number | null,
   delta: number | null,
   spot: number,
   matched: MatchedBasis | null,
-  debit: number,
-  sizeOnDebit = false,
 ): Sizing {
   if (basis.kind === "matchExpensive") {
-    const cost = packageOutlay(debit, maxLoss, override);
     if (matched == null || cost == null || !(cost > 0)) return { status: "needsCapitalOverride" };
     const packages = matched.capital / cost;
     return { status: "sized", packages, invested: matched.capital, idleCash: 0, ...exposureStats(packages, matched.capital, delta, spot) };
   }
-  const capitalPer = override ?? (sizeOnDebit ? debit : typeof maxLoss === "number" ? maxLoss : null);
+  const capitalPer = cost;
   if (basis.kind === "perPackage") {
     const invested = capitalPer ?? 0;
     return { status: "perPackage", packages: 1, invested, idleCash: 0, ...exposureStats(1, invested, delta, spot) };
@@ -750,7 +760,11 @@ function matchedBasis(basis: Basis, rows: readonly PricedStructure[]): MatchedBa
   if (basis.kind !== "matchExpensive") return null;
   let best: { capital: number; label: string } | null = null;
   for (const row of rows) {
-    const cost = packageOutlay(row.debit, row.risk.maxLoss, row.spec.capitalOverride);
+    const cost = packageOutlay(row.debit, row.risk.maxLoss, row.spec.capitalOverride, {
+      legs: row.legs,
+      slopeAbove: row.risk.slopeAbove,
+      slopeBelow: row.risk.slopeBelow,
+    });
     if (cost == null || !(cost > 0)) continue;
     if (best == null || cost > best.capital) best = { capital: cost, label: row.spec.label };
   }
@@ -821,6 +835,7 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
         : null;
     const debit = parityDebit ?? quotedDebit;
     const risk = expiryRisk(quoted.legs, debit, chain.spot);
+    const budget = structurePackageCost(quoted.legs, debit, risk, spec.capitalOverride);
     const greeks = packageGreeks(chain, quoted.legs, modelAssumptions);
     for (const b of risk.breakevens) axisExtras.push(b);
     for (const leg of quoted.legs) if (leg.strike != null) axisExtras.push(leg.strike);
@@ -838,6 +853,9 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
       quotedDebit,
       parityDebit,
       risk,
+      packageCost: budget.cost,
+      putProxy: budget.putProxy,
+      callRiskRequired: budget.callRiskRequired,
       greeks,
       sizing: { status: "needsCapitalOverride" },
       curves: [],
@@ -846,26 +864,19 @@ export function evaluateLab(lab: LabScenario, chain: OptionChain): LabEvaluation
 
   const match = matchedBasis(lab.basis, priced);
   const sized = priced.map((row) => {
-    const sizing = sizeOf(
-      lab.basis,
-      row.risk.maxLoss,
-      row.spec.capitalOverride,
-      row.greeks?.delta ?? null,
-      chain.spot,
-      match,
-      row.debit,
-      syntheticShape(row.spec.legs) === "long" && row.debit > 0,
-    );
+    const sizing = sizeOf(lab.basis, row.packageCost, row.greeks?.delta ?? null, chain.spot, match);
     if (sizing.status === "needsCapitalOverride") {
       issues.push({
         severity: "warn",
         structureId: row.spec.id,
         code: "needs-capital",
-        message: "Undefined risk. Equal-dollar sizing waits for a typed dollars-at-risk number.",
+        message: row.putProxy > 0
+          ? "Undefined risk on the call side. The put side is a cash-secured proxy. Sizing waits for a typed call-side number. No broker margin."
+          : "Undefined risk on the call side. Sizing waits for a typed dollars-at-risk number. No broker margin.",
       });
     }
     if (sizing.status === "sized" && sizing.packages === 0 && lab.basis.kind === "equalCapital") {
-      const cost = row.spec.capitalOverride ?? (typeof row.risk.maxLoss === "number" ? row.risk.maxLoss : null);
+      const cost = row.packageCost;
       issues.push({
         severity: "warn",
         structureId: row.spec.id,

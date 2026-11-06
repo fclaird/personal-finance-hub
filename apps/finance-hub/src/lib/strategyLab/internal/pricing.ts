@@ -1,4 +1,5 @@
 import { bsmGreeks, bsmPrice, impliedVol } from "@/lib/options/blackScholes";
+import { optionMarginSecuredDollars } from "@/lib/options/optionMarginRoi";
 import {
   calendarDaysBetween,
   findQuote,
@@ -265,6 +266,9 @@ export function packageShareDelta(
 export type ExpiryRisk = {
   readonly breakevens: readonly number[];
   readonly maxLoss: number | "unbounded";
+  readonly maxLossUp: number | "unbounded";
+  /** Loss at spot 0 when the position loses as the stock falls. "flat" when that side does not. */
+  readonly maxLossDown: number | "flat";
   readonly maxGain: number | "unbounded";
   readonly slopeAbove: number;
   readonly slopeBelow: number;
@@ -295,17 +299,68 @@ export function expiryRisk(legs: readonly ValueLeg[], debit: number, spot: numbe
     }
   }
   if (Math.abs(pnls[pnls.length - 1]!) < 1e-6 && knots.length) breakevens.push(knots[knots.length - 1]!);
+  const pnlHi = pnlAt(hi);
+  if (hi > 0 && Math.abs(slopeAbove) > 1e-6 && pnlHi * slopeAbove < 0) breakevens.push(hi - pnlHi / slopeAbove);
   const unique = [...new Set(breakevens.map((b) => Math.round(b * 100) / 100))].sort((a, b) => a - b);
   const intrinsicNow = expiryValue(legs, spot);
+  const roundedAbove = Math.round(slopeAbove);
+  const roundedBelow = Math.round(slopeBelow);
+  const lossAtZero = Math.max(0, Math.round(-pnlAt(0)));
   return {
     breakevens: unique.filter((b) => b > 0),
-    maxLoss: slopeAbove < -1e-6 ? "unbounded" : Math.max(0, Math.round(-worst)),
-    maxGain: slopeAbove > 1e-6 ? "unbounded" : Math.round(best),
-    slopeAbove: Math.round(slopeAbove),
-    slopeBelow: Math.round(slopeBelow),
+    maxLoss: roundedAbove < 0 ? "unbounded" : Math.max(0, Math.round(-worst)),
+    maxLossUp: roundedAbove < 0 ? "unbounded" : Math.max(0, Math.round(-Math.min(pnlHi, 0))),
+    maxLossDown: roundedBelow > 0 && lossAtZero > 0 ? lossAtZero : "flat",
+    maxGain: roundedAbove > 0 ? "unbounded" : Math.round(best),
+    slopeAbove: roundedAbove,
+    slopeBelow: roundedBelow,
     intrinsic: Math.round(intrinsicNow),
     extrinsic: Math.round(debit - intrinsicNow),
   };
+}
+
+/** Cash-secured proxy for short puts: |qty| × strike × 100. Not a broker margin number. */
+export function shortPutProxyDollars(legs: readonly ValueLeg[]): number {
+  let sum = 0;
+  for (const leg of legs) {
+    if (leg.instrument === "stock" || leg.right !== "P" || !(leg.ratio < 0) || leg.strike == null) continue;
+    const secured = optionMarginSecuredDollars(leg.ratio, leg.strike);
+    if (secured != null) sum += secured;
+  }
+  return sum;
+}
+
+export type PackageBudget = {
+  readonly cost: number | null;
+  readonly putProxy: number;
+  /** Naked short calls. Sizing waits until a call-side dollars-at-risk number is typed. */
+  readonly callRiskRequired: boolean;
+};
+
+/**
+ * One package cost for every capital basis.
+ * A typed override replaces the cost, except on a naked short call, where it is the call side and the put proxy is added.
+ * A short put uses the cash-secured proxy. A debit, including a synthetic long, uses the debit. A credit uses defined max loss.
+ */
+export function structurePackageCost(
+  legs: readonly ValueLeg[],
+  debit: number,
+  risk: Pick<ExpiryRisk, "slopeAbove" | "slopeBelow" | "maxLoss">,
+  override: number | null,
+): PackageBudget {
+  const putProxy = shortPutProxyDollars(legs);
+  const callRiskRequired = risk.slopeAbove < 0;
+  const losesAsSpotFalls = risk.slopeBelow > 0;
+  const longBothWings = debit > 0 && risk.slopeAbove > 0 && losesAsSpotFalls;
+  if (!callRiskRequired && override != null && override > 0) return { cost: override, putProxy, callRiskRequired };
+  if (callRiskRequired) {
+    if (override == null || !(override > 0)) return { cost: null, putProxy, callRiskRequired };
+    return { cost: putProxy + override, putProxy, callRiskRequired };
+  }
+  if (putProxy > 0 && losesAsSpotFalls && !longBothWings) return { cost: putProxy, putProxy, callRiskRequired };
+  if (debit > 0) return { cost: debit, putProxy, callRiskRequired };
+  if (typeof risk.maxLoss === "number" && risk.maxLoss > 0) return { cost: risk.maxLoss, putProxy, callRiskRequired };
+  return { cost: null, putProxy, callRiskRequired };
 }
 
 export function markAt(
