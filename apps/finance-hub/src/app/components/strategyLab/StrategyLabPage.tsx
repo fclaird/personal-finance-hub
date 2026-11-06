@@ -352,7 +352,7 @@ export function StrategyLabPage() {
   function addChainLeg(expiryDate: IsoDate, right: OptionRight, strike: number, ratio: number) {
     if (!lab) return;
     const open = lab.structures.find(
-      (spec) => spec.expiry === expiryDate && spec.origin?.request.template === "custom" && spec.legs.length < 6,
+      (spec) => spec.expiry === expiryDate && spec.origin?.request.template === "custom" && spec.legs.length < 8,
     );
     if (open) {
       edit({ kind: "addLeg", id: open.id, right, strike, ratio });

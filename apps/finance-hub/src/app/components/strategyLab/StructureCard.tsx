@@ -2,11 +2,11 @@
 
 import { useMemo, useState } from "react";
 
-import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
+import { LegEditor } from "@/app/components/strategyLab/LegEditor";
+import { DeltaMarkChips } from "@/app/components/strategyLab/StrikeSelect";
 import { calendarDaysBetween, formatExpiryLabel, type OptionChain, type OptionRight } from "@/lib/optionChain/chain";
 import { bsmGreeks } from "@/lib/options/blackScholes";
 import { formatNum, formatSignedUsd2, formatUsd2 } from "@/lib/format";
-import { legPhrase } from "@/lib/strategyLab/legs";
 import { MODEL_DIVIDEND_YIELD, MODEL_RATE, underlyingModelIv } from "@/lib/strategyLab/modelAssumptions";
 import type { LabEdit, StructureEval } from "@/lib/strategyLab/lab";
 import {
@@ -242,71 +242,26 @@ export function StructureCard({
         </p>
       ) : null}
 
-      {spec.legs.map((leg, index) =>
-        leg.instrument === "stock" || leg.right == null || leg.strike == null ? (
-          <p key={leg.id || index} className="mb-2 text-sm font-semibold text-zinc-950 dark:text-zinc-50">
-            {legPhrase(leg)}
-            {leg.entry.price != null ? ` at ${usd(leg.entry.price, masked)}` : ""}
-          </p>
-        ) : (
-        <div key={leg.id || `${spec.id}-${index}`} className="mb-2 flex min-w-0 flex-wrap items-end gap-2">
-          <StrikeSelect
-            label={legPhrase(leg)}
-            ariaLabel={`${spec.label} leg ${index + 1} strike`}
-            rows={boards.get(leg.right) ?? []}
-            value={String(leg.strike)}
-            onChange={(strike) => onEdit({ kind: "setStrike", id: spec.id, legIndex: index, strike })}
-          />
-          <button
-            type="button"
-            aria-label={`${spec.label} leg ${index + 1} down`}
-            className={`px-2 py-1.5 text-sm ${labControl}`}
-            onClick={() => onEdit({ kind: "stepStrike", id: spec.id, legIndex: index, steps: -1 })}
-          >
-            −
-          </button>
-          <button
-            type="button"
-            aria-label={`${spec.label} leg ${index + 1} up`}
-            className={`px-2 py-1.5 text-sm ${labControl}`}
-            onClick={() => onEdit({ kind: "stepStrike", id: spec.id, legIndex: index, steps: 1 })}
-          >
-            +
-          </button>
-          {spec.origin?.request.template === "custom" ? (
-            <button
-              type="button"
-              aria-label={`${spec.label} drop leg ${index + 1}`}
-              className={`px-2 py-1.5 text-xs font-semibold ${labControl}`}
-              onClick={() => onEdit({ kind: "removeLeg", id: spec.id, legIndex: index })}
-            >
-              Drop
-            </button>
-          ) : null}
-          <label className={labLabel}>
-            IV %
-            <input
-              aria-label={`${spec.label} leg ${index + 1} IV`}
-              type="number"
-              step="0.1"
-              placeholder="auto"
-              value={leg.ivOverride == null ? "" : String(Math.round(leg.ivOverride * 1000) / 10)}
-              onChange={(e) => {
-                const raw = e.target.value.trim();
-                const next = Number(raw);
-                onEdit({
-                  kind: "setIvOverride",
-                  id: spec.id,
-                  legIndex: index,
-                  iv: raw === "" || !Number.isFinite(next) ? null : next / 100,
-                });
-              }}
-              className={`mt-1 block w-16 px-2 py-1.5 text-sm tabular-nums ${labControl}`}
-            />
-          </label>
-        </div>
-        ),
-      )}
+      {spec.legs.map((leg, index) => (
+        <LegEditor
+          key={leg.id || `${spec.id}-${index}`}
+          leg={leg}
+          index={index}
+          structureId={spec.id}
+          structureLabel={spec.label}
+          chain={chain}
+          assumptions={assumptions}
+          onEdit={onEdit}
+        />
+      ))}
+      <button
+        type="button"
+        className={`mb-3 px-2 py-1.5 text-xs font-semibold ${labControl}`}
+        disabled={spec.legs.length >= 8}
+        onClick={() => onEdit({ kind: "addBlankLeg", id: spec.id })}
+      >
+        Add leg
+      </button>
 
       {[...boards.entries()].map(([right, rows]) => (
         <DeltaMarkChips key={right} rows={rows} />
@@ -319,7 +274,7 @@ export function StructureCard({
           : ""}
       </p>
       <p className="mb-3 text-[11px] text-zinc-600 dark:text-zinc-300">
-        One average IV, rate 4%, no dividend. Quote IV stays on the leg. Amber is nearest .75, cyan is nearest .50.
+        One average IV, rate 4%, no dividend. Quote IV stays on the leg. Amber is nearest .75, cyan is nearest .50, magenta is nearest .15.
       </p>
       {zebra ? (
         <div className="mb-3 flex flex-wrap items-end gap-2">

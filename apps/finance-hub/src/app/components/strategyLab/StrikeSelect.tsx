@@ -56,7 +56,8 @@ export function DeltaMarkChips({ rows }: { rows: readonly StrikeDelta[] }) {
   const marks = deltaHighlights(rows);
   const seventyFive = rows.find((row) => row.strike === marks.seventyFive);
   const fifty = rows.find((row) => row.strike === marks.fifty);
-  if (!seventyFive && !fifty) return null;
+  const fifteen = rows.find((row) => row.strike === marks.fifteen);
+  if (!seventyFive && !fifty && !fifteen) return null;
   return (
     <p className="mt-1 flex flex-wrap gap-1.5 text-[11px] font-semibold">
       {seventyFive ? (
@@ -67,6 +68,11 @@ export function DeltaMarkChips({ rows }: { rows: readonly StrikeDelta[] }) {
       {fifty ? (
         <span className="rounded px-1.5 py-0.5" style={{ backgroundColor: LAB_PALETTE.series[1], color: INK }}>
           nearest .50 · {strikeChoiceLabel(fifty.strike, fifty.delta, null)}
+        </span>
+      ) : null}
+      {fifteen ? (
+        <span className="rounded px-1.5 py-0.5" style={{ backgroundColor: LAB_PALETTE.series[3], color: INK }}>
+          nearest .15 · {strikeChoiceLabel(fifteen.strike, fifteen.delta, null)}
         </span>
       ) : null}
     </p>

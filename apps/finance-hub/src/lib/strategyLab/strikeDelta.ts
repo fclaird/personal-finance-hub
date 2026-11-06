@@ -95,10 +95,15 @@ export function nearestDeltaStrike(
   return best;
 }
 
-export function deltaHighlights(rows: readonly StrikeDelta[]): { readonly seventyFive: number | null; readonly fifty: number | null } {
+export function deltaHighlights(rows: readonly StrikeDelta[]): {
+  readonly seventyFive: number | null;
+  readonly fifty: number | null;
+  readonly fifteen: number | null;
+} {
   return {
     seventyFive: nearestDeltaStrike(rows, 0.75, "lower"),
     fifty: nearestDeltaStrike(rows, 0.5, "lower"),
+    fifteen: nearestDeltaStrike(rows, 0.15, "lower"),
   };
 }
 
