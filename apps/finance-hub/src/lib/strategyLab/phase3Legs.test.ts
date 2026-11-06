@@ -68,7 +68,9 @@ describe("held positions as legs", () => {
       fallbackFrom: null,
     });
     const groups = groupHeldPositions(rows);
-    assert.equal(groups.oversized, 1);
+    assert.equal(groups.unparsed, 0);
+    const nearBook = booksFor(groups, "PLTR").find((book) => book.expiry === NEAR)!;
+    assert.equal(nearBook.legs.find((leg) => leg.strike === 30)?.quantity, 101);
     const books = booksFor(groups, "PLTR");
     assert.equal(books.length, 2);
     const near = books.find((book) => book.expiry === NEAR)!;

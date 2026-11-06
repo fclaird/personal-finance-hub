@@ -1,10 +1,28 @@
 import { isoDate, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
+import { HELD_LEG_CAP, OPTION_QTY_CAP } from "@/lib/strategyLab/legs";
 import { parseOptionFromSchwabSymbol } from "@/lib/strategy/optionParse";
 
 export type HeldStockLeg = { readonly shares: number; readonly averagePrice: number };
 
-/** Largest |ratio| the scenario parser will keep. */
-export const HELD_CONTRACT_CAP = 100;
+export type HeldAccountRef = {
+  readonly id: string;
+  readonly name: string;
+  readonly nickname: string | null;
+};
+
+export type HeldAccountChoice = {
+  readonly id: string;
+  readonly label: string;
+  readonly legs: number;
+};
+
+export type HeldBookSummary = {
+  readonly legs: number;
+  readonly contracts: number;
+  readonly expiries: readonly IsoDate[];
+  readonly shares: number | null;
+  readonly stockOmitted: boolean;
+};
 
 export type HeldPositionRow = {
   readonly positionId?: string | null;
@@ -50,8 +68,6 @@ export type HeldGroups = {
   readonly books: readonly HeldBook[];
   readonly stocks: readonly HeldStock[];
   readonly unparsed: number;
-  /** Legs above 100 contracts. The lab ratio cap leaves them out. */
-  readonly oversized: number;
 };
 
 export type HeldDraft = {
@@ -81,11 +97,11 @@ function contractsOf(quantity: number | null | undefined): number | null {
   if (quantity == null || !Number.isFinite(quantity) || quantity === 0) return null;
   const rounded = Math.round(quantity);
   if (Math.abs(quantity - rounded) > 1e-6) return null;
-  if (Math.abs(rounded) > HELD_CONTRACT_CAP) return null;
+  if (Math.abs(rounded) > OPTION_QTY_CAP) return null;
   return rounded;
 }
 
-function optionLot(row: HeldPositionRow): OptionLot | "skip" | "unparsed" | "too-big" {
+function optionLot(row: HeldPositionRow): OptionLot | "skip" | "unparsed" {
   const type = (row.securityType ?? "").toLowerCase();
   const parsed = parseOptionFromSchwabSymbol(row.symbol);
   const looksOption = type === "option" || parsed != null;
@@ -102,7 +118,6 @@ function optionLot(row: HeldPositionRow): OptionLot | "skip" | "unparsed" | "too
   }
   const underlying = underlyingOf(row, parsed?.underlying ?? null);
   if (!underlying) return "unparsed";
-  if (row.quantity != null && Number.isFinite(row.quantity) && Math.abs(Math.round(row.quantity)) > HELD_CONTRACT_CAP) return "too-big";
   const quantity = contractsOf(row.quantity);
   if (quantity == null) return row.quantity == null || row.quantity === 0 ? "skip" : "unparsed";
   const averagePrice = row.averagePrice != null && Number.isFinite(row.averagePrice) ? row.averagePrice : null;
@@ -133,14 +148,9 @@ function stockRow(row: HeldPositionRow): { underlying: string; shares: number; a
 export function groupHeldPositions(rows: readonly HeldPositionRow[]): HeldGroups {
   const lots: OptionLot[] = [];
   let unparsed = 0;
-  let oversized = 0;
   const stockLots: { underlying: string; shares: number; averagePrice: number | null }[] = [];
   for (const row of rows) {
     const lot = optionLot(row);
-    if (lot === "too-big") {
-      oversized += 1;
-      continue;
-    }
     if (lot === "unparsed") {
       unparsed += 1;
       continue;
@@ -216,7 +226,43 @@ export function groupHeldPositions(rows: readonly HeldPositionRow[]): HeldGroups
     }))
     .sort((a, b) => a.underlying.localeCompare(b.underlying));
 
-  return { books: heldBooks, stocks: heldStocks, unparsed, oversized };
+  return { books: heldBooks, stocks: heldStocks, unparsed };
+}
+
+export function accountChoiceLabel(account: HeldAccountRef): string {
+  const nick = account.nickname?.trim();
+  if (nick) return nick;
+  const name = account.name.trim();
+  return name || account.id;
+}
+
+function optionLegCount(rows: readonly HeldPositionRow[], symbol: string): number {
+  return booksFor(groupHeldPositions(rows), symbol).reduce((sum, book) => sum + book.legs.length, 0);
+}
+
+/** All-accounts composite, then each account that holds this underlying. */
+export function heldAccountChoices(
+  rows: readonly HeldPositionRow[],
+  symbol: string,
+  accounts: readonly HeldAccountRef[],
+): readonly HeldAccountChoice[] {
+  const names = new Map(accounts.map((account) => [account.id, accountChoiceLabel(account)]));
+  const ids = [...new Set(rows.map((row) => row.accountId).filter((id): id is string => Boolean(id)))].sort((a, b) =>
+    (names.get(a) ?? a).localeCompare(names.get(b) ?? b),
+  );
+  const choices = ids
+    .map((id) => ({
+      id,
+      label: names.get(id) ?? id,
+      legs: optionLegCount(
+        rows.filter((row) => row.accountId === id),
+        symbol,
+      ),
+    }))
+    .filter((choice) => choice.legs > 0);
+  const allLegs = optionLegCount(rows, symbol);
+  if (allLegs < 1) return [];
+  return [{ id: "all", label: "All accounts", legs: allLegs }, ...choices];
 }
 
 export function stockFor(groups: HeldGroups, underlying: string): HeldStock | null {
@@ -240,7 +286,7 @@ export function draftHeldStructure(input: {
 }): { ok: true; draft: HeldDraft } | { ok: false; error: string } {
   const indexes = [...new Set(input.legIndexes)].filter((index) => index >= 0 && index < input.book.legs.length);
   if (indexes.length < 1) return { ok: false, error: "Select at least one leg." };
-  if (indexes.length > 8) return { ok: false, error: "A structure holds at most 8 legs." };
+  if (indexes.length > HELD_LEG_CAP) return { ok: false, error: "This book has more legs than the lab can draw." };
   const selected = indexes.map((index) => input.book.legs[index]!);
   if (selected.some((leg) => leg.contribution == null || leg.averagePrice == null)) {
     return { ok: false, error: "A selected leg has no average cost, so it was not priced at the mid." };
@@ -276,7 +322,7 @@ export function draftHeldSelection(input: {
     drafts.push(one.draft);
   }
   const legs = drafts.flatMap((draft) => draft.legs);
-  if (legs.length + (input.includeStock ? 1 : 0) > 8) return { ok: false, error: "A structure holds at most 8 legs." };
+  if (legs.length + (input.includeStock ? 1 : 0) > HELD_LEG_CAP) return { ok: false, error: "This book has more legs than the lab can draw." };
   let stock: HeldStockLeg | null = null;
   if (input.includeStock) {
     if (!input.stock || input.stock.averagePrice == null) return { ok: false, error: "The shares have no average cost." };
@@ -287,4 +333,41 @@ export function draftHeldSelection(input: {
   const covered = stock != null && stock.shares > 0 && legs.some((leg) => leg.right === "C" && leg.ratio < 0);
   const label = (picked.length > 1 ? `${covered ? "Covered" : "Held"} calendar` : drafts[0]!.label).slice(0, 40);
   return { ok: true, draft: { label, expiry, legs, netPerShare, stock } };
+}
+
+/**
+ * Every open leg for one account, or the all-accounts composite, as one structure.
+ * Shares come along when they have an average cost. Nothing is dropped for size.
+ */
+export function draftHeldBook(input: {
+  readonly rows: readonly HeldPositionRow[];
+  readonly symbol: string;
+  readonly accountId: string;
+  readonly accountLabel: string;
+}): { ok: true; draft: HeldDraft; summary: HeldBookSummary } | { ok: false; error: string } {
+  const filtered = input.accountId === "all" ? input.rows : input.rows.filter((row) => row.accountId === input.accountId);
+  const groups = groupHeldPositions(filtered);
+  const books = booksFor(groups, input.symbol);
+  const stock = stockFor(groups, input.symbol);
+  if (books.length < 1) return { ok: false, error: `No open option positions for ${input.symbol}.` };
+  const includeStock = stock != null && stock.averagePrice != null && stock.shares !== 0;
+  const selection = draftHeldSelection({
+    books: books.map((book) => ({ book, legIndexes: book.legs.map((_, index) => index) })),
+    stock,
+    includeStock,
+  });
+  if (!selection.ok) return selection;
+  const label = (input.accountId === "all" ? `Held ${input.symbol}` : `Held ${input.accountLabel}`).slice(0, 40);
+  const contracts = books.reduce((sum, book) => sum + book.legs.reduce((legSum, leg) => legSum + Math.abs(leg.quantity), 0), 0);
+  return {
+    ok: true,
+    draft: { ...selection.draft, label },
+    summary: {
+      legs: selection.draft.legs.length + (selection.draft.stock ? 1 : 0),
+      contracts,
+      expiries: [...new Set(selection.draft.legs.map((leg) => leg.expiry))],
+      shares: selection.draft.stock?.shares ?? null,
+      stockOmitted: stock != null && !includeStock,
+    },
+  };
 }

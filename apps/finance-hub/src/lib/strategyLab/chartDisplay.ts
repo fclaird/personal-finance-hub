@@ -15,14 +15,8 @@ import { structureDisplayNames } from "@/lib/strategyLab/displayNames";
 import { seriesColor } from "@/lib/strategyLab/palette";
 
 export const CHART_MODES = [
-  { id: "structure", label: "By structure" },
   { id: "waterfall", label: "Waterfall" },
-  { id: "quarters", label: "Quarters" },
-  { id: "expiry", label: "At expiry" },
-  { id: "today", label: "Today" },
-  { id: "span", label: "Today + date + expiry" },
-  { id: "dateOverlay", label: "All at one date" },
-  { id: "custom", label: "Custom" },
+  { id: "single", label: "Single date" },
 ] as const;
 
 export type ChartMode = (typeof CHART_MODES)[number]["id"];
@@ -40,9 +34,9 @@ export type ChartSelection = {
   structureIds: readonly string[];
   horizonIds: readonly string[];
   horizonPolicy: HorizonPolicy;
-  /** Structure that owns the waterfall rainbow, and the isolated structure in By structure. */
+  /** Structure whose dates the waterfall draws. Single date draws every selected structure. */
   focusStructureId: string | null;
-  /** Middle date for "today + date + expiry", and the date for "all at one date". */
+  /** The one date drawn in Single date. */
   focusHorizonId: string | null;
 };
 
@@ -100,16 +94,40 @@ type KnownIds = {
 
 const DATE_DASH = ["4 3", "1 3", "8 4", "2 2", "6 3"] as const;
 
+const LONG_DATE = /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) /;
+
+/** Chip and legend text. A long weekday date drops off. `E−2wk · Jun 4` stays whole. */
 export function shortHorizon(label: string): string {
-  return label.split(" · ")[0] ?? label;
+  const parts = label.split(" · ");
+  if (parts.length >= 2 && LONG_DATE.test(parts[1] ?? "")) return parts[0] ?? label;
+  return label;
 }
 
-/** t = 0 is today (cyan). t = 1 is expiry (magenta). Lightness stays high on near-black. */
+/** t = 0 is today (cyan). t = 1 is expiry (magenta). Used when a single-date chart is set to rainbow. */
 export function rainbowColor(t: number): string {
   const clamped = Math.min(1, Math.max(0, t));
   const hue = ((188 - clamped * 228) % 360 + 360) % 360;
   return hslToHex(hue, 0.92, 0.64);
 }
+
+/**
+ * Cool-to-warm ramp for a waterfall of dates on near-black.
+ * t = 0 is the earliest date (steel blue). t = 1 is the latest pre-expiry date (amber).
+ * Saturation stays moderate so the steps read as one sequence, not a neon wheel.
+ */
+export function dateRampColor(t: number): string {
+  const clamped = Math.min(1, Math.max(0, t));
+  const hue = 206 - clamped * (206 - 36);
+  const sat = 0.46 + clamped * 0.16;
+  const light = 0.66 + clamped * 0.06;
+  return hslToHex(hue, sat, light);
+}
+
+/** Expiry sits off the ramp: near-white, so it stays obvious against the amber end. */
+export const EXPIRY_RAMP_COLOR = "#f4f4f5";
+
+const DATE_LINE_WIDTH = 3;
+const EXPIRY_LINE_WIDTH = 4.5;
 
 export function initialChartSelection(evaluation: LabEvaluation): ChartSelection {
   const structures = pricedStructures(evaluation).map((row) => row.spec.id);
@@ -215,11 +233,26 @@ export function policyFromIds(horizons: readonly HorizonView[], ids: readonly st
 }
 
 export function setChartMode(selection: ChartSelection, mode: ChartMode): ChartSelection {
-  return { ...selection, mode };
+  if (mode !== "single") return { ...selection, mode: "waterfall" };
+  const id = selection.focusHorizonId ?? selection.horizonIds[0] ?? null;
+  return { ...selection, mode: "single", focusHorizonId: id, horizonIds: id ? [id] : [] };
 }
 
 export function setFocusHorizon(selection: ChartSelection, id: string): ChartSelection {
   return { ...selection, focusHorizonId: id };
+}
+
+/** Single date replaces the previous date. The chart never keeps two dates from this picker. */
+export function selectDate(selection: ChartSelection, id: string, horizons: readonly HorizonView[] = []): ChartSelection {
+  const sorted = [...horizons].sort(byDate);
+  const index = sorted.findIndex((horizon) => horizon.id === id);
+  return {
+    ...selection,
+    mode: "single",
+    focusHorizonId: id,
+    horizonIds: [id],
+    horizonPolicy: { kind: "picked", indexes: index >= 0 ? [index] : [] },
+  };
 }
 
 /**
@@ -240,7 +273,25 @@ export function reconcileChartSelection(prev: ChartSelection, live: KnownIds, kn
 
 export function visibleCurves(evaluation: LabEvaluation, selection: ChartSelection, look?: CurveLook): CurveView[] {
   const painted = paintMode(evaluation, selection);
-  return look ? applyCurveLook(painted, look, evaluation) : painted;
+  if (!look) return painted;
+  return selection.mode === "waterfall" ? painted : applyCurveLook(painted, look, evaluation);
+}
+
+/**
+ * Curves the P&L chart actually strokes.
+ * Waterfall keeps one ramp color per date. Running those curves through the
+ * structure/solid look collapses every date of one structure onto one solid line.
+ */
+export function displayedCurves(evaluation: LabEvaluation, selection: ChartSelection, look: CurveLook): CurveView[] {
+  const painted = paintMode(evaluation, selection);
+  if (selection.mode === "waterfall") {
+    return painted.map((curve) => {
+      const expiry = curve.color === EXPIRY_RAMP_COLOR;
+      const width = Math.max(DATE_LINE_WIDTH, look.thickness);
+      return { ...curve, width: expiry ? width + (EXPIRY_LINE_WIDTH - DATE_LINE_WIDTH) : width, dash: undefined };
+    });
+  }
+  return applyCurveLook(painted, look, evaluation);
 }
 
 function displayOf(evaluation: LabEvaluation): ReadonlyMap<string, string> {
@@ -251,43 +302,12 @@ function paintMode(evaluation: LabEvaluation, selection: ChartSelection): CurveV
   const structures = selectedStructures(evaluation, selection);
   if (structures.length === 0) return [];
   const focus = structures.find((row) => row.spec.id === selection.focusStructureId) ?? structures[0]!;
-  const rainbow = structures.length === 1;
-  const names = displayOf(evaluation);
-  const label = (row: PricedStructure) => names.get(row.spec.id) ?? row.spec.label;
 
   switch (selection.mode) {
-    case "waterfall": {
-      const curves = paint(focus, structureHorizons(evaluation, focus), "rainbow", label(focus));
-      for (const row of structures) {
-        if (row.spec.id === focus.spec.id) continue;
-        const horizons = structureHorizons(evaluation, row);
-        const expiry = horizons.find((horizon) => horizon.settlement) ?? horizons[horizons.length - 1];
-        if (!expiry) continue;
-        const [curve] = paint(row, [expiry], "palette", label(row));
-        if (!curve) continue;
-        curves.push({ ...curve, name: `${label(row)} · expiry ${formatExpiryLabel(row.spec.expiry)}`, dash: "8 4", width: 3.5 });
-      }
-      return curves;
-    }
-    case "expiry":
-      return structures.flatMap((row) => paint(row, structureHorizons(evaluation, row).filter((horizon) => horizon.settlement), "palette", label(row)));
-    case "today":
-      return structures.flatMap((row) =>
-        paint(row, structureHorizons(evaluation, row).filter((horizon) => isToday(evaluation, horizon)), "palette", label(row)),
-      );
-    case "quarters":
-    case "custom":
-      return structures.flatMap((row) => {
-        const chosen = structureHorizons(evaluation, row).filter((horizon) => selection.horizonIds.includes(horizon.id));
-        return paint(row, chosen, rainbow ? "rainbow" : "palette", label(row));
-      });
-    case "structure":
-    case "dateOverlay":
+    case "waterfall":
+      return paintWaterfall(focus, structureHorizons(evaluation, focus));
+    case "single":
       return curvesOnFocusDate(evaluation, selection);
-    case "span":
-      return structures.flatMap((row) =>
-        paint(row, spanHorizons(evaluation, row, selection.focusHorizonId), rainbow ? "rainbow" : "palette", label(row)),
-      );
     default:
       return [];
   }
@@ -333,10 +353,15 @@ function curvesOnFocusDate(evaluation: LabEvaluation, selection: ChartSelection)
   });
 }
 
-/** One structure's selected dates, drawn as a rainbow. A zero-package structure contributes nothing. */
+/** One structure's forward date steps, drawn as the waterfall. A zero-package structure contributes nothing. */
 export function structurePanelCurves(evaluation: LabEvaluation, selection: ChartSelection, structureId: string): CurveView[] {
   if (!selection.structureIds.includes(structureId)) return [];
-  return visibleCurves(evaluation, { ...selection, mode: "quarters", structureIds: [structureId] });
+  return visibleCurves(evaluation, {
+    ...selection,
+    mode: "waterfall",
+    structureIds: [structureId],
+    focusStructureId: structureId,
+  });
 }
 
 /** One stock line: expiry when several dates are drawn, otherwise the only visible date. */
@@ -475,6 +500,24 @@ export function samplePnl(points: readonly { spot: number; pnl: number }[], spot
   return null;
 }
 
+function paintWaterfall(row: PricedStructure, horizons: readonly HorizonView[]): CurveView[] {
+  const dated = Math.max(horizons.filter((horizon) => !horizon.settlement).length - 1, 1);
+  let datedIndex = 0;
+  return horizons.map((horizon) => {
+    const expiry = horizon.settlement;
+    const t = expiry ? 1 : datedIndex / dated;
+    if (!expiry) datedIndex += 1;
+    return {
+      key: `${row.spec.id}@@${horizon.id}`,
+      structureId: row.spec.id,
+      horizonId: horizon.id,
+      name: shortHorizon(horizon.label),
+      color: expiry ? EXPIRY_RAMP_COLOR : dateRampColor(t),
+      width: expiry ? EXPIRY_LINE_WIDTH : DATE_LINE_WIDTH,
+    };
+  });
+}
+
 function paint(row: PricedStructure, horizons: readonly HorizonView[], kind: "rainbow" | "palette", label: string): CurveView[] {
   return horizons.map((horizon, index) => {
     const look = lookOf(row, horizon, index, horizons.length, kind);
@@ -505,17 +548,6 @@ function lookOf(
   if (total <= 1) return { color, width: horizon.settlement ? 4 : 3.5 };
   if (horizon.settlement) return { color, width: 4 };
   return { color, width: 2.75, dash: DATE_DASH[index % DATE_DASH.length] };
-}
-
-function spanHorizons(evaluation: LabEvaluation, row: PricedStructure, focusHorizonId: string | null): HorizonView[] {
-  const horizons = structureHorizons(evaluation, row);
-  const today = horizons.find((horizon) => isToday(evaluation, horizon));
-  const expiry = horizons.find((horizon) => horizon.settlement);
-  const mid =
-    horizons.find((horizon) => horizon.id === focusHorizonId && !horizon.settlement && !isToday(evaluation, horizon)) ??
-    horizons.find((horizon) => !horizon.settlement && !isToday(evaluation, horizon));
-  const picked = [today, mid, expiry].filter((horizon): horizon is HorizonView => horizon != null);
-  return picked.filter((horizon, index) => picked.findIndex((item) => item.id === horizon.id) === index);
 }
 
 export function isPlottableStructure(row: LabEvaluation["structures"][number]): row is PricedStructure {
@@ -598,15 +630,22 @@ export function defaultChartChrome(): ChartChrome {
   };
 }
 
+/** Older blobs picked several dates at once. Those open on the waterfall. One-date modes open on Single date. */
+function savedChartMode(raw: unknown): ChartMode | null {
+  if (raw === "waterfall" || raw === "quarters" || raw === "custom") return "waterfall";
+  if (raw === "single" || raw === "structure" || raw === "dateOverlay" || raw === "today" || raw === "expiry" || raw === "span" || raw === "overlay") {
+    return "single";
+  }
+  return null;
+}
+
 export function parseChartSettings(raw: unknown): StoredChartSettings | null {
   try {
     if (!isRecord(raw) || raw.v !== 1) return null;
     const horizonPolicy = parseHorizonPolicy(raw.horizonPolicy);
     const chrome = parseChrome(raw.chrome);
     if (!horizonPolicy || !chrome) return null;
-    // Overlay was removed. Keep the saved line settings and open By structure.
-    if (raw.mode === "overlay") return { mode: "structure", horizonPolicy, chrome };
-    const mode = CHART_MODES.some((item) => item.id === raw.mode) ? (raw.mode as ChartMode) : null;
+    const mode = savedChartMode(raw.mode);
     if (!mode) return null;
     return { mode, horizonPolicy, chrome };
   } catch {
