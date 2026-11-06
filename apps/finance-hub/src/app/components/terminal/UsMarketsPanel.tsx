@@ -350,7 +350,7 @@ export function UsMarketsPanel({ usMarkets }: { usMarkets: UsMarketsPayload | nu
       {usMarkets && displayItems.length > 0 ? (
         <>
           {viewMode === "tiles" ? (
-            <div className="mt-3 grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),1fr))] gap-3 pb-1 [&>*]:min-w-0">
+            <div className="mt-3 grid min-w-0 grid-cols-4 gap-3 overflow-x-auto pb-1">
               {tileSpecs.map((spec, index) => {
                 const item = spec.card;
                 if (!item) return null;

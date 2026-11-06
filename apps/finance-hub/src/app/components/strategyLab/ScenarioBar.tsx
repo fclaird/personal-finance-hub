@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from "react";
 
+import type { OptionChain } from "@/lib/optionChain/chain";
 import { entryTableCsv, evaluationCubeCsv } from "@/lib/strategyLab/exportCsv";
 import type { LabEvaluation, LabScenario } from "@/lib/strategyLab/lab";
 import { labControl, labLabel } from "@/lib/strategyLab/palette";
+import { compactQuotes, provenanceFromChain } from "@/lib/strategyLab/snapshots";
 import {
   parseScenario,
   readLibrary,
@@ -26,11 +28,13 @@ function downloadCsv(filename: string, csv: string) {
 export function ScenarioBar({
   lab,
   symbol,
+  chain,
   evaluation,
   onRestore,
 }: {
   lab: LabScenario;
   symbol: string;
+  chain: OptionChain;
   evaluation: LabEvaluation;
   onRestore: (scenario: LabScenario) => void;
 }) {
@@ -38,6 +42,17 @@ export function ScenarioBar({
   const [name, setName] = useState("");
   const [selected, setSelected] = useState("");
   const [note, setNote] = useState<string | null>(null);
+  const [snapshots, setSnapshots] = useState<{ id: string; summary: string }[]>([]);
+  const [snapshotId, setSnapshotId] = useState("");
+
+  useEffect(() => {
+    void fetch(`/api/strategy-lab/snapshots?symbol=${encodeURIComponent(symbol)}`, { cache: "no-store" })
+      .then((resp) => resp.json())
+      .then((body: { ok?: boolean; snapshots?: { id: string; summary: string }[] }) => {
+        if (body.ok) setSnapshots(body.snapshots ?? []);
+      })
+      .catch(() => setSnapshots([]));
+  }, [symbol, note]);
 
   useEffect(() => {
     setLibrary(readLibrary(window.localStorage));
@@ -146,6 +161,77 @@ export function ScenarioBar({
         onClick={() => downloadCsv(`${symbol.toLowerCase()}-strategy-lab-entry.csv`, entryTableCsv(evaluation))}
       >
         Export entry table
+      </button>
+      <button
+        type="button"
+        className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
+        onClick={() => {
+          void fetch("/api/strategy-lab/snapshots", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              scenario: lab,
+              quotes: compactQuotes(chain, lab),
+              provenance: provenanceFromChain(chain),
+            }),
+          })
+            .then((resp) => resp.json())
+            .then((body: { ok?: boolean; error?: string; snapshot?: { id: string } }) => {
+              if (!body.ok || !body.snapshot) {
+                setNote(body.error ?? "Snapshot was not saved.");
+                return;
+              }
+              setSnapshotId(body.snapshot.id);
+              setNote(`Saved snapshot ${body.snapshot.id}.`);
+            })
+            .catch(() => setNote("Snapshot was not saved."));
+        }}
+      >
+        Save snapshot
+      </button>
+      <label className={labLabel}>
+        Snapshots
+        <select
+          aria-label="Saved snapshots"
+          value={snapshotId}
+          onChange={(event) => setSnapshotId(event.target.value)}
+          className={`mt-1 block max-w-56 px-2 py-1.5 text-sm ${labControl}`}
+        >
+          <option value="">Choose</option>
+          {snapshots.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.summary}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        type="button"
+        className={`px-3 py-1.5 text-xs font-semibold ${labControl}`}
+        onClick={() => {
+          if (!snapshotId) {
+            setNote("Choose a snapshot.");
+            return;
+          }
+          void fetch(`/api/strategy-lab/snapshots?id=${encodeURIComponent(snapshotId)}`, { cache: "no-store" })
+            .then((resp) => resp.json())
+            .then((body: { ok?: boolean; error?: string; snapshot?: { scenario: unknown; symbol: string } }) => {
+              if (!body.ok || !body.snapshot) {
+                setNote(body.error ?? "That snapshot could not be read.");
+                return;
+              }
+              const parsed = parseScenario(body.snapshot.scenario);
+              if (!parsed || parsed.symbol !== symbol) {
+                setNote("That snapshot could not be read.");
+                return;
+              }
+              onRestore(parsed);
+              setNote(`Loaded snapshot ${snapshotId}.`);
+            })
+            .catch(() => setNote("That snapshot could not be read."));
+        }}
+      >
+        Load snapshot
       </button>
       <p className="pb-1 text-[11px] text-zinc-300">
         Named scenarios stay in this browser. A bad save is ignored and is not applied.

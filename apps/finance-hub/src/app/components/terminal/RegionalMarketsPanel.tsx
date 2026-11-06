@@ -123,7 +123,7 @@ export function RegionalMarketsPanel({ payload }: { payload: RegionalMarketsPayl
                 </span>
               ) : null}
             </div>
-            <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),1fr))] gap-3 [&>*]:min-w-0">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {group.items.map((item) => {
                 const pctPts = item.changePct;
                 const chartData = item.series.map((p, idx) => ({ idx, c: p.close }));

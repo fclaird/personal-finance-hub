@@ -12,6 +12,7 @@ import {
   type LabEvaluation,
   type PricedStructure,
 } from "@/lib/strategyLab/lab";
+import { structureDisplayNames } from "@/lib/strategyLab/displayNames";
 import { LAB_PALETTE, labCard, labControl, labLabel, seriesColor } from "@/lib/strategyLab/palette";
 
 function money(n: number | null, mask: boolean): string {
@@ -75,6 +76,7 @@ export function ExpirySummary({
   onEdit: (edit: LabEdit) => void;
 }) {
   const boards = evaluation.expiryBoards;
+  const names = structureDisplayNames(evaluation.structures.map((row) => ({ id: row.spec.id, label: row.spec.label })));
   const priced = evaluation.structures.filter((row): row is PricedStructure => row.status === "priced");
   if (boards.length === 0 || priced.length === 0) return null;
 
@@ -85,8 +87,6 @@ export function ExpirySummary({
 
   return (
     <section className={`${labCard} box-border min-w-0 max-w-full p-4`}>
-      <div className="grid items-start gap-6 lg:grid-cols-2">
-      <div className="min-w-0">
       <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">At expiry, best strategy by price</h2>
       <p className={`mt-1 ${labLabel}`}>{evaluation.metric}</p>
       <div className="mt-3 space-y-3">
@@ -104,14 +104,11 @@ export function ExpirySummary({
           </div>
         ))}
       </div>
-      </div>
 
-      <div className="min-w-0 lg:border-l lg:border-zinc-300 lg:pl-6 dark:lg:border-zinc-600">
-      <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Spot and capital</h2>
-      <div className="mt-3 flex flex-wrap items-end gap-4">
+      <div className="mt-4 flex flex-wrap items-end gap-4 border-t border-zinc-300 pt-3 dark:border-zinc-600">
         <label className={labLabel}>
           Spot at expiry
-          <span className="mt-1 flex w-full min-w-0 items-center gap-2">
+          <span className="mt-1 flex items-center gap-2">
             <input
               aria-label="Spot at expiry"
               type="range"
@@ -120,7 +117,7 @@ export function ExpirySummary({
               step={0.01}
               value={Math.min(hi, Math.max(lo, whatIfSpot))}
               onChange={(e) => onWhatIf(Number(e.target.value))}
-              className="min-w-0 flex-1 accent-emerald-400"
+              className="w-40 accent-emerald-400"
             />
             <input
               aria-label="Spot at expiry dollars"
@@ -185,7 +182,7 @@ export function ExpirySummary({
                   .map((row) => (
                     <Row
                       key={row.spec.id}
-                      label={row.spec.label}
+                      label={names.get(row.spec.id) ?? row.spec.label}
                       pnl={capitalExpiryPnl(row, whatIfSpot)}
                       winner={zone?.bestId === row.spec.id && !zone.tied}
                       color={seriesColor(row.spec.slot)}
@@ -205,8 +202,6 @@ export function ExpirySummary({
             </div>
           );
         })}
-      </div>
-      </div>
       </div>
     </section>
   );

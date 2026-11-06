@@ -2,7 +2,6 @@
 
 import { useCallback, useMemo, type ReactNode } from "react";
 import { EditableHeading } from "@/app/components/EditableHeading";
-import { TILE_GRID } from "@/app/components/pageFrame";
 import { usePersistedCollapsedSet, usePersistedOrder } from "@/lib/usePersistedOrder";
 
 export type DraggableTileDef = {
@@ -14,12 +13,10 @@ export type DraggableTileDef = {
   collapsible?: boolean;
   /** Extra classes on the tile body wrapper (inside the card). */
   bodyClassName?: string;
-  /** "full" keeps a wide chart or table on its own row. */
-  span?: "full";
 };
 
 const TILE_SHELL =
-  "min-w-0 overflow-hidden rounded-2xl border border-zinc-300 bg-white shadow-sm dark:border-white/20 dark:bg-zinc-950";
+  "min-w-0 max-w-full overflow-hidden rounded-2xl border border-zinc-300 bg-white shadow-sm dark:border-white/20 dark:bg-zinc-950";
 const TILE_HEADER = "flex select-none items-stretch";
 const TILE_HEADER_EXPANDED = "border-b border-zinc-200 dark:border-white/10";
 const DRAG_HANDLE =
@@ -28,8 +25,8 @@ const TITLE_BTN =
   "flex min-w-0 flex-1 items-center gap-2 px-1 py-2.5 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-100/80 dark:text-zinc-200 dark:hover:bg-white/5";
 
 /**
- * Page tiles in a wrapping grid. Drag the ⠿ handle to reorder; click the title to collapse/expand.
- * Order and collapse state persist in localStorage. A tile with span "full" takes the whole row.
+ * One panel per row, across the full page width. Drag the ⠿ handle to reorder; click the title to collapse.
+ * Order and collapse state persist in localStorage. A wide table scrolls inside its card.
  */
 export function DraggableTileLayout({
   storageKey,
@@ -74,11 +71,10 @@ export function DraggableTileLayout({
   const rendered = order.filter((id) => tiles[id]?.visible !== false);
 
   return (
-    <div className="flex min-w-0 flex-col gap-3">
+    <div className={className ?? "flex w-full min-w-0 flex-col gap-6"}>
       {hint ? (
         <p className="text-xs text-zinc-600 dark:text-zinc-400">{hint}</p>
       ) : null}
-      <div className={className ?? TILE_GRID}>
       {rendered.map((id) => {
         const tile = tiles[id];
         if (!tile) return null;
@@ -87,7 +83,7 @@ export function DraggableTileLayout({
         return (
           <div
             key={id}
-            className={TILE_SHELL + (tile.span === "full" ? " col-span-full" : "")}
+            className={TILE_SHELL}
             onDragOver={onDragOver}
             onDrop={(e) => onDrop(e, id)}
           >
@@ -131,12 +127,13 @@ export function DraggableTileLayout({
               )}
             </div>
             {!collapsed ? (
-              <div className={tile.bodyClassName ?? "p-4 sm:p-6"}>{tile.children}</div>
+              <div className={`min-w-0 max-w-full overflow-x-auto ${tile.bodyClassName ?? "p-4 sm:p-6"} [&_table]:w-full [&_table]:min-w-max`}>
+                {tile.children}
+              </div>
             ) : null}
           </div>
         );
       })}
-      </div>
     </div>
   );
 }
