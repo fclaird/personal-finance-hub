@@ -36,7 +36,7 @@ export function LiveStatusBanner() {
 
   return (
     <div className="bg-red-600 text-white">
-      <div className="flex w-full max-w-[120rem] items-center justify-between gap-4 py-2.5 pl-5 pr-7 text-[15px] leading-snug">
+      <div className="flex w-full items-center justify-between gap-4 py-2.5 pl-5 pr-7 text-[15px] leading-snug">
         <div className="min-w-0 truncate font-semibold">{problem}</div>
         <Link href="/connections" className="shrink-0 rounded-full bg-white/15 px-3.5 py-1.5 text-[13px] font-bold hover:bg-white/25">
           Connections

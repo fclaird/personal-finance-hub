@@ -1,5 +1,6 @@
 "use client";
 
+import { PAGE_FRAME } from "@/app/components/pageFrame";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
@@ -781,7 +782,7 @@ export default function AllocationPage() {
   }
 
   return (
-    <div className="flex w-full min-w-0 max-w-[108rem] flex-1 flex-col gap-8 py-8 pl-4 pr-5 sm:py-10 sm:pl-6 sm:pr-8">
+    <div className={PAGE_FRAME}>
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">

@@ -1,5 +1,6 @@
 "use client";
 
+import { PAGE_FRAME } from "@/app/components/pageFrame";
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useState } from "react";
 
@@ -270,7 +271,7 @@ export default function PosterityPage() {
   }, [positions]);
 
   return (
-    <div className="flex w-full max-w-[108rem] flex-1 flex-col gap-8 py-10 pl-5 pr-6 sm:pl-6 sm:pr-8">
+    <div className={PAGE_FRAME}>
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">

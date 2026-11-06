@@ -364,7 +364,7 @@ export function DividendBookDashboard({ dashboard, masked }: Props) {
   return (
     <div className="grid gap-6">
 
-      <div className="grid gap-5 rounded-xl border border-zinc-600/80 bg-zinc-950 p-5 shadow-lg sm:grid-cols-2 sm:p-6 lg:grid-cols-4">
+      <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))] gap-5 rounded-xl border border-zinc-600/80 bg-zinc-950 p-5 shadow-lg sm:p-6 [&>*]:min-w-0">
         <div>
           <div className="text-xs font-semibold uppercase tracking-widest text-amber-200/95">Portfolio</div>
           <div className="mt-3 grid gap-0">
@@ -469,7 +469,7 @@ export function DividendBookDashboard({ dashboard, masked }: Props) {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,24rem),1fr))] items-start gap-6 [&>*]:min-w-0">
         <div className="rounded-xl border border-zinc-600/80 bg-zinc-950 p-5 shadow-lg sm:p-6">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>

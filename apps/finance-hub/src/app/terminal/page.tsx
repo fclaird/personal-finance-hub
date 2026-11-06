@@ -1,5 +1,6 @@
 "use client";
 
+import { CARD_GRID, PAGE_FRAME } from "@/app/components/pageFrame";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Line, LineChart, ResponsiveContainer } from "recharts";
@@ -1069,7 +1070,7 @@ export default function TerminalPage() {
   }, [volumeLeaders]);
 
   return (
-    <div className="flex w-full max-w-7xl flex-1 flex-col gap-6 py-8 pl-4 pr-6">
+    <div className={PAGE_FRAME}>
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
@@ -1128,7 +1129,7 @@ export default function TerminalPage() {
                   Contracts from <span className="font-mono">TERMINAL_FUTURES_SYMBOLS</span>. ES, NQ, and the other
                   indexes sit on Quick glance.
                 </div>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <div className={`mt-3 ${CARD_GRID}`}>
                   {futuresItems.map((row) => {
                         const last = row.quote.last ?? row.quote.mark;
                         const pctPts = row.quote.changePercent == null ? null : row.quote.changePercent * 100;
@@ -1182,7 +1183,6 @@ export default function TerminalPage() {
         <DraggableTileLayout
           storageKey="fh.terminal.watchlist.tiles.v1"
           hint={null}
-          className="flex flex-col gap-4"
           defaultOrder={["watchlist-controls", "heatmap", "treemap", "news", "quotes-table", "market-sidebar"]}
           tiles={{
             "watchlist-controls": {

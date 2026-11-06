@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, type ReactNode } from "react";
 import { EditableHeading } from "@/app/components/EditableHeading";
+import { TILE_GRID } from "@/app/components/pageFrame";
 import { usePersistedCollapsedSet, usePersistedOrder } from "@/lib/usePersistedOrder";
 
 export type DraggableTileDef = {
@@ -13,10 +14,12 @@ export type DraggableTileDef = {
   collapsible?: boolean;
   /** Extra classes on the tile body wrapper (inside the card). */
   bodyClassName?: string;
+  /** "full" keeps a wide chart or table on its own row. */
+  span?: "full";
 };
 
 const TILE_SHELL =
-  "overflow-hidden rounded-2xl border border-zinc-300 bg-white shadow-sm dark:border-white/20 dark:bg-zinc-950";
+  "min-w-0 overflow-hidden rounded-2xl border border-zinc-300 bg-white shadow-sm dark:border-white/20 dark:bg-zinc-950";
 const TILE_HEADER = "flex select-none items-stretch";
 const TILE_HEADER_EXPANDED = "border-b border-zinc-200 dark:border-white/10";
 const DRAG_HANDLE =
@@ -25,8 +28,8 @@ const TITLE_BTN =
   "flex min-w-0 flex-1 items-center gap-2 px-1 py-2.5 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-100/80 dark:text-zinc-200 dark:hover:bg-white/5";
 
 /**
- * Vertical stack of page tiles. Drag the ⠿ handle to reorder; click the title to collapse/expand.
- * Order and collapse state persist in localStorage.
+ * Page tiles in a wrapping grid. Drag the ⠿ handle to reorder; click the title to collapse/expand.
+ * Order and collapse state persist in localStorage. A tile with span "full" takes the whole row.
  */
 export function DraggableTileLayout({
   storageKey,
@@ -71,10 +74,11 @@ export function DraggableTileLayout({
   const rendered = order.filter((id) => tiles[id]?.visible !== false);
 
   return (
-    <div className={className ?? "flex flex-col gap-6"}>
+    <div className="flex min-w-0 flex-col gap-3">
       {hint ? (
         <p className="text-xs text-zinc-600 dark:text-zinc-400">{hint}</p>
       ) : null}
+      <div className={className ?? TILE_GRID}>
       {rendered.map((id) => {
         const tile = tiles[id];
         if (!tile) return null;
@@ -83,7 +87,7 @@ export function DraggableTileLayout({
         return (
           <div
             key={id}
-            className={TILE_SHELL}
+            className={TILE_SHELL + (tile.span === "full" ? " col-span-full" : "")}
             onDragOver={onDragOver}
             onDrop={(e) => onDrop(e, id)}
           >
@@ -132,6 +136,7 @@ export function DraggableTileLayout({
           </div>
         );
       })}
+      </div>
     </div>
   );
 }

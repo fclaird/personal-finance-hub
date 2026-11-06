@@ -1,5 +1,6 @@
 "use client";
 
+import { PAGE_FRAME } from "@/app/components/pageFrame";
 import { useEffect, useMemo, useState } from "react";
 
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
@@ -242,7 +243,7 @@ export default function ConnectionsPage({
   }
 
   return (
-    <div className="flex w-full max-w-[84rem] flex-1 flex-col gap-8 py-10 pl-5 pr-6 sm:pl-6 sm:pr-8">
+    <div className={PAGE_FRAME}>
       <FlavorPasswordDialog
         flavor={pendingFlavor}
         label={pendingFlavorLabel}
