@@ -227,7 +227,7 @@ describe("sampled lab delta", () => {
       ),
       built.chain,
     );
-    assert.equal(evaluation.assumptions.rate, 0);
+    assert.equal(evaluation.assumptions.rate, 0.04);
     assert.equal(evaluation.assumptions.ivSource, "mid");
     const row = evaluation.structures.find((item) => item.status === "priced" && item.spec.label === "Spread");
     assert.ok(row && row.status === "priced");
@@ -248,8 +248,8 @@ describe("sampled lab delta", () => {
     if (ivLong == null || ivShort == null) return;
     const spot = 95;
     const expected =
-      (bsmGreeks({ right: "C", spot, strike: 90, years, rate: 0, dividendYield: 0, vol: ivLong }).delta -
-        bsmGreeks({ right: "C", spot, strike: 110, years, rate: 0, dividendYield: 0, vol: ivShort }).delta) *
+      (bsmGreeks({ right: "C", spot, strike: 90, years, rate: 0.04, dividendYield: 0, vol: ivLong }).delta -
+        bsmGreeks({ right: "C", spot, strike: 110, years, rate: 0.04, dividendYield: 0, vol: ivShort }).delta) *
       100;
     const live = sampleStructureDelta(evaluation, row.spec.id, today.id, spot, "shares", "delta");
     assert.ok(live != null);

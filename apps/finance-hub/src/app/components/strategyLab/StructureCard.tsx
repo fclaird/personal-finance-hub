@@ -3,8 +3,11 @@
 import { useMemo, useState } from "react";
 
 import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
-import { formatExpiryLabel, type OptionChain, type OptionRight } from "@/lib/optionChain/chain";
+import { calendarDaysBetween, formatExpiryLabel, type OptionChain, type OptionRight } from "@/lib/optionChain/chain";
+import { bsmGreeks } from "@/lib/options/blackScholes";
 import { formatNum, formatSignedUsd2, formatUsd2 } from "@/lib/format";
+import { legPhrase } from "@/lib/strategyLab/legs";
+import { MODEL_DIVIDEND_YIELD, MODEL_RATE, underlyingModelIv } from "@/lib/strategyLab/modelAssumptions";
 import type { LabEdit, StructureEval } from "@/lib/strategyLab/lab";
 import {
   DELTA_AT_SHORT_HINT,
@@ -92,8 +95,12 @@ function DollarsAtRisk({ row, onEdit }: { row: StructureEval; onEdit: (edit: Lab
         }}
         className={`mt-1 block w-32 px-2 py-1.5 text-sm tabular-nums ${labControl}`}
       />
-      <span className="mt-1 block text-[11px]">
-        {required ? "Required. Undefined risk. No margin formula." : "Blank uses the loss at spot 0."}
+      <span className="mt-1 block text-[11px] text-zinc-700 dark:text-zinc-300">
+        {required
+          ? "Required. Undefined risk. No broker margin."
+          : synthetic
+            ? "Blank sizes on the parity debit. Loss at spot 0 stays on the card."
+            : "Blank uses the loss at spot 0."}
       </span>
     </label>
   );
@@ -141,14 +148,31 @@ export function StructureCard({
   const boards = useMemo(() => {
     const byRight = new Map<OptionRight, readonly StrikeDelta[]>();
     for (const leg of spec.legs) {
-      if (!byRight.has(leg.right)) byRight.set(leg.right, strikeDeltas(chain, spec.expiry, leg.right, assumptions));
+      if (leg.right == null || leg.expiry == null || byRight.has(leg.right)) continue;
+      byRight.set(leg.right, strikeDeltas(chain, leg.expiry, leg.right, assumptions));
     }
     return byRight;
-  }, [chain, spec.expiry, spec.legs, assumptions]);
-  const summary = structureDeltaSummary(spec.legs, (right, strike) => {
-    const rowDelta = boards.get(right)?.find((item) => item.strike === strike)?.delta;
-    return rowDelta ?? null;
-  });
+  }, [chain, spec.legs, assumptions]);
+  const modelIv = underlyingModelIv(chain);
+  const summary = structureDeltaSummary(
+    spec.legs.filter((leg): leg is typeof leg & { right: OptionRight; strike: number } => leg.right != null && leg.strike != null),
+    (right, strike) => {
+      const leg = spec.legs.find((item) => item.right === right && item.strike === strike);
+      const iv = leg?.ivOverride != null && leg.ivOverride > 0 ? leg.ivOverride : modelIv;
+      if (iv == null || !(iv > 0) || leg?.expiry == null) return null;
+      const years = calendarDaysBetween(chain.tradeDate, leg.expiry) / 365;
+      if (!(years > 1e-8)) return null;
+      return bsmGreeks({
+        right,
+        spot: chain.spot,
+        strike,
+        years,
+        rate: MODEL_RATE,
+        dividendYield: MODEL_DIVIDEND_YIELD,
+        vol: iv,
+      }).delta;
+    },
+  );
   const zebra = isZebra(row);
 
   return (
@@ -209,10 +233,22 @@ export function StructureCard({
         </select>
       </label>
 
-      {spec.legs.map((leg, index) => (
-        <div key={`${spec.id}-${index}`} className="mb-2 flex min-w-0 flex-wrap items-end gap-2">
+      {spec.legs.some((leg) => leg.instrument === "put" && leg.side === "short") ? (
+        <p className="mb-2 text-[11px] text-zinc-700 dark:text-zinc-300">
+          European model. A short put can be exercised early; this price does not include that.
+        </p>
+      ) : null}
+
+      {spec.legs.map((leg, index) =>
+        leg.instrument === "stock" || leg.right == null || leg.strike == null ? (
+          <p key={leg.id || index} className="mb-2 text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+            {legPhrase(leg)}
+            {leg.entry.price != null ? ` at ${usd(leg.entry.price, masked)}` : ""}
+          </p>
+        ) : (
+        <div key={leg.id || `${spec.id}-${index}`} className="mb-2 flex min-w-0 flex-wrap items-end gap-2">
           <StrikeSelect
-            label={`${leg.ratio > 0 ? "Long" : "Short"} ${Math.abs(leg.ratio)}× ${leg.right === "C" ? "call" : "put"}`}
+            label={legPhrase(leg)}
             ariaLabel={`${spec.label} leg ${index + 1} strike`}
             rows={boards.get(leg.right) ?? []}
             value={String(leg.strike)}
@@ -266,7 +302,8 @@ export function StructureCard({
             />
           </label>
         </div>
-      ))}
+        ),
+      )}
 
       {[...boards.entries()].map(([right, rows]) => (
         <DeltaMarkChips key={right} rows={rows} />
@@ -279,7 +316,7 @@ export function StructureCard({
           : ""}
       </p>
       <p className="mb-3 text-[11px] text-zinc-600 dark:text-zinc-300">
-        Model delta from the mid, rate, dividend yield, and spot. Approximate. Amber is nearest .75, cyan is nearest .50.
+        One average IV, rate 4%, no dividend. Quote IV stays on the leg. Amber is nearest .75, cyan is nearest .50.
       </p>
       {zebra ? (
         <div className="mb-3 flex flex-wrap items-end gap-2">
@@ -395,6 +432,9 @@ export function StructureCard({
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <Stat label="Debit" value={usd(row.debit, masked)} />
+          {row.parityDebit != null ? (
+            <Stat label="Quoted net" value={usd(row.quotedDebit, masked)} />
+          ) : null}
           <Stat label="Breakeven" value={row.risk.breakevens.map((b) => b.toFixed(2)).join(", ") || "—"} />
           <Stat label="Max loss" value={row.risk.maxLoss === "unbounded" ? "Unbounded" : usd(row.risk.maxLoss, masked)} />
           <Stat label="Max gain" value={row.risk.maxGain === "unbounded" ? "Uncapped" : usd(row.risk.maxGain, masked)} />

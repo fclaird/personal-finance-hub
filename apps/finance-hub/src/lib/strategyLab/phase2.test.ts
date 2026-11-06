@@ -99,15 +99,17 @@ describe("phase 2 templates", () => {
     );
   });
 
-  it("sizes the synthetic from the loss at spot 0 and waits on the strangle", () => {
+  it("sizes the synthetic on the parity debit and waits on the strangle", () => {
     const ev = evaluateLab(lab, chain);
     const synthetic = priced("Synthetic", ev);
     const strangle = priced("Strangle", ev);
-    assert.equal(synthetic.debit, 500);
-    assert.equal(expiryPnlAtSpot(synthetic.legs, synthetic.debit, 0), -14_500);
-    assert.equal(synthetic.risk.maxLoss, 14_500);
+    assert.equal(synthetic.quotedDebit, 500);
+    assert.ok(synthetic.parityDebit != null && synthetic.parityDebit > 0 && synthetic.parityDebit < 500);
+    assert.equal(synthetic.debit, synthetic.parityDebit);
+    assert.equal(synthetic.risk.slopeAbove, 100);
+    assert.ok(synthetic.greeks && Math.abs(synthetic.greeks.delta - 100) < 0.5);
     assert.equal(synthetic.sizing.status, "sized");
-    if (synthetic.sizing.status === "sized") assert.equal(synthetic.sizing.packages, 0);
+    if (synthetic.sizing.status === "sized") assert.ok(synthetic.sizing.packages > 0);
     assert.equal(strangle.risk.maxLoss, "unbounded");
     assert.equal(strangle.sizing.status, "needsCapitalOverride");
     assert.ok(ev.issues.some((issue) => issue.code === "needs-capital" && issue.structureId === strangle.spec.id));
@@ -271,9 +273,9 @@ describe("phase 2 csv", () => {
     );
     const syntheticLine = tableLines.find((row) => row.startsWith("Synthetic,"));
     const strangleLine = tableLines.find((row) => row.startsWith("Strangle,"));
-    assert.ok(syntheticLine?.includes("1C 140 / -1P 140,mid,500,"));
-    assert.ok(syntheticLine?.endsWith(",14500") || syntheticLine?.includes(",14500\n") || syntheticLine?.includes(",14500"));
-    assert.match(syntheticLine ?? "", /,14500,unbounded,0,/);
+    assert.ok(syntheticLine?.includes(`1C 140 / -1P 140,mid,${synthetic.debit},`));
+    assert.match(syntheticLine ?? "", /unbounded/);
+    assert.ok(synthetic.sizing.status === "sized" && synthetic.sizing.packages > 0);
     assert.match(strangleLine ?? "", /,unbounded,.*,4,0,/);
     assert.ok(strangleLine?.endsWith(",2500"));
   });

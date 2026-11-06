@@ -62,7 +62,7 @@ export type TileMetrics = {
   readonly returnOnDebit: number | null;
 };
 
-type Leg = { readonly right: OptionRight; readonly strike: number; readonly ratio: number };
+type Leg = { readonly right: OptionRight | null; readonly strike: number | null; readonly ratio: number };
 
 /** Option omega: (share-equivalent delta × stock price) / debit dollars. Blank when the debit is not positive or the delta is under one share. */
 export function positionLeverage(deltaShares: number, stockPrice: number, invested: number): number | null {
@@ -73,7 +73,9 @@ export function positionLeverage(deltaShares: number, stockPrice: number, invest
 
 /** Highest short call. That is the strike a debit spread or ZEBRA has to clear. */
 export function shortCallStrike(legs: readonly Leg[]): number | null {
-  const shorts = legs.filter((leg) => leg.right === "C" && leg.ratio < 0).map((leg) => leg.strike);
+  const shorts = legs
+    .filter((leg): leg is Leg & { strike: number } => leg.right === "C" && leg.ratio < 0 && leg.strike != null)
+    .map((leg) => leg.strike);
   if (shorts.length === 0) return null;
   return Math.max(...shorts);
 }

@@ -530,7 +530,7 @@ describe("structures with different expiries", () => {
       const iv = row.legs[0]?.iv;
       assert.ok(iv != null && years > 0);
       if (iv == null) throw new Error("unreachable");
-      return bsmGreeks({ right: "C", spot: 100, strike: 100, years, rate: 0, dividendYield: 0, vol: iv }).delta * 100;
+      return bsmGreeks({ right: "C", spot: 100, strike: 100, years, rate: 0.04, dividendYield: 0, vol: iv }).delta * 100;
     };
     const nearDelta = sampleStructureDelta(ev, nearRow.spec.id, today.id, 100, "shares", "delta");
     const farDelta = sampleStructureDelta(ev, farRow.spec.id, today.id, 100, "shares", "delta");

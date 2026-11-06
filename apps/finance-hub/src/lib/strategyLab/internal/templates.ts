@@ -58,7 +58,7 @@ export function resolveTemplate(
   assumptions: Assumptions,
 ): { readonly legs: ResolvedLeg[] } | { readonly error: string } {
   if (request.template === "custom") {
-    if (request.legs.length < 1 || request.legs.length > 6) return { error: "A structure has 1 to 6 legs." };
+    if (request.legs.length < 1 || request.legs.length > 8) return { error: "A structure has 1 to 8 legs." };
     const legs: ResolvedLeg[] = [];
     for (const leg of request.legs) {
       if (!Number.isInteger(leg.ratio) || leg.ratio === 0) return { error: "Leg ratios are nonzero whole numbers." };
@@ -76,6 +76,18 @@ export function resolveTemplate(
   }
 
   if (request.template === "syntheticLong") {
+    if (request.strike.by === "strike") {
+      const strike = request.strike.strike;
+      const callListed = listedStrikes(chain, expiry, "C").some((item) => Math.abs(item - strike) < 1e-6);
+      const putListed = listedStrikes(chain, expiry, "P").some((item) => Math.abs(item - strike) < 1e-6);
+      if (!callListed || !putListed) return { error: "The call and put did not land on the same strike." };
+      return {
+        legs: [
+          { right: "C", strike, ratio: 1 },
+          { right: "P", strike, ratio: -1 },
+        ],
+      };
+    }
     const call = resolveTarget(chain, expiry, "C", request.strike, assumptions, "lower");
     const put = resolveTarget(chain, expiry, "P", request.strike, assumptions, "lower");
     if (typeof call === "string") return { error: call };

@@ -329,7 +329,7 @@ export function StrategyPlot({
   const inY = (y: number) => y >= shown.yMin - 1e-6 && y <= shown.yMax + 1e-6;
   const strikeSpots =
     chrome.showStrikes || forceStrikes
-      ? [...new Set(marked.flatMap((row) => row.legs.map((leg) => leg.strike)))].filter(inX).sort((a, b) => a - b)
+      ? [...new Set(marked.flatMap((row) => row.legs.map((leg) => leg.strike)).filter((strike): strike is number => strike != null))].filter(inX).sort((a, b) => a - b)
       : [];
   const breakevens =
     annotate && chrome.showBreakevens

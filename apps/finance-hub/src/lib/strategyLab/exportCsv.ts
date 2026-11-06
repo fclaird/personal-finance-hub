@@ -30,7 +30,9 @@ export function evaluationCubeCsv(evaluation: LabEvaluation): string {
 }
 
 function legsText(structure: PricedStructure): string {
-  return structure.legs.map((leg) => `${leg.ratio}${leg.right} ${leg.strike}`).join(" / ");
+  return structure.legs
+    .map((leg) => (leg.instrument === "stock" ? `${leg.ratio} shares` : `${leg.ratio}${leg.right} ${leg.strike}`))
+    .join(" / ");
 }
 
 function entryText(structure: PricedStructure): string {

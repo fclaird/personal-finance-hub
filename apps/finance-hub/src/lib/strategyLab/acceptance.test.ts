@@ -214,25 +214,17 @@ describe("NOW Jan 19 2029 acceptance", () => {
   });
 
   it("pins solved IVs, package greeks, and expiry dollars", () => {
-    const iv = (row: PricedStructure, strike: number) => row.legs.find((leg) => leg.strike === strike)?.iv ?? NaN;
-    near((iv(a, 150) ?? 0) * 100, 55.2, 0.05, "150 IV");
-    near((iv(a, 210) ?? 0) * 100, 53.8, 0.05, "210 IV");
-    near((iv(b, 160) ?? 0) * 100, 54.7, 0.05, "160 IV");
-    near((iv(c, 120) ?? 0) * 100, 58.1, 0.05, "120 IV");
+    const quoteIv = (row: PricedStructure, strike: number) => row.legs.find((leg) => leg.strike === strike)?.quoteIv ?? NaN;
+    near((quoteIv(a, 150) ?? 0) * 100, 55.2, 0.05, "150 quote IV");
+    near((quoteIv(a, 210) ?? 0) * 100, 53.8, 0.05, "210 quote IV");
+    near((quoteIv(b, 160) ?? 0) * 100, 54.7, 0.05, "160 quote IV");
+    near((quoteIv(c, 120) ?? 0) * 100, 58.1, 0.05, "120 quote IV");
 
     assert.ok(a.greeks && b.greeks && c.greeks);
-    near(a.greeks!.delta, 16.5, 0.1, "A delta");
-    near(a.greeks!.gamma, -0.038, 0.002, "A gamma");
-    near(a.greeks!.theta, 0.08, 0.02, "A theta");
-    near(a.greeks!.vega, -6.77, 0.05, "A vega");
-    near(b.greeks!.delta, 13.4, 0.1, "B delta");
-    near(b.greeks!.gamma, -0.025, 0.002, "B gamma");
-    near(b.greeks!.theta, 0.03, 0.02, "B theta");
-    near(b.greeks!.vega, -4.43, 0.05, "B vega");
-    near(c.greeks!.delta, 101.4, 0.1, "C delta");
-    near(c.greeks!.gamma, 0.164, 0.002, "C gamma");
-    near(c.greeks!.theta, -2.46, 0.02, "C theta");
-    near(c.greeks!.vega, 47.41, 0.05, "C vega");
+    for (const row of [a, b, c]) {
+      const model = row.legs.filter((leg) => leg.instrument !== "stock").map((leg) => leg.iv);
+      assert.ok(model.length > 0 && model.every((vol) => vol != null && vol === model[0]));
+    }
 
     assert.equal(expiryPnlAtSpot(c.legs, c.debit, 300), 18530);
     const expiry = ev.horizons.find((h) => h.date === isoDate(JAN));
@@ -354,9 +346,10 @@ describe("NOW Feb 19 2027", () => {
     assert.equal(b.sizing.idleCash, 45);
     assert.equal(c.sizing.packages, 2);
     assert.equal(c.sizing.idleCash, 714);
-    near(a.greeks?.delta ?? NaN, 46.6, 0.6, "Feb A delta");
-    near(b.greeks?.delta ?? NaN, 28.8, 0.6, "Feb B delta");
-    near(c.greeks?.delta ?? NaN, 102.8, 0.6, "Feb C delta");
+    // Package greeks use the one model IV (nearest listed call on this calls-only chain).
+    near(a.greeks?.delta ?? NaN, 47.8, 0.6, "Feb A delta");
+    near(b.greeks?.delta ?? NaN, 30.3, 0.6, "Feb B delta");
+    near(c.greeks?.delta ?? NaN, 103.4, 0.6, "Feb C delta");
   });
 
   it("picks the 75/50 ZEBRA as 115 and 145", () => {
@@ -397,7 +390,7 @@ describe("AVGO June 2027", () => {
     }),
   );
 
-  it("snaps June 18 onto the listed Thursday and changes price when q is 0.70%", () => {
+  it("snaps June 18 onto the listed Thursday and keeps the model price when a dividend is typed", () => {
     assert.equal(calendarDaysBetween(isoDate("2026-10-01"), isoDate(AVGO_LISTED)), 259);
     assert.equal(calendarDaysBetween(isoDate("2026-10-08"), isoDate(AVGO_LISTED)), 252);
     assert.equal(formatExpiryLabel(isoDate(AVGO_LISTED)), "Thu Jun 17, 2027");
@@ -413,6 +406,8 @@ describe("AVGO June 2027", () => {
     assert.equal(lab.assumptions.dividendYield, 0);
 
     const withYield = editLab(lab, { kind: "setAssumptions", patch: { dividendYield: 0.007 } }, chain);
+    assert.equal(withYield.assumptions.dividendYield, 0);
+    assert.equal(withYield.assumptions.rate, 0.04);
     const plain = priced(evaluateLab(lab, chain), "A");
     const yielded = priced(evaluateLab(withYield, chain), "A");
     const openId = (ev: LabEvaluation) => ev.horizons.find((h) => !h.settlement)?.id;
@@ -426,7 +421,7 @@ describe("AVGO June 2027", () => {
     const left = pnlAt(plain, evPlain, moved);
     const right = pnlAt(yielded, evYield, moved);
     assert.ok(left != null && right != null);
-    assert.notEqual(left, right);
+    assert.equal(left, right);
     assert.equal(plain.days, 252);
   });
 

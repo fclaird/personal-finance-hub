@@ -1,6 +1,7 @@
 import { calendarDaysBetween, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
 import type { Assumptions, LabEvaluation } from "@/lib/strategyLab/lab";
 import { packageShareDelta } from "@/lib/strategyLab/internal/pricing";
+import { MODEL_DIVIDEND_YIELD, MODEL_RATE } from "@/lib/strategyLab/modelAssumptions";
 import { FLAT_DELTA_SHARES, positionLeverage } from "@/lib/strategyLab/targetMetrics";
 
 export type DeltaScale = "shares" | "package" | "pct";
@@ -118,10 +119,16 @@ export function sampleStructureDelta(
   if (!sized) return null;
   const years = yearsToHorizon(sized.row.spec.expiry, evaluation, horizonId);
   if (years == null) return null;
+  const optionLegs = sized.row.legs.filter(
+    (leg): leg is typeof leg & { right: OptionRight; strike: number } =>
+      leg.instrument !== "stock" && leg.right != null && leg.strike != null,
+  );
+  const stockShares = sized.row.legs.filter((leg) => leg.instrument === "stock").reduce((sum, leg) => sum + leg.ratio, 0);
   const shares = positionShareDelta({
-    legs: sized.row.legs,
+    legs: optionLegs,
+    stockSharesPerPackage: stockShares,
     packages: sized.packages,
-    assumptions: evaluation.assumptions,
+    assumptions: { ...evaluation.assumptions, rate: MODEL_RATE, dividendYield: MODEL_DIVIDEND_YIELD },
     spot,
     years,
   });
