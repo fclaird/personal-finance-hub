@@ -49,7 +49,7 @@ export function ScenarioBar({
   }
 
   return (
-    <section className="flex flex-wrap items-end gap-2 rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
+    <section className="box-border flex min-w-0 max-w-full flex-wrap items-end gap-2 rounded-xl border border-zinc-600 bg-zinc-950 p-3 text-zinc-100">
       <label className={labLabel}>
         Scenario name
         <input

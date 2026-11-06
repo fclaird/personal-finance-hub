@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { usePrivacy } from "@/app/components/PrivacyProvider";
 import { ChainGrid } from "@/app/components/strategyLab/ChainGrid";
@@ -8,9 +8,10 @@ import { LabCharts } from "@/app/components/strategyLab/LabCharts";
 import { ExpirySummary } from "@/app/components/strategyLab/ExpirySummary";
 import { ScenarioBar } from "@/app/components/strategyLab/ScenarioBar";
 import { DeltaMarkChips, StrikeSelect } from "@/app/components/strategyLab/StrikeSelect";
-import { StructureCard } from "@/app/components/strategyLab/StructureCard";
+import { TargetSection } from "@/app/components/strategyLab/TargetBoard";
+import { DEFAULT_LEVERAGE_BASIS, type LeverageBasis } from "@/lib/strategyLab/targetMetrics";
 import { formatExpiryLabel, isoDate, listedStrikes, nearestStrike, type IsoDate, type OptionRight } from "@/lib/optionChain/chain";
-import { bestWhenFor, TEMPLATE_CATALOG, type HorizonSpec, type TemplateRequest } from "@/lib/strategyLab/lab";
+import { LAB_LIMITS, TEMPLATE_CATALOG, type HorizonSpec, type TemplateRequest } from "@/lib/strategyLab/lab";
 import { formatModelDelta, nearestDeltaStrike, strikeDeltas } from "@/lib/strategyLab/strikeDelta";
 import { labCard, labControl, labLabel } from "@/lib/strategyLab/palette";
 import { useStrategyLab } from "@/lib/strategyLab/useStrategyLab";
@@ -175,11 +176,19 @@ export function StrategyLabPage() {
   const [shortStrike, setShortStrike] = useState("");
   const [limit, setLimit] = useState("");
   const [capitalDraft, setCapitalDraft] = useState("10000");
+  const [targetHorizon, setTargetHorizon] = useState("expiry");
+  const [targetText, setTargetText] = useState("");
+  const [leverageBasis, setLeverageBasis] = useState<LeverageBasis>(DEFAULT_LEVERAGE_BASIS);
   const [whatIf, setWhatIf] = useState<{ symbol: string; spot: number } | null>(null);
   const [customDate, setCustomDate] = useState("");
   const [customMonths, setCustomMonths] = useState("9");
   const [longDeltaTarget, setLongDeltaTarget] = useState("75");
   const [shortDeltaTarget, setShortDeltaTarget] = useState("50");
+  const [deltaPlotted, setDeltaPlotted] = useState<readonly string[] | null>(null);
+  const toggleDelta = useRef<(id: string) => void>(() => {});
+  const bindDeltaToggle = useCallback((toggle: (id: string) => void) => {
+    toggleDelta.current = toggle;
+  }, []);
 
   const expiry = (expiryPick || chain?.expiries.at(-1)?.date || "") as IsoDate | "";
   const callStrikes = useMemo(() => {
@@ -283,7 +292,7 @@ export function StrategyLabPage() {
       edit({ kind: "addLeg", id: open.id, right, strike, ratio });
       return;
     }
-    if (lab.structures.length >= 4) return;
+    if (lab.structures.length >= LAB_LIMITS.structures) return;
     edit({
       kind: "addStructure",
       expiry: expiryDate,
@@ -293,7 +302,7 @@ export function StrategyLabPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6">
+    <div className="mx-auto box-border flex w-full min-w-0 max-w-6xl flex-col gap-6 overflow-x-clip px-4 py-6 sm:px-6 [&>*]:box-border [&>*]:min-w-0 [&>*]:max-w-full">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Strategy Lab</h1>
@@ -410,30 +419,47 @@ export function StrategyLabPage() {
               <span className="mt-1 flex gap-2">
                 <select
                   aria-label="Capital units"
-                  value={lab.basis.kind === "perPackage" ? "package" : lab.basis.units}
+                  value={lab.basis.kind === "matchExpensive" ? "match" : lab.basis.kind === "perPackage" ? "package" : lab.basis.units}
                   onChange={(e) => {
                     const value = e.target.value;
-                    if (value === "package") edit({ kind: "setBasis", basis: { kind: "perPackage" } });
+                    if (value === "match") edit({ kind: "setBasis", basis: { kind: "matchExpensive" } });
+                    else if (value === "package") edit({ kind: "setBasis", basis: { kind: "perPackage" } });
                     else
                       edit({
                         kind: "setBasis",
-                        basis: { kind: "equalCapital", capital, units: value === "fractional" ? "fractional" : "whole" },
+                        basis: {
+                          kind: "equalCapital",
+                          capital: evaluation.match?.capital ?? capital,
+                          units: value === "fractional" ? "fractional" : "whole",
+                        },
                       });
                   }}
                   className="w-full rounded border border-zinc-400 bg-white text-zinc-950 dark:border-zinc-400 dark:bg-zinc-900 dark:text-zinc-50 dark:[color-scheme:dark] px-2 py-1.5 text-sm"
                 >
+                  <option value="match">Match most expensive</option>
+                  <option value="fractional">Manual dollars</option>
                   <option value="whole">Whole contracts</option>
-                  <option value="fractional">Fractional</option>
                   <option value="package">Per package</option>
                 </select>
                 <input
                   aria-label="Capital dollars"
                   type="number"
-                  value={lab.basis.kind === "equalCapital" ? lab.basis.capital : capitalDraft}
+                  readOnly={lab.basis.kind === "matchExpensive"}
+                  value={
+                    lab.basis.kind === "equalCapital"
+                      ? lab.basis.capital
+                      : lab.basis.kind === "matchExpensive"
+                        ? (evaluation.match?.capital ?? "")
+                        : capitalDraft
+                  }
                   onChange={(e) => {
+                    if (lab.basis.kind !== "equalCapital") {
+                      setCapitalDraft(e.target.value);
+                      return;
+                    }
                     setCapitalDraft(e.target.value);
                     const next = Number(e.target.value);
-                    if (lab.basis.kind === "equalCapital" && Number.isFinite(next) && next > 0) {
+                    if (Number.isFinite(next) && next > 0) {
                       edit({ kind: "setBasis", basis: { kind: "equalCapital", capital: next, units: lab.basis.units } });
                     }
                   }}
@@ -544,7 +570,7 @@ export function StrategyLabPage() {
               <button
                 type="button"
                 onClick={addStructure}
-                disabled={lab.structures.length >= 4}
+                disabled={lab.structures.length >= LAB_LIMITS.structures}
                 className="rounded bg-zinc-950 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-black"
               >
                 Add
@@ -597,21 +623,23 @@ export function StrategyLabPage() {
 
           <ChainGrid chain={chain} assumptions={lab.assumptions} onAddLeg={addChainLeg} />
 
-          <div className="grid gap-4 lg:grid-cols-3">
-            {evaluation.structures.map((row) => (
-              <StructureCard
-                key={row.spec.id}
-                chain={chain}
-                assumptions={lab.assumptions}
-                row={row}
-                masked={privacy.masked}
-                bestWhen={bestWhenFor(evaluation.expiryBoards, row.spec.id)}
-                onEdit={edit}
-              />
-            ))}
-          </div>
+          <TargetSection
+            evaluation={evaluation}
+            chain={chain}
+            assumptions={lab.assumptions}
+            horizonId={evaluation.horizons.some((horizon) => horizon.id === targetHorizon) ? targetHorizon : "expiry"}
+            onHorizon={setTargetHorizon}
+            targetText={targetText}
+            onTargetText={setTargetText}
+            leverageBasis={leverageBasis}
+            onLeverageBasis={setLeverageBasis}
+            masked={privacy.masked}
+            plotted={(id) => deltaPlotted == null || deltaPlotted.includes(id)}
+            onPlot={(id) => toggleDelta.current(id)}
+            onEdit={edit}
+          />
 
-          <div id="charts" className="space-y-4">
+          <div id="charts" className="box-border w-full min-w-0 max-w-full space-y-4">
             <ExpirySummary
               evaluation={evaluation}
               masked={privacy.masked}
@@ -625,6 +653,8 @@ export function StrategyLabPage() {
               masked={privacy.masked}
               whatIfSpot={whatIf && whatIf.symbol === chain.symbol ? whatIf.spot : chain.spot}
               onEdit={edit}
+              onDeltaPlot={setDeltaPlotted}
+              bindDeltaToggle={bindDeltaToggle}
             />
           </div>
         </>

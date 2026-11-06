@@ -362,9 +362,22 @@ export function solveSampledCrossovers(series: readonly SampledSeries[]): Expiry
   return out;
 }
 
-export function basisMetric(basis: { kind: "perPackage" } | { kind: "equalCapital"; capital: number; units: "whole" | "fractional" }): string {
+export function basisMetric(
+  basis:
+    | { kind: "perPackage" }
+    | { kind: "equalCapital"; capital: number; units: "whole" | "fractional" }
+    | { kind: "matchExpensive" },
+  match?: { capital: number; label: string } | null,
+): string {
   if (basis.kind === "perPackage") return "P&L per package";
-  const dollars = `$${Math.round(basis.capital).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`;
+  if (basis.kind === "matchExpensive") {
+    if (match == null) return "P&L sized to the most expensive package";
+    return `P&L on ${plainDollars(match.capital)}, sized to match the ${match.label}`;
+  }
   const units = basis.units === "whole" ? "whole contracts, idle cash earns 0" : "fractional contracts, idle cash earns 0";
-  return `P&L on ${dollars}, ${units}`;
+  return `P&L on ${plainDollars(basis.capital)}, ${units}`;
+}
+
+function plainDollars(amount: number): string {
+  return `$${Math.round(amount).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`;
 }

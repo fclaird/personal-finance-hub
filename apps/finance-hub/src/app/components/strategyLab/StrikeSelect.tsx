@@ -25,13 +25,13 @@ export function StrikeSelect({
 }) {
   const marks = deltaHighlights(rows);
   return (
-    <label className={`min-w-0 flex-1 ${labLabel}`}>
+    <label className={`min-w-0 max-w-full flex-1 basis-36 ${labLabel}`}>
       {label}
       <select
         aria-label={ariaLabel}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
-        className={`mt-1 block w-full min-w-44 px-2 py-1.5 text-sm tabular-nums ${labControl}`}
+        className={`mt-1 block w-full min-w-0 max-w-full px-2 py-1.5 text-sm tabular-nums ${labControl}`}
       >
         {rows.map((row) => {
           const highlight = highlightFor(row.strike, marks);
