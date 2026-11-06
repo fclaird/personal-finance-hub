@@ -89,6 +89,10 @@ describe("nav and route guards", () => {
     assert.equal(isPathAllowedForFlavor("/earnings", "rorie"), false);
     assert.equal(isPathAllowedForFlavor("/earnings", "peyton"), false);
     assert.equal(isPathAllowedForFlavor("/earnings", "main"), true);
+    assert.equal(isPathAllowedForFlavor("/events", "main"), true);
+    assert.equal(isPathAllowedForFlavor("/events", "rorie"), false);
+    assert.equal(isPathAllowedForFlavor("/monitor", "main"), true);
+    assert.equal(isPathAllowedForFlavor("/monitor", "peyton"), false);
     assert.equal(isPathAllowedForFlavor("/strategies/all", "rorie"), false);
     assert.equal(isPathAllowedForFlavor("/strategies/all", "peyton"), false);
     assert.equal(isPathAllowedForFlavor("/posterity", "peyton"), false);

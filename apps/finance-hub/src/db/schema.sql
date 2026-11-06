@@ -123,6 +123,29 @@ CREATE TABLE IF NOT EXISTS alert_rules (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS watchlists (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS watchlist_items (
+  watchlist_id TEXT NOT NULL REFERENCES watchlists(id) ON DELETE CASCADE,
+  symbol TEXT NOT NULL COLLATE NOCASE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (watchlist_id, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS watch_alerts (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  symbol TEXT NOT NULL COLLATE NOCASE,
+  config_json TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS alert_events (
   id TEXT PRIMARY KEY,
   rule_id TEXT NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,

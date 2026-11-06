@@ -49,10 +49,12 @@ const MAIN_NAV: SidebarNavItem[] = [
   { href: "/diversification", label: "Diversification" },
   { href: "/real-estate", label: "Real Estate" },
   { href: "/earnings", label: "Earnings" },
+  { href: "/events", label: "Events" },
   { href: "/performance", label: "Performance" },
   { href: "/reports", label: "Realized gain/loss", prefix: "/reports" },
   { href: "/dividends", label: "Dividends" },
   { href: "/rebalancing", label: "Rebalancing" },
+  { href: "/monitor", label: "Watchlist" },
   { href: "/alerts", label: "Alerts" },
   { href: "/posterity", label: "Posterity" },
 ];
