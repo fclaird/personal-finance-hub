@@ -7,11 +7,31 @@ import Database from "better-sqlite3";
 import {
   carryForwardExternalAccountDailyTotals,
   getGlanceAlignedPortfolioValueSeriesByBucket,
+  mainBookSnapshotRows,
   mergeGlanceAlignedDailyTotals,
   mergeMissingSnapshotDays,
   nextUsWeekdayOnOrAfterIso,
   resolvePerformanceTrackingBaselineYmd,
 } from "@/lib/analytics/glanceAlignedPerformance";
+
+test("dedicated flavors do not backfill main-book weekly snapshots", () => {
+  const mainFridays = [{ snapshot_date: "2024-01-05", total_value: 1_500_000 }];
+  const peyton = [{ asOf: "2025-06-02T20:00:00.000Z", totalMarketValue: 40_000 }];
+  const merged = mergeMissingSnapshotDays(peyton, mainBookSnapshotRows("peyton", mainFridays));
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]!.totalMarketValue, 40_000);
+
+  const rorie = mergeMissingSnapshotDays(peyton, mainBookSnapshotRows("rorie", mainFridays));
+  assert.equal(rorie.length, 1);
+
+  const main = mergeMissingSnapshotDays(
+    [{ asOf: "2025-06-02T20:00:00.000Z", totalMarketValue: 2_000_000 }],
+    mainBookSnapshotRows("main", mainFridays),
+  );
+  assert.equal(main.length, 2);
+  assert.equal(main[0]!.totalMarketValue, 1_500_000);
+  assert.equal(main[1]!.totalMarketValue, 2_000_000);
+});
 
 test("mergeMissingSnapshotDays fills days that liquidation series skipped", () => {
   const merged = mergeMissingSnapshotDays(
