@@ -26,15 +26,15 @@ export const PEAK_LEVERAGE_HINT =
   "Peak leverage is the highest value of that same ratio anywhere on today's price curve, and the stock price where it happens. The curve uses today's date, with time still left until expiry. It does not use the settled share count at expiration, and it does not divide a future share count by today's debit.";
 
 export const MAX_PROFIT_HINT =
-  "Max profit is the most the structure can make at expiry, divided by the debit you paid. A long call has no cap, so this reads Uncapped.";
+  "Max profit is the most the structure can make at expiry, divided by the debit you paid. A long call has no cap, so this reads Uncapped. A credit divides that profit by the package cost, the cash at risk, and that ratio is a return on risk.";
 
 export const RETURN_ON_DEBIT_HINT =
-  "Return on debit is the profit or loss at the target price and date, divided by the debit you paid. A loss is a negative multiple.";
+  "Return on debit is the profit or loss at the target price and date, divided by the debit you paid. A credit divides by the package cost instead, and the card labels that return on risk. A loss is a negative multiple. This is not leverage.";
 
 export const DELTA_AT_SHORT_HINT =
   "This is a share count, not leverage. It is the model delta if the stock is at the short strike on the date you picked. On an expiry date a capped spread is about 0 shares once that strike is reached, and the line also shows the long-leg share count just inside the strike. Nothing here is divided by the debit.";
 
-export type TargetSource = "short-call" | "override";
+export type TargetSource = "short-call" | "short-put" | "override";
 
 export type TargetRead = {
   readonly target: number;
@@ -58,8 +58,10 @@ export type TileMetrics = {
   /** Max profit dollars divided by debit dollars. Null when the gain is uncapped or there is no debit. */
   readonly maxProfitMultiple: number | null;
   readonly maxProfitUnbounded: boolean;
-  /** P&L at the target price and date, divided by the debit. */
+  /** P&L at the target price and date, divided by the debit, or by package cost when the trade is a credit. */
   readonly returnOnDebit: number | null;
+  /** Debit when cash was paid. Risk when the denominator is the package cost. */
+  readonly returnBasis: "debit" | "risk";
 };
 
 type Leg = { readonly right: OptionRight | null; readonly strike: number | null; readonly ratio: number };
@@ -78,6 +80,19 @@ export function shortCallStrike(legs: readonly Leg[]): number | null {
     .map((leg) => leg.strike);
   if (shorts.length === 0) return null;
   return Math.max(...shorts);
+}
+
+/**
+ * Short strike of a call vertical or a put vertical.
+ * A straddle or strangle shorts both rights, so it has no single target strike.
+ */
+export function targetStrike(legs: readonly Leg[]): number | null {
+  const calls = legs.filter((leg) => leg.right === "C" && leg.ratio < 0 && leg.strike != null);
+  const puts = legs.filter((leg) => leg.right === "P" && leg.ratio < 0 && leg.strike != null);
+  if (calls.length > 0 && puts.length > 0) return null;
+  if (calls.length > 0) return shortCallStrike(legs);
+  if (puts.length === 1) return puts[0]!.strike;
+  return null;
 }
 
 export function formatLeverage(value: number | null): string {
@@ -127,6 +142,13 @@ export function debitDollars(row: PricedStructure): number | null {
   return row.debit * row.sizing.packages;
 }
 
+/** Package-cost dollars. Credits use this as the return denominator. Omega does not. */
+export function riskDollars(row: PricedStructure): number | null {
+  if (row.sizing.status === "needsCapitalOverride") return null;
+  if (row.packageCost == null || !(row.packageCost > 0) || !(row.sizing.packages > 0)) return null;
+  return row.packageCost * row.sizing.packages;
+}
+
 export function tileMetrics(input: {
   row: PricedStructure;
   assumptions: Assumptions;
@@ -139,6 +161,9 @@ export function tileMetrics(input: {
   if (row.sizing.status === "needsCapitalOverride") return null;
   const { packages } = row.sizing;
   const debit = debitDollars(row);
+  const risk = riskDollars(row);
+  const basis = debit ?? risk;
+  const returnBasis = debit != null ? "debit" : "risk";
   const deltaNow = row.greeks == null ? null : row.greeks.delta * packages;
   const leverageNow = debit == null || deltaNow == null ? null : positionLeverage(deltaNow, input.spot, debit);
   const days = calendarDaysBetween(input.entryDate, row.spec.expiry);
@@ -157,8 +182,8 @@ export function tileMetrics(input: {
         });
   const maxProfitUnbounded = row.risk.maxGain === "unbounded";
   const maxProfitMultiple =
-    maxProfitUnbounded || debit == null || typeof row.risk.maxGain !== "number" ? null : (row.risk.maxGain * packages) / debit;
-  const returnOnDebit = input.target?.pnl == null || debit == null ? null : input.target.pnl / debit;
+    maxProfitUnbounded || basis == null || typeof row.risk.maxGain !== "number" ? null : (row.risk.maxGain * packages) / basis;
+  const returnOnDebit = input.target?.pnl == null || basis == null ? null : input.target.pnl / basis;
   return {
     leverageNow,
     peakLeverage: peak?.omega ?? null,
@@ -166,6 +191,7 @@ export function tileMetrics(input: {
     maxProfitMultiple,
     maxProfitUnbounded,
     returnOnDebit,
+    returnBasis,
   };
 }
 
@@ -179,10 +205,12 @@ export function readTarget(input: {
 }): TargetRead | null {
   const { row, assumptions, chain, date } = input;
   if (row.sizing.status === "needsCapitalOverride") return null;
-  const short = shortCallStrike(row.legs);
+  const callShort = shortCallStrike(row.legs);
+  const strike = targetStrike(row.legs);
   const override = input.targetSpot != null && input.targetSpot > 0 ? input.targetSpot : null;
-  const target = override ?? short;
+  const target = override ?? strike;
   if (target == null) return null;
+  const short = callShort;
   const settled = calendarDaysBetween(date, row.spec.expiry) <= 0;
   const years = settled ? 0 : calendarDaysBetween(date, row.spec.expiry) / 365;
   const packageDelta = packageShareDelta(row.legs, assumptions, target, years);
@@ -200,7 +228,7 @@ export function readTarget(input: {
   const multiple = pnl == null || !(invested > 0) ? null : (invested + pnl) / invested;
   return {
     target,
-    source: override == null ? "short-call" : "override",
+    source: override != null ? "override" : callShort != null ? "short-call" : "short-put",
     settled,
     packageDelta,
     positionDelta,
