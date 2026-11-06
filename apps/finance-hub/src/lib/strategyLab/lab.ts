@@ -27,9 +27,9 @@ import {
 } from "@/lib/strategyLab/internal/pricing";
 
 export type { Assumptions };
-import { assignLegIds, legEntry, optionLeg, parityPackageDebit, syntheticShape, type Leg } from "@/lib/strategyLab/legs";
+import { assignLegIds, legEntry, optionLeg, parityPackageDebit, stockLeg, syntheticShape, type Leg } from "@/lib/strategyLab/legs";
 import { MODEL_DIVIDEND_YIELD, MODEL_RATE, underlyingModelIv } from "@/lib/strategyLab/modelAssumptions";
-import { resolveTemplate, TEMPLATE_CATALOG, type TemplateRequest } from "@/lib/strategyLab/internal/templates";
+import { catalogRequest, resolveTemplate, TEMPLATE_CATALOG, type TemplateId, type TemplateRequest } from "@/lib/strategyLab/internal/templates";
 import {
   basisMetric,
   bestWhenLine,
@@ -48,7 +48,8 @@ import {
 export { basisMetric, bestWhenLine, crossoverText, describeSpotCallout, describeZone, zoneContaining, zoneOutcome };
 export type { ExpiryCrossover, ExpiryZone };
 
-export { TEMPLATE_CATALOG };
+export { catalogRequest, TEMPLATE_CATALOG };
+export type { TemplateId };
 export {
   deltaHighlights,
   formatModelDelta,
@@ -275,7 +276,13 @@ function withLegs(chain: OptionChain, lab: LabScenario, spec: StructureSpec, req
   return {
     ...spec,
     expiry,
-    legs: assignLegIds(resolved.legs.map((leg) => optionLeg({ right: leg.right, strike: leg.strike, ratio: leg.ratio, expiry, entry: legEntry(spec.entry.kind) }))),
+    legs: assignLegIds(
+      resolved.legs.map((leg) =>
+        leg.stock || leg.right == null || leg.strike == null
+          ? stockLeg(leg.ratio, chain.spot)
+          : optionLeg({ right: leg.right, strike: leg.strike, ratio: leg.ratio, expiry: leg.expiry ?? expiry, entry: legEntry(spec.entry.kind) }),
+      ),
+    ),
     origin: { request, tracking },
     resolveError: null,
   };

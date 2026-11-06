@@ -57,31 +57,79 @@ function parseRight(raw: unknown): OptionRight | null {
 }
 
 function parseTemplate(raw: unknown): TemplateRequest | null {
-  if (!isRecord(raw)) return null;
-  if (raw.template === "longCall" || raw.template === "syntheticLong") {
-    const strike = parseTarget(raw.strike);
-    return strike ? { template: raw.template, strike } : null;
-  }
-  if (raw.template === "shortStrangle") {
-    const put = parseTarget(raw.put);
-    const call = parseTarget(raw.call);
-    return put && call ? { template: "shortStrangle", put, call } : null;
-  }
-  if (raw.template === "callDebitSpread" || raw.template === "zebra") {
+  if (!isRecord(raw) || typeof raw.template !== "string") return null;
+  const template = raw.template === "callDebitSpread" ? "callDebitSpread" : raw.template;
+  const strike = () => parseTarget(raw.strike);
+  const pair = () => {
     const long = parseTarget(raw.long);
     const short = parseTarget(raw.short);
-    return long && short ? { template: raw.template, long, short } : null;
+    return long && short ? { long, short } : null;
+  };
+  const wings = () => {
+    const put = parseTarget(raw.put);
+    const call = parseTarget(raw.call);
+    return put && call ? { put, call } : null;
+  };
+  if (
+    template === "longCall" ||
+    template === "longPut" ||
+    template === "cashSecuredPut" ||
+    template === "syntheticLong" ||
+    template === "syntheticShort" ||
+    template === "longStraddle" ||
+    template === "shortStraddle"
+  ) {
+    const picked = strike();
+    return picked ? { template, strike: picked } : null;
   }
-  if (raw.template === "custom") {
+  if (template === "callDebit" || template === "callDebitSpread" || template === "putDebit" || template === "callCredit" || template === "putCredit" || template === "zebra") {
+    const picked = pair();
+    return picked ? { template, ...picked } : null;
+  }
+  if (template === "longStrangle" || template === "shortStrangle" || template === "riskReversal" || template === "collar") {
+    const picked = wings();
+    return picked ? { template, ...picked } : null;
+  }
+  if (template === "coveredCall") {
+    const call = parseTarget(raw.call);
+    return call ? { template: "coveredCall", call } : null;
+  }
+  if (template === "ironCondor") {
+    const putLong = parseTarget(raw.putLong);
+    const putShort = parseTarget(raw.putShort);
+    const callShort = parseTarget(raw.callShort);
+    const callLong = parseTarget(raw.callLong);
+    return putLong && putShort && callShort && callLong ? { template, putLong, putShort, callShort, callLong } : null;
+  }
+  if (template === "ironButterfly" || template === "callButterfly" || template === "putButterfly") {
+    const low = parseTarget(raw.low);
+    const body = parseTarget(raw.body);
+    const high = parseTarget(raw.high);
+    return low && body && high ? { template, low, body, high } : null;
+  }
+  if (template === "calendar") {
+    const right = parseRight(raw.right);
+    const front = dateOf(raw.front);
+    const picked = strike();
+    return right && front && picked ? { template, right, front, strike: picked } : null;
+  }
+  if (template === "diagonal") {
+    const right = parseRight(raw.right);
+    const front = dateOf(raw.front);
+    const frontStrike = parseTarget(raw.frontStrike);
+    const backStrike = parseTarget(raw.backStrike);
+    return right && front && frontStrike && backStrike ? { template, right, front, frontStrike, backStrike } : null;
+  }
+  if (template === "custom") {
     if (!Array.isArray(raw.legs) || raw.legs.length < 1 || raw.legs.length > 8) return null;
     const legs: { right: OptionRight; strike: number; ratio: number }[] = [];
     for (const leg of raw.legs) {
       if (!isRecord(leg)) return null;
       const right = parseRight(leg.right);
-      const strike = finite(leg.strike);
+      const legStrike = finite(leg.strike);
       const ratio = parseRatio(leg.ratio);
-      if (!right || strike == null || !(strike > 0) || ratio == null) return null;
-      legs.push({ right, strike, ratio });
+      if (!right || legStrike == null || !(legStrike > 0) || ratio == null) return null;
+      legs.push({ right, strike: legStrike, ratio });
     }
     return { template: "custom", legs };
   }
