@@ -1,5 +1,5 @@
 import type { MarketNode, MarketState, Snapshot } from "@/lib/fortress/types";
-import { DEFAULT_MARGIN } from "@/lib/fortress/types";
+import { DEFAULT_MARGIN, RECORDED_BOOK } from "@/lib/fortress/types";
 
 /** Synthetic long stock and debit. Not a household portfolio and not a broker margin schedule. */
 export function syntheticMarginFixture(): { snapshot: Snapshot; market: MarketState; path: MarketNode[] } {
@@ -10,6 +10,7 @@ export function syntheticMarginFixture(): { snapshot: Snapshot; market: MarketSt
     asOf: "2026-11-06",
     seed: 7,
     scope: { regime: "synthetic", label: "Synthetic 1,000 shares of SYN at 100, debit 40,000." },
+    completeness: RECORDED_BOOK,
     vintages: { quotes: "synthetic-fixture", model: "fortress-ledger-1", rules: "manual-margin-1" },
     positions: [{ id: "syn", kind: "equity", symbol: "SYN", accountId: "primary", quantity: 1000, mark: 100, averageCost: 100 }],
     cash: [{ id: "cash", accountId: "primary", amount: 0 }],

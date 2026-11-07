@@ -97,6 +97,27 @@ export type MarginRules = {
   readonly provenance: "manual-assumption";
 };
 
+/**
+ * What was actually recorded. A missing piece blocks a pass.
+ * Share-count import is not a complete book.
+ */
+export type Completeness = {
+  readonly cash: "recorded" | "missing";
+  readonly debt: "recorded" | "missing";
+  readonly contracts: "recorded" | "share-count-only";
+  readonly quotes: "recorded" | "stale" | "missing";
+  /** explicit-zero: no cash dividend and pricing yield is 0. discrete: cash dividends only, pricing yield stays 0. */
+  readonly dividends: "explicit-zero" | "discrete" | "missing";
+};
+
+export const RECORDED_BOOK: Completeness = {
+  cash: "recorded",
+  debt: "recorded",
+  contracts: "recorded",
+  quotes: "recorded",
+  dividends: "explicit-zero",
+};
+
 export type Snapshot = {
   readonly id: string;
   readonly version: 1;
@@ -104,6 +125,7 @@ export type Snapshot = {
   readonly asOf: IsoDate;
   readonly seed: number;
   readonly scope: { readonly regime: "synthetic" | "imported"; readonly label: string };
+  readonly completeness: Completeness;
   readonly vintages: { readonly quotes: string; readonly model: string; readonly rules: string };
   readonly positions: readonly Position[];
   readonly cash: readonly CashLine[];

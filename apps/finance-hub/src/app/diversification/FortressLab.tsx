@@ -139,13 +139,16 @@ export function FortressLab() {
       setSnapshot({
         ...fixture.snapshot,
         id: "imported-copy",
-        scope: { regime: "imported", label: "Read-only copy of share counts. Option strikes were not in the exposure rollup." },
+        scope: { regime: "imported", label: "Share-count copy only. This is not the actual book." },
+        completeness: { cash: "missing", debt: "missing", contracts: "share-count-only", quotes: "missing", dividends: "missing" },
         positions,
+        cash: [],
         debt: [],
+        vintages: { quotes: "missing", model: FORTRESS_MODEL_VERSION, rules: FORTRESS_RULE_VERSION },
       });
       setChanges([]);
       setResult(null);
-      setImportNote(`${positions.length} share lines copied. Shorts and option contracts are not in this copy.`);
+      setImportNote(`${positions.length} share lines copied. Cash, debt, and option contracts were not imported. This is not the actual book, and a comparison cannot pass.`);
     } catch {
       if (isCurrentRun(id, run.current)) setImportNote("The exposure read failed. Nothing was written.");
     }
@@ -251,9 +254,28 @@ export function FortressLab() {
           </li>
         ))}
       </ul>
-      <p className="mt-3 text-sm font-semibold text-zinc-50" data-fortress-note="">
+      <p className="mt-3 text-sm font-semibold text-zinc-50" data-fortress-note="" data-fortress-verdict={result?.verdict.kind ?? "none"}>
         {note}
       </p>
+      <dl className="mt-3 grid gap-2 text-sm text-zinc-100 sm:grid-cols-3" data-ledger="">
+        <div>
+          <dt className="text-xs text-zinc-300">Settled cash</dt>
+          <dd className="tabular-nums" data-ledger-cash="">{(result?.after ?? snapshot).cash.reduce((sum, row) => sum + row.amount, 0).toLocaleString("en-US")}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-zinc-300">Debt principal</dt>
+          <dd className="tabular-nums" data-ledger-debt="">{(result?.after ?? snapshot).debt.reduce((sum, row) => sum + row.principal, 0).toLocaleString("en-US")}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-zinc-300">Economic NAV</dt>
+          <dd className="tabular-nums" data-ledger-nav="">{result ? show(result.rows.find((row) => row.id === "nav")?.after ?? null, "USD") : "not run"}</dd>
+        </div>
+      </dl>
+      {snapshot.completeness.contracts !== "recorded" ? (
+        <p className="mt-2 text-sm text-amber-200" data-import-incomplete="">
+          Share-count copy. Cash, debt, and option contracts are missing, so this is not the actual book.
+        </p>
+      ) : null}
       {result ? (
         <>
           <div className="mt-4 overflow-x-auto">
@@ -275,7 +297,7 @@ export function FortressLab() {
                     <td className="py-1 pr-3 tabular-nums">{show(row.before, row.unit)}</td>
                     <td className="py-1 pr-3 tabular-nums">{show(row.after, row.unit)}</td>
                     <td className="py-1 pr-3 tabular-nums">{show(row.diff, row.unit)}</td>
-                    <td className="py-1">{row.status}</td>
+                    <td className="py-1 text-zinc-100" data-status={row.status}>{row.status}</td>
                   </tr>
                 ))}
               </tbody>

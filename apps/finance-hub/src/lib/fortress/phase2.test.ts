@@ -5,7 +5,7 @@ import { evaluateFortress, recoveryLabel, unitizedDrawdown } from "@/lib/fortres
 import { gammaPnl, nWeight, signedNavWeight } from "@/lib/fortress/exposure";
 import { criticalLongValue, declineToCritical } from "@/lib/fortress/margin";
 import type { MarketNode, MarketState, OptionContract, Snapshot } from "@/lib/fortress/types";
-import { DEFAULT_MARGIN } from "@/lib/fortress/types";
+import { DEFAULT_MARGIN, RECORDED_BOOK } from "@/lib/fortress/types";
 
 function stockBook(debt = 40_000, maintenance = 0.3): Snapshot {
   return {
@@ -15,6 +15,7 @@ function stockBook(debt = 40_000, maintenance = 0.3): Snapshot {
     asOf: "2026-11-06",
     seed: 7,
     scope: { regime: "synthetic", label: "Synthetic long stock. Not a household book." },
+    completeness: RECORDED_BOOK,
     vintages: { quotes: "fixture", model: "fortress-ledger-1", rules: "manual-margin-1" },
     positions: [{ id: "syn", kind: "equity", symbol: "SYN", accountId: "primary", quantity: 1000, mark: 100, averageCost: 100 }],
     cash: [{ id: "cash", accountId: "primary", amount: 0 }],
@@ -161,7 +162,19 @@ describe("fortress phase 2", () => {
     assert.equal(short, undefined);
     assert.equal(protective?.kind === "option" && protective.quantity, 1);
     assert.ok(result.changedTerminal.payables.some((row) => row.amount === 10_000));
-    assert.equal(result.phasesUnavailable.includes(3), true);
+    const again = evaluateFortress({
+      baseline,
+      changes: [],
+      market,
+      path: [
+        { id: "expiry", date: "2026-11-06", spotFactor: 0.9, volAdd: 0, rateAdd: 0, houseHike: 0 },
+        { id: "next", date: "2026-11-07", spotFactor: 0.9, volAdd: 0, rateAdd: 0, houseHike: 0 },
+      ],
+    });
+    const againShares = again.changedTerminal.positions.find((position) => position.kind === "equity");
+    assert.equal(againShares?.kind === "equity" && againShares.quantity, 1100);
+    assert.equal(again.changedTerminal.payables.filter((row) => row.amount === 10_000).length, 1);
+    assert.equal(again.verdict.kind, "blocked");
   });
 
   it("does not call an unrecovered drawdown zero and does not treat a deposit as profit", () => {
@@ -183,6 +196,41 @@ describe("fortress phase 2", () => {
     const book: Snapshot = { ...baseline, debt: [], positions: [{ ...adjusted, contract: { ...adjusted.contract, adjusted: true, adjustedMetadata: "missing" } }] };
     const result = evaluateFortress({ baseline: book, changes: [], market, path: path([1, 1.2]) });
     assert.equal(result.changedPath[0]?.blocked?.includes("adjusted"), true);
+    assert.equal(result.verdict.kind, "blocked");
+  });
+
+  it("does not apply long-stock margin to a short option, and does not pass a share-count import", () => {
+    const baseline = stockBook();
+    const short = put("2027-06-18", "sp", -1);
+    const mixed: Snapshot = { ...baseline, positions: [...baseline.positions, short] };
+    const mixedResult = evaluateFortress({ baseline: mixed, changes: [], market, path: path([1, 0.5, 1.2]) });
+    assert.equal(mixedResult.rows.find((row) => row.id === "maintenanceExcess")?.status, "unknown");
+    assert.equal(mixedResult.rows.find((row) => row.id === "maintenanceExcess")?.after, null);
+    assert.equal(mixedResult.verdict.kind, "blocked");
+    assert.equal(mixedResult.breach.status, "unknown");
+
+    const imported: Snapshot = {
+      ...baseline,
+      debt: [],
+      scope: { regime: "imported", label: "Share counts only." },
+      completeness: { cash: "missing", debt: "missing", contracts: "share-count-only", quotes: "missing", dividends: "missing" },
+    };
+    const importedResult = evaluateFortress({ baseline: imported, changes: [], market, path: path([1, 0.5]) });
+    assert.equal(importedResult.verdict.kind, "blocked");
+    assert.equal(importedResult.changedPath[0]?.blocked?.includes("not the actual book"), true);
+
+    const stale: Snapshot = { ...baseline, completeness: { ...baseline.completeness, quotes: "stale" } };
+    assert.equal(evaluateFortress({ baseline: stale, changes: [], market, path: path([1]) }).verdict.kind, "blocked");
+  });
+
+  it("leaves a pre-expiry option unknown when no quoted vol is on the path", () => {
+    const baseline = stockBook(0, 0.3);
+    const live = put("2027-06-18", "sp", -1);
+    const book: Snapshot = { ...baseline, debt: [], positions: [baseline.positions[0]!, live] };
+    const quiet = { ...market, vols: {} };
+    const result = evaluateFortress({ baseline: book, changes: [], market: quiet, path: path([1]) });
+    const option = result.changedTerminal.positions.find((position) => position.id === "sp");
+    assert.equal(option?.kind === "option" && option.delta, null);
     assert.equal(result.verdict.kind, "blocked");
   });
 

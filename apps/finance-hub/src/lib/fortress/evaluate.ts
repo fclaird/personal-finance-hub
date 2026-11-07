@@ -1,4 +1,5 @@
 import { crrPrice } from "@/lib/fortress/american";
+import { bookGap, marginCoverage } from "@/lib/fortress/coverage";
 import { yearFraction } from "@/lib/fortress/dates";
 import { exposures, nWeight, type Known } from "@/lib/fortress/exposure";
 import { applyChangeSet, cloneSnapshot, debtPrincipal, netAssetValue, settleDue, settledCash } from "@/lib/fortress/ledger";
@@ -58,14 +59,8 @@ function knownNumber(result: Known): number | null {
   return result.status === "known" ? result.value : null;
 }
 
-function blockReason(snapshot: Snapshot): string | null {
-  for (const position of snapshot.positions) {
-    if (position.kind !== "option") continue;
-    if (position.contract.exotic) return `${position.id} is exotic and blocks a complete verdict.`;
-    if (position.contract.adjusted && position.contract.adjustedMetadata !== "complete") return `${position.id} is adjusted without complete deliverable metadata.`;
-    if (!(position.contract.multiplier > 0)) return `${position.id} has no multiplier.`;
-  }
-  return null;
+function blockReason(snapshot: Snapshot, market: MarketState): string | null {
+  return bookGap(snapshot, market);
 }
 
 function reprice(snapshot: Snapshot, market: MarketState, assumptions: Assumptions, asOf: string): Snapshot {
@@ -75,9 +70,10 @@ function reprice(snapshot: Snapshot, market: MarketState, assumptions: Assumptio
       return spot != null && spot > 0 ? { ...position, mark: spot } : position;
     }
     const spot = market.spots[position.contract.underlying];
-    const vol = (market.vols[position.contract.underlying] ?? assumptions.baseVol) ;
-    if (!(spot != null && spot > 0)) return { ...position, mark: null, delta: null, gamma: null, vegaPerVol: null };
     const years = Math.max(0, yearFraction(asOf, position.contract.expiry));
+    const quotedVol = market.vols[position.contract.underlying];
+    if (!(spot != null && spot > 0)) return { ...position, mark: null, delta: null, gamma: null, vegaPerVol: null };
+    if (years > 1e-8 && !(quotedVol != null && quotedVol > 0)) return { ...position, mark: null, delta: null, gamma: null, vegaPerVol: null };
     const priced = crrPrice({
       right: position.contract.right,
       style: position.contract.style,
@@ -85,8 +81,8 @@ function reprice(snapshot: Snapshot, market: MarketState, assumptions: Assumptio
       strike: position.contract.strike,
       years,
       rate: market.rate,
-      dividendYield: market.dividendYield[position.contract.underlying] ?? assumptions.dividendYield,
-      vol,
+      dividendYield: snapshot.completeness.dividends === "discrete" ? 0 : (market.dividendYield[position.contract.underlying] ?? 0),
+      vol: quotedVol ?? 0,
       steps: assumptions.americanSteps,
     });
     if (!priced.ok) return { ...position, mark: null, delta: null, gamma: null, vegaPerVol: null };
@@ -123,7 +119,7 @@ function accrue(snapshot: Snapshot, from: string, to: string, assumptions: Assum
 }
 
 function settleOption(snapshot: Snapshot, position: OptionPosition, spot: number, asOf: string, assignment: "none" | "partial" | "full"): Snapshot {
-  const eventId = `exp:${position.id}:${asOf}:${assignment}`;
+  const eventId = `exp:${position.id}`;
   if (snapshot.appliedEventIds.includes(eventId) || position.contract.expiry > asOf) return snapshot;
   const fraction = assignment === "none" ? 0 : assignment === "partial" ? 0.5 : 1;
   const qty = position.quantity * fraction;
@@ -163,7 +159,7 @@ function assignmentMode(position: OptionPosition, node: MarketNode, assumptions:
 }
 
 function stepBook(snapshot: Snapshot, market: MarketState, node: MarketNode, previousDate: string, assumptions: Assumptions): { readonly snapshot: Snapshot; readonly blocked: string | null } {
-  const blocked = blockReason(snapshot);
+  const blocked = blockReason(snapshot, market);
   let next = accrue(snapshot, previousDate, node.date, assumptions);
   const scaled: MarketState = {
     ...market,
@@ -199,11 +195,11 @@ function walk(snapshot: Snapshot, market: MarketState, path: readonly MarketNode
     const stepped = stepBook(book, market, node, previous, assumptions);
     book = stepped.snapshot;
     const nav = netAssetValue(book);
-    const maintenance = book.margin.maintenanceLong + node.houseHike;
+    const coverage = marginCoverage(book);
     const symbol = book.positions.find((position) => position.kind !== "option")?.symbol;
     const spot = symbol ? (market.spots[symbol] ?? 0) * node.spotFactor : 0;
     const gross = symbol ? book.positions.reduce((sum, position) => (position.kind !== "option" && position.symbol === symbol ? sum + position.quantity * spot : sum), 0) : 0;
-    const excess = longStockExcess(gross, debtPrincipal(book), maintenance);
+    const excess = coverage.kind === "long-stock" ? longStockExcess(gross, debtPrincipal(book), book.margin.maintenanceLong + node.houseHike) : null;
     points.push({
       nodeId: node.id,
       date: node.date,
@@ -263,20 +259,24 @@ export function evaluateFortress(input: {
   const baselinePath = baselineWalk.points;
   const changedPath = changedWalk.points;
   const startValue = beforeFrozen.positions.reduce((sum, position) => (position.kind === "option" ? sum : sum + position.quantity * position.mark), 0);
-  const points = marginPoints(input.path, startValue, debtPrincipal(applied.snapshot), applied.snapshot.margin.maintenanceLong);
-  const breach = firstMaintenanceBreach(points, applied.snapshot.margin.maintenanceLong, debtPrincipal(applied.snapshot), startValue);
+  const coverage = marginCoverage(applied.snapshot);
+  const points = coverage.kind === "long-stock" ? marginPoints(input.path, startValue, debtPrincipal(applied.snapshot), applied.snapshot.margin.maintenanceLong) : [];
+  const breach = coverage.kind === "unknown"
+    ? { status: "unknown" as const, nodeId: null, date: null, interval: null, refinedFactor: null, evidence: coverage.reason }
+    : firstMaintenanceBreach(points, applied.snapshot.margin.maintenanceLong, debtPrincipal(applied.snapshot), startValue);
   const beforeExposure = exposures(beforeFrozen, input.market.spots);
   const afterExposure = exposures(changedWalk.terminal, input.market.spots);
   const beforeN = nWeight(beforeExposure);
   const afterN = nWeight(afterExposure);
   const decline = declineToCritical(startValue, debtPrincipal(applied.snapshot), applied.snapshot.margin.maintenanceLong);
-  const cure = Math.max(0, ...points.map((point) => (point.excess == null ? 0 : -point.excess)));
+  const cure = coverage.kind === "unknown" ? null : Math.max(0, ...points.map((point) => (point.excess == null ? 0 : -point.excess)));
 
   const limitFor = (metric: string) => limits.find((item) => item.metric === metric);
   const maintenanceLimit = limitFor("maintenanceExcess");
-  const maintenanceValue = points.reduce<number | null>((worst, point) => (point.excess == null ? worst : worst == null ? point.excess : Math.min(worst, point.excess)), null);
-  const maintenanceStatus = judge(maintenanceValue, maintenanceLimit, "Manual long-stock maintenance. Not a broker calculation.", breach.nodeId);
-  const maintenanceRowStatus: MetricStatus = breach.status === "breach" || breach.status === "already-deficient" ? "breach" : breach.status === "unknown" ? "unknown" : maintenanceStatus.status;
+  const maintenanceValue = coverage.kind === "unknown" ? null : points.reduce<number | null>((worst, point) => (point.excess == null ? worst : worst == null ? point.excess : Math.min(worst, point.excess)), null);
+  const maintenanceEvidence = coverage.kind === "unknown" ? coverage.reason : "Manual long-stock maintenance. Not a broker calculation, and not used when any option is in the book.";
+  const maintenanceStatus = judge(maintenanceValue, maintenanceLimit, maintenanceEvidence, breach.nodeId);
+  const maintenanceRowStatus: MetricStatus = coverage.kind === "unknown" ? "unknown" : breach.status === "breach" || breach.status === "already-deficient" ? "breach" : breach.status === "unknown" ? "unknown" : maintenanceStatus.status;
   const rows: MetricRow[] = [
     row({
       id: "nav",
@@ -295,7 +295,7 @@ export function evaluateFortress(input: {
     row({
       id: "maintenanceExcess",
       label: "Maintenance excess",
-      before: longStockExcess(startValue, debtPrincipal(beforeFrozen), beforeFrozen.margin.maintenanceLong),
+      before: marginCoverage(beforeFrozen).kind === "long-stock" ? longStockExcess(startValue, debtPrincipal(beforeFrozen), beforeFrozen.margin.maintenanceLong) : null,
       after: maintenanceValue,
       unit: "USD",
       denominator: "market value − debit − maintenance × market value",
@@ -304,21 +304,21 @@ export function evaluateFortress(input: {
       direction: maintenanceStatus.direction,
       status: maintenanceRowStatus,
       bindingScenario: breach.nodeId,
-      evidence: maintenanceStatus.evidence,
+      evidence: maintenanceEvidence,
     }),
     row({
       id: "criticalDecline",
       label: "Critical long-stock decline",
-      before: declineToCritical(startValue, debtPrincipal(beforeFrozen), beforeFrozen.margin.maintenanceLong),
-      after: decline,
+      before: marginCoverage(beforeFrozen).kind === "long-stock" ? declineToCritical(startValue, debtPrincipal(beforeFrozen), beforeFrozen.margin.maintenanceLong) : null,
+      after: coverage.kind === "long-stock" ? decline : null,
       unit: "fraction of starting value",
       denominator: "1 − D / ((1 − m) V0)",
       horizon: "instantaneous spot",
       limit: limitFor("criticalDecline")?.limit ?? null,
       direction: limitFor("criticalDecline")?.direction ?? null,
-      status: decline == null ? "unknown" : judge(decline, limitFor("criticalDecline"), "Stock fixture D/(1−m).", null).status,
+      status: coverage.kind === "unknown" || decline == null ? "unknown" : judge(decline, limitFor("criticalDecline"), "Stock fixture D/(1−m).", null).status,
       bindingScenario: null,
-      evidence: "Long stock only. Not a mixed-option or broker house formula.",
+      evidence: coverage.kind === "unknown" ? coverage.reason : "Long stock only. Not a mixed-option or broker house formula.",
     }),
     row({
       id: "nWeight",
@@ -354,11 +354,11 @@ export function evaluateFortress(input: {
       before: null,
       after: cure,
       unit: "USD",
-      denominator: "maintenance shortfall at the first breach",
+      denominator: "worst long-stock maintenance shortfall on the tested path",
       horizon: breach.date ?? "not breached",
       limit: null,
       direction: null,
-      status: breach.status === "unknown" ? "unknown" : "not-evaluated",
+      status: coverage.kind === "unknown" || breach.status === "unknown" ? "unknown" : "not-evaluated",
       bindingScenario: breach.nodeId,
       evidence: breach.evidence,
     }),

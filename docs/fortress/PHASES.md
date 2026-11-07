@@ -2,7 +2,19 @@
 
 Evaluation runs in the browser from the posted snapshot and change list. It does not write snapshots, accounts, or orders. `/api/exposure` is unchanged and is used only when someone explicitly copies share counts.
 
+Phase 2 is partial. Long-stock maintenance is implemented. Short-option margin is not, and a book that contains any option does not receive the long-stock number. A share-count import is blocked.
+
+## Supported contracts
+
+Equity and ETF positions with a signed share count. Single-name American or European calls and puts with an explicit multiplier, deliverable share count, and physical or cash settlement. A continuous dividend yield is used only when the book says dividends are an explicit zero or the yield is the only dividend. A cash dividend and a yield on the same name block the run.
+
+Blocked, and kept on the book: exotic contracts, adjusted contracts without deliverable metadata, a missing multiplier, style, or settlement, a missing or stale quote vintage, and a pre-expiry option with no quoted vol. The engine does not fill those with the default vol.
+
+Not built: broker portfolio margin, short-option margin, assignment probability, historical replay, and factor or geography scores.
+
 ## Phase 1 — ledger
+
+Status: COMPLETE for the change forms below.
 
 Accepted when these hold:
 
@@ -18,7 +30,9 @@ Accepted when these hold:
 
 ## Phase 2 — one shared deterministic path
 
-Accepted when these hold:
+Status: PARTIAL. The long-stock path, the listed vanilla tree, assignment-once, and the unknown-input block are in. Short-option margin, a correlation panel, and a complete imported book are not.
+
+Accepted for the part that is built:
 
 - Baseline and changed books see the same spot factors.
 - Listed equity options are repriced on a Cox–Ross–Rubinstein tree. American nodes may exercise. European nodes are only a check against the closed form.
@@ -31,10 +45,18 @@ Accepted when these hold:
 - Unitized drawdown ignores a deposit as profit. An unrecovered path is labeled "Not recovered by horizon." Nonpositive NAV is a survival failure and has no drawdown percent.
 - The summary never says safe.
 
-## Not built
+## Phase 3
 
-Phase 3: historical replay, proxy implied vol, expected shortfall, Monte Carlo, stressed liquidity.
+Status: NOT BUILT. Historical replay, proxy implied vol, expected shortfall, Monte Carlo, and stressed liquidity are not computed.
 
-Phase 4: sourced factor scores, revenue geography as fact, fund look-through.
+## Phase 4
 
-The raw close cache is not an adjusted total-return panel. Revenue geography still falls back to a demo map on the old weights view; the simulator does not use that map.
+Status: NOT BUILT. Sourced factor scores, revenue geography as fact, and fund look-through are not computed. The old weights view can still fall back to a demo geography map. The simulator does not use that map.
+
+## Next slice, not in this branch
+
+Adjusted-return correlation can use data the hub already fetches. No new paid feed.
+
+Yahoo chart responses already include an adjusted close next to the raw close. `closesFromYahooChartResult` keeps only `indicators.quote.close`. The next slice should store that adjusted series under its own provider key, such as `yahoo-adjusted`, and leave Schwab `price_points` rows labeled as raw `/pricehistory` closes.
+
+A correlation panel then needs one shared date set, a coverage count, and the names that were left out. A name without an adjusted series stays out of the matrix. The covariance has to be positive semidefinite on that common panel. A benchmark-down day is a date when the benchmark's adjusted return is negative. That work is phase 3.
