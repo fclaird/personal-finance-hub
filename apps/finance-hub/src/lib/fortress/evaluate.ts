@@ -392,6 +392,7 @@ export function evaluateFortress(input: {
     verdict,
     unavailable: [
       "Phase 3 tail ES, historical replay, and proxy implied vol are not computed.",
+      "Adjusted-return correlation is a separate subset. It stays unknown until a Yahoo adjclose series loads, and it is not a tail or expected-shortfall result.",
       "Phase 4 factor scores, revenue geography, and fund look-through are not computed.",
       "The raw close cache is not used as an adjusted total return.",
     ],

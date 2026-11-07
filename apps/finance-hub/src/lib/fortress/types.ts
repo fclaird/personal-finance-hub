@@ -1,7 +1,7 @@
 /**
- * Fortress simulator, phases 1 and 2.
- * Phase 3 (tails, historical replay, proxy IV) and phase 4 (factors, geography,
- * fund look-through) are not implemented. Callers must not invent those outputs.
+ * Fortress simulator, phases 1 and 2, plus the adjusted-return subset of phase 3.
+ * Tails, historical replay, proxy IV, factors, geography, and fund look-through
+ * are not implemented. Callers must not invent those outputs.
  */
 
 export const FORTRESS_MODEL_VERSION = "fortress-ledger-1";
@@ -124,7 +124,7 @@ export type Snapshot = {
   readonly currency: "USD";
   readonly asOf: IsoDate;
   readonly seed: number;
-  readonly scope: { readonly regime: "synthetic" | "imported"; readonly label: string };
+  readonly scope: { readonly regime: "synthetic" | "imported" | "user"; readonly label: string };
   readonly completeness: Completeness;
   readonly vintages: { readonly quotes: string; readonly model: string; readonly rules: string };
   readonly positions: readonly Position[];
