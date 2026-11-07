@@ -239,7 +239,7 @@ describe("adjusted return panel", () => {
       before: proxied,
       after: proxied,
     });
-    assert.equal(report.proxyNote?.includes("linear delta proxy"), true);
+    assert.equal(report.proxyNote?.includes("option Greek delta"), true);
     assert.equal(report.gate, "blocked");
   });
 });

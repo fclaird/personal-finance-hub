@@ -8,7 +8,7 @@ export const ROLLING_WINDOW = 63;
 export const STALE_CALENDAR_DAYS = 10;
 
 const TAIL_NOTE = "Deterministic path losses stay on the maintenance scorecard. This panel does not estimate expected shortfall or a tail probability.";
-const PROXY_NOTE = "Option exposure uses the underlying as a linear delta proxy. This is not the option's profit and loss.";
+const PROXY_NOTE = "Option exposure uses the underlying's adjusted moves scaled by the option Greek delta. This is not the option's profit and loss.";
 
 export type HoldingWeight = {
   readonly symbol: string;

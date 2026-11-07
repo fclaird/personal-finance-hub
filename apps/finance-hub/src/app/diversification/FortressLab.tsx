@@ -2,10 +2,12 @@
 
 import { useMemo, useRef, useState } from "react";
 
+import { ChangeMeaning } from "@/app/diversification/ChangeMeaning";
 import { buildChange, EMPTY_DRAFT, type ChangeDraft } from "@/lib/fortress/composer";
+import type { FundingContext } from "@/lib/fortress/explainChange";
 import { evaluateFortress, type FortressResult, type PathPoint } from "@/lib/fortress/evaluate";
 import { isCurrentRun, syntheticMarginFixture } from "@/lib/fortress/fixtures";
-import { applyChangeSet } from "@/lib/fortress/ledger";
+import { applyChangeSet, debtPrincipal, netAssetValue } from "@/lib/fortress/ledger";
 import { longStockExcess } from "@/lib/fortress/margin";
 import { buildReturnReport, displayedVerdict, weightsFromSnapshot, type ReturnReport, type SeriesBundle } from "@/lib/fortress/returns";
 import type { Assumptions, Change, MarketNode, Snapshot } from "@/lib/fortress/types";
@@ -203,6 +205,7 @@ export function FortressLab() {
   const [maxCorr, setMaxCorr] = useState("");
   const [loadedSeries, setLoadedSeries] = useState<SeriesBundle[] | null>(null);
   const [report, setReport] = useState<ReturnReport | null>(null);
+  const [funding, setFunding] = useState<FundingContext | null>(null);
   const [returnNote, setReturnNote] = useState("Adjusted returns are not loaded. A raw close is not used in their place.");
   const run = useRef(0);
 
@@ -212,6 +215,18 @@ export function FortressLab() {
 
   function spotsOf(book: Snapshot): Record<string, number> {
     return Object.fromEntries(book.positions.filter((position) => position.kind !== "option").map((position) => [position.symbol, position.mark]));
+  }
+
+  function fundingFor(book: Snapshot, nextChanges: Change[]): FundingContext {
+    const applied = applyChangeSet(book, nextChanges, assumptions());
+    const before = netAssetValue(book);
+    const after = netAssetValue(applied.snapshot);
+    return {
+      beforeNav: before.status === "known" ? before.value : null,
+      afterNav: after.status === "known" ? after.value : null,
+      externalCapitalChange: applied.snapshot.externalCapital - book.externalCapital,
+      debtChange: debtPrincipal(applied.snapshot) - debtPrincipal(book),
+    };
   }
 
   function reportFor(book: Snapshot, nextChanges: Change[], bundles: SeriesBundle[]): ReturnReport {
@@ -254,6 +269,7 @@ export function FortressLab() {
     if (!isCurrentRun(id, run.current)) return;
     const nextReport = loadedSeries ? reportFor(book, changes, loadedSeries) : null;
     setReport(nextReport);
+    setFunding(fundingFor(book, changes));
     setResult(next);
     setNote(displayedVerdict(next.verdict, nextReport).summary);
   }
@@ -273,6 +289,7 @@ export function FortressLab() {
     setChanges([]);
     setResult(null);
     setReport(null);
+    setFunding(null);
     setLoadedSeries(null);
     setReturnNote("Portfolio replaced. Adjusted returns are not loaded for these tickers yet.");
     setNote(built.snapshot.scope.label);
@@ -322,6 +339,7 @@ export function FortressLab() {
       setChanges([]);
       setResult(null);
       setReport(null);
+      setFunding(null);
       setLoadedSeries(null);
       setReturnNote("Share-count copy. Adjusted returns are not loaded, and a missing adjclose series will not be filled with the raw close.");
       setImportNote(`${positions.length} share lines copied. Cash, debt, and option contracts were not imported. This is not the actual book, and a comparison cannot pass.`);
@@ -351,6 +369,7 @@ export function FortressLab() {
     if (symbols.length === 0) {
       setReturnNote("The open book has no market ticker. Type a portfolio, or add a ticker change, before loading adjusted returns.");
       setReport(null);
+      setFunding(null);
       setLoadedSeries(null);
       return;
     }
@@ -366,6 +385,7 @@ export function FortressLab() {
       if (!response.ok || !body.ok || !body.series) {
         setLoadedSeries(null);
         setReport(null);
+        setFunding(null);
         setReturnNote(body.reason ?? "Yahoo adjusted closes were not reachable. Nothing was substituted.");
         return;
       }
@@ -377,12 +397,14 @@ export function FortressLab() {
       setLoadedSeries(bundles);
       const next = reportFor(snapshot, changes, bundles);
       setReport(next);
+      setFunding(fundingFor(snapshot, changes));
       const gaps = bundles.filter((row) => row.bars == null).map((row) => `${row.symbol} ${row.reason ?? "unavailable"}`);
       setReturnNote(gaps.length ? `Loaded with gaps: ${gaps.join(", ")}. No raw close was substituted.` : next.gateSummary);
     } catch {
       if (!isCurrentRun(id, run.current)) return;
       setLoadedSeries(null);
       setReport(null);
+      setFunding(null);
       setReturnNote("Yahoo adjusted closes were not reachable. Nothing was substituted.");
     }
   }
@@ -403,7 +425,7 @@ export function FortressLab() {
         Model {FORTRESS_MODEL_VERSION}. Rules {FORTRESS_RULE_VERSION}, manual maintenance, not a broker calculation. Adjusted-return correlation is loaded only from Yahoo adjclose. Phase 3 tails and phase 4 factors are not computed. No all-clear verdict is issued.
       </p>
       <div className="mt-3 flex flex-wrap gap-2">
-        <button type="button" className={`px-3 py-1.5 text-xs font-semibold ${labControl}`} onClick={() => { setSnapshot(fixture.snapshot); setChanges([]); setResult(null); setNote("Synthetic fixture loaded."); }}>
+        <button type="button" className={`px-3 py-1.5 text-xs font-semibold ${labControl}`} onClick={() => { setSnapshot(fixture.snapshot); setChanges([]); setResult(null); setReport(null); setFunding(null); setLoadedSeries(null); setReturnNote("Synthetic fixture. Adjusted returns are not loaded for SYN."); setNote("Synthetic fixture loaded."); }}>
           Load synthetic fixture
         </button>
         <button type="button" className={`px-3 py-1.5 text-xs font-semibold ${labControl}`} onClick={() => void importHoldings()}>
@@ -536,7 +558,8 @@ export function FortressLab() {
           </li>
         ))}
       </ul>
-      <p className="mt-3 text-sm text-zinc-100" data-returns-note="">{returnNote}</p>
+      <p className="mt-3 text-sm text-zinc-900 dark:text-zinc-100" data-returns-note="">{returnNote}</p>
+      <ChangeMeaning report={report} funding={funding} scopeLabel={snapshot.scope.label} />
       {report ? <ReturnPanel report={report} /> : null}
       <p className="mt-3 text-sm font-semibold text-zinc-50" data-fortress-note="" data-fortress-verdict={result ? displayedVerdict(result.verdict, report).kind : "none"}>
         {result ? displayedVerdict(result.verdict, report).summary : note}

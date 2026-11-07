@@ -55,6 +55,8 @@ Checked against Yahoo on 2026-11-07: AAPL 2020-08-28 chart close 124.81 versus a
 
 Before and after correlations use one common date set. A name with fewer than 60 returns is excluded as short history. Matching a shorter candidate drops the baseline dates that do not overlap, and that count is shown. Full, 63-day rolling, and benchmark-down correlations each carry an observation count. Benchmark-down dates are dates when the benchmark adjusted return is negative. The sample covariance is built on that same panel and checked for positive semidefiniteness. Risk contribution is `w_i * (Sigma w)_i / sigma`. Negative weights and negative contributions are kept, and the contributions sum to sigma. A zero variance or a zero denominator stays unknown.
 
+The panel states what the measured change means in plain language: daily sigma in percent and in dollars, the percentage-point change beside the relative percent, pairwise correlations that stay put when only the mix changes, and the candidate's correlation with the rest of the book. A missing series, a short history, or a zero denominator stays an unknown explanation. It is not described as an improvement.
+
 A typed ticker, share count, and price become the scenario. Cash and debt count as recorded only when the person checks that they were entered, including zero. The share-count import remains incomplete. Option correlation uses the underlying as a linear delta proxy and says so. Missing delta, missing adjclose, option margin, and broker rules stay unknown. An unknown adjusted-return panel blocks a pass. It does not erase a maintenance breach.
 
 ## Phase 4
