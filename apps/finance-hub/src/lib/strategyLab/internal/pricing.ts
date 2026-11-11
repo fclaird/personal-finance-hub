@@ -253,6 +253,15 @@ export function expiryPnl(legs: readonly ValueLeg[], debit: number, spot: number
 }
 
 /**
+ * Change in package value for a $1 rise at the last strike.
+ * With no strike the anchor is spot 0, so shares still have their slope.
+ */
+export function terminalValueSlope(legs: readonly ValueLeg[], lastStrike: number): number {
+  const anchor = lastStrike > 0 ? lastStrike : 0;
+  return expiryValue(legs, anchor + 1) - expiryValue(legs, anchor);
+}
+
+/**
  * Share-equivalent delta of the settled package from this spot to one dollar higher.
  * Starting on a strike counts the region just through it: a call spread is flat above
  * its short strike, and a ZEBRA is long 100 shares once that short call is reached.
@@ -311,8 +320,11 @@ export function expiryRisk(legs: readonly ValueLeg[], debit: number, spot: numbe
   const pnlAt = (s: number) => expiryPnl(legs, debit, s);
   const pnls = knots.map(pnlAt);
   const hi = strikes.length ? strikes[strikes.length - 1]! : 0;
-  const slopeAbove = hi > 0 ? expiryValue(legs, hi + 1) - expiryValue(legs, hi) : 0;
-  const slopeBelow = strikes.length && strikes[0]! > 0 ? (expiryValue(legs, strikes[0]!) - expiryValue(legs, 0)) / strikes[0]! : 0;
+  const slopeAbove = terminalValueSlope(legs, hi);
+  const slopeBelow =
+    strikes.length && strikes[0]! > 0
+      ? (expiryValue(legs, strikes[0]!) - expiryValue(legs, 0)) / strikes[0]!
+      : terminalValueSlope(legs, 0);
   const worst = Math.min(...pnls);
   const best = Math.max(...pnls);
   const breakevens: number[] = [];
@@ -329,7 +341,7 @@ export function expiryRisk(legs: readonly ValueLeg[], debit: number, spot: numbe
   }
   if (Math.abs(pnls[pnls.length - 1]!) < 1e-6 && knots.length) breakevens.push(knots[knots.length - 1]!);
   const pnlHi = pnlAt(hi);
-  if (hi > 0 && Math.abs(slopeAbove) > 1e-6 && pnlHi * slopeAbove < 0) breakevens.push(hi - pnlHi / slopeAbove);
+  if (Math.abs(slopeAbove) > 1e-6 && pnlHi * slopeAbove < 0) breakevens.push(hi - pnlHi / slopeAbove);
   const unique = [...new Set(breakevens.map((b) => Math.round(b * 100) / 100))].sort((a, b) => a - b);
   const intrinsicNow = expiryValue(legs, spot);
   const roundedAbove = Math.round(slopeAbove);
