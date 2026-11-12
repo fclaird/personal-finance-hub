@@ -244,7 +244,10 @@ export function assembleBook(positions: readonly BookPositionInput[], txns: read
     const book = lots.get(key);
     const remaining = row.quantity > 0 ? book?.long : book?.short;
     const target = Math.abs(row.quantity);
-    const tolerance = instrument === "stock" ? Math.max(0.01, target * 0.01) : 1;
+    // Shares allow a 1% lot-size gap. Options are whole contracts, so a one-contract
+    // gap is a missing fill (a spread leg that was not stored, or an assignment)
+    // and must fall back to the position average instead of blending the extra lot.
+    const tolerance = instrument === "stock" ? Math.max(0.01, target * 0.01) : 1e-3;
     const matched = remaining != null && Math.abs(remaining.qty - target) <= tolerance;
     const partial = remaining != null && !matched;
     let bookPrice: number | null = null;
