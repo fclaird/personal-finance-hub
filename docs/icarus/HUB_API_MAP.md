@@ -15,7 +15,8 @@ Base: `https://127.0.0.1:3000` (or Electron `3049`). When `FINANCE_HUB_API_KEY` 
 | `/api/alerts/events` | Persisted alert events |
 | `/api/alerts/rules` | Rule list (GET) |
 | `/api/positions` | Latest snapshots + option marks |
-| `/api/exposure` | Underlying exposure rollup |
+| `/api/exposure` | Underlying exposure rollup. The fortress simulator reads this only when a person copies share counts. It does not add an order route or a write. |
+| `/api/fortress/adjusted-returns` | Yahoo chart adjclose for 1 to 12 tickers plus a benchmark (`?symbols=&benchmark=SPY`). Cached as provider `yahoo-adjusted`. Does not write `price_points` and does not place orders. |
 | `/api/allocation` | Allocation |
 | `/api/reports` | Period P&L / realized |
 | `/api/quotes` | Quotes |

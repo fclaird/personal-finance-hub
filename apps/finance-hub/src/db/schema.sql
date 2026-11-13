@@ -734,3 +734,26 @@ CREATE TABLE IF NOT EXISTS hpi_observations (
   fetched_at TEXT NOT NULL,
   PRIMARY KEY (series_id, period)
 );
+
+-- Yahoo adjusted closes. Kept off price_points so a raw Schwab close cannot be read as a total return.
+CREATE TABLE IF NOT EXISTS adjusted_return_points (
+  provider TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  version TEXT NOT NULL,
+  date TEXT NOT NULL,
+  adj_close REAL NOT NULL,
+  PRIMARY KEY (provider, symbol, version, date)
+);
+
+CREATE TABLE IF NOT EXISTS adjusted_return_meta (
+  provider TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  version TEXT NOT NULL,
+  corporate_actions TEXT NOT NULL,
+  source TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  latest_date TEXT,
+  bar_count INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  PRIMARY KEY (provider, symbol, version)
+);
