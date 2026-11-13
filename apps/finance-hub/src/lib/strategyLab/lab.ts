@@ -15,6 +15,7 @@ import {
   entryDollars,
   expiryPnl,
   expiryRisk,
+  terminalValueSlope,
   markAt,
   netFromLegs,
   packageGreeks,
@@ -1275,8 +1276,7 @@ function zoneSeriesOf(row: PricedStructure, label: string): ZoneSeries | null {
   const packages = row.sizing.packages;
   const strikes = [...new Set(row.legs.map((leg) => leg.strike).filter((strike): strike is number => strike != null))].sort((a, b) => a - b);
   const last = strikes[strikes.length - 1] ?? 0;
-  const slope =
-    last > 0 ? (expiryPnl(row.legs, row.debit, last + 1) - expiryPnl(row.legs, row.debit, last)) * packages : 0;
+  const slope = terminalValueSlope(row.legs, last) * packages;
   return {
     id: row.spec.id,
     label,
