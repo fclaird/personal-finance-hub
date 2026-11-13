@@ -55,6 +55,7 @@ describe("nav and route guards", () => {
       "/positions",
       "/allocation",
       "/diversification",
+      "/screener",
       "/performance",
       "/reports",
       "/dividends",
