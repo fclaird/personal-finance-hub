@@ -21,9 +21,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <div className="relative flex h-dvh overflow-hidden">
+    <div className="relative flex h-dvh overflow-hidden print:block print:h-auto print:overflow-visible">
       {!collapsed ? (
-        <SidebarNav collapsed={false} onToggleCollapse={toggleCollapse} />
+        <div className="print:hidden">
+          <SidebarNav collapsed={false} onToggleCollapse={toggleCollapse} />
+        </div>
       ) : null}
       {collapsed ? (
         <button
@@ -31,13 +33,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           onClick={toggleCollapse}
           aria-expanded={false}
           aria-label="Expand sidebar"
-          className="fixed left-0 top-1/2 z-40 hidden -translate-y-1/2 rounded-r-lg border border-l-0 border-zinc-300 bg-white/90 px-1.5 py-4 text-sm font-semibold text-zinc-600 shadow-sm backdrop-blur hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950/90 dark:text-zinc-300 dark:hover:bg-white/10 md:block"
+          className="print:hidden fixed left-0 top-1/2 z-40 hidden -translate-y-1/2 rounded-r-lg border border-l-0 border-zinc-300 bg-white/90 px-1.5 py-4 text-sm font-semibold text-zinc-600 shadow-sm backdrop-blur hover:bg-zinc-50 dark:border-white/20 dark:bg-zinc-950/90 dark:text-zinc-300 dark:hover:bg-white/10 md:block"
           title="Expand sidebar"
         >
           »
         </button>
       ) : null}
-      <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+      <main className="flex min-w-0 flex-1 flex-col overflow-y-auto print:h-auto print:overflow-visible">
         <LiveStatusBanner />
         {children}
       </main>

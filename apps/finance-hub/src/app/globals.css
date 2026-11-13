@@ -20,6 +20,13 @@
   }
 }
 
+@media print {
+  body {
+    background: #fff !important;
+    color: #111 !important;
+  }
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
