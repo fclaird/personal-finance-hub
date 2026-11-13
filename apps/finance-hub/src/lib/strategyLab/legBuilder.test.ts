@@ -118,6 +118,39 @@ describe("free-form leg builder", () => {
     assert.equal(rejected.structures[0]!.legs[0]!.instrument, "stock");
   });
 
+  it("copies a 40-character name without hanging, and still numbers shorter copies", () => {
+    const full = "NVDA Jan 2027 15-delta call debit spread";
+    assert.equal(full.length, 40);
+    const started = editLab(createLab(chain), {
+      kind: "addStructure",
+      label: full,
+      expiry: isoDate(NEAR),
+      request: { template: "longCall", strike: { by: "strike", strike: 140 } },
+    }, chain);
+    const id = started.structures[0]!.id;
+    const once = editLab(started, { kind: "duplicateStructure", id }, chain);
+    assert.equal(once.structures.length, 2);
+    assert.equal(once.structures[1]!.label.length <= 40, true);
+    assert.notEqual(once.structures[1]!.label, full);
+    assert.match(once.structures[1]!.label, / alt$/);
+    const twice = editLab(once, { kind: "duplicateStructure", id }, chain);
+    assert.equal(twice.structures.length, 3);
+    assert.match(twice.structures[2]!.label, / alt 2$/);
+    const labels = new Set(twice.structures.map((structure) => structure.label));
+    assert.equal(labels.size, 3);
+
+    const short = editLab(createLab(chain), {
+      kind: "addStructure",
+      label: "Long call",
+      expiry: isoDate(NEAR),
+      request: { template: "longCall", strike: { by: "strike", strike: 140 } },
+    }, chain);
+    const copied = editLab(short, { kind: "duplicateStructure", id: short.structures[0]!.id }, chain);
+    assert.equal(copied.structures[1]!.label, "Long call alt");
+    const again = editLab(copied, { kind: "duplicateStructure", id: short.structures[0]!.id }, chain);
+    assert.equal(again.structures[2]!.label, "Long call alt 2");
+  });
+
   it("stops at eight legs and removes the structure when the last leg drops", () => {
     let lab = editLab(createLab(chain), {
       kind: "addStructure",
