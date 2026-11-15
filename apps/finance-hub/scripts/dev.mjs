@@ -5,10 +5,20 @@
  */
 import { spawn, spawnSync, execSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  appendDevLog,
+  createDevWatchdog,
+  rotateOwnedLog,
+  watchdogEnabled,
+  watchdogFailureBudget,
+  watchdogGraceMs,
+} from "./devWatchdog.mjs";
 import { loadEnvLocal } from "./loadEnvLocal.mjs";
+import { loopbackHealthOk } from "./loopbackHealth.mjs";
 import { devNextArgs, resolveListen } from "./schwabListen.mjs";
 
 const root = path.join(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -72,7 +82,7 @@ function readDevLock() {
 }
 
 function stopPids(pids) {
-  const unique = [...new Set(pids.filter((p) => pidAlive(p)))];
+  const unique = [...new Set(pids.filter((p) => p !== process.pid && p > 1 && pidAlive(p)))];
   for (const pid of unique) {
     try {
       process.kill(pid, "SIGTERM");
@@ -170,8 +180,83 @@ if (!plan.ok) {
 ensureSingleDevServer(plan.protocol, bindHost);
 
 const nextArgs = devNextArgs({ protocol: plan.protocol, bindHost, port: DEV_PORT });
-const child = spawn(nodeBin, nextArgs, { cwd: root, stdio: "inherit", env: process.env });
-child.on("exit", (code, signal) => {
-  if (signal) process.kill(process.pid, signal);
-  process.exit(code ?? 0);
-});
+const devLogPath =
+  process.platform === "darwin"
+    ? path.join(os.homedir(), "Library", "Logs", "finance-hub", "dev.log")
+    : path.join(os.homedir(), ".local", "share", "finance-hub", "logs", "dev.log");
+const DEV_LOG_MAX_BYTES = 8 * 1024 * 1024;
+// launchd appends next's stdout to this file and never rotates it.
+try {
+  rotateOwnedLog(devLogPath, DEV_LOG_MAX_BYTES);
+} catch {
+  /* best-effort */
+}
+
+let childGeneration = 0;
+let nextChild = null;
+let suppressChildExit = false;
+
+function listChildren(pid) {
+  const n = Number(pid);
+  if (!Number.isFinite(n) || n <= 1) return [];
+  try {
+    const out = execSync(`pgrep -P ${n}`, { encoding: "utf8" });
+    return out
+      .trim()
+      .split("\n")
+      .map((line) => Number(line))
+      .filter((p) => Number.isFinite(p) && p > 1 && p !== process.pid);
+  } catch {
+    return [];
+  }
+}
+
+function spawnNext() {
+  const generation = ++childGeneration;
+  nextChild = spawn(nodeBin, nextArgs, { cwd: root, stdio: "inherit", env: process.env });
+  nextChild.on("exit", (code, signal) => {
+    if (suppressChildExit || generation !== childGeneration) return;
+    if (signal) process.kill(process.pid, signal);
+    process.exit(code ?? 0);
+  });
+}
+
+spawnNext();
+
+if (watchdogEnabled(process.env)) {
+  const log = (line) => {
+    console.log(`[dev-watchdog] ${line}`);
+    try {
+      rotateOwnedLog(devLogPath, DEV_LOG_MAX_BYTES);
+      appendDevLog(devLogPath, line);
+    } catch {
+      /* best-effort */
+    }
+  };
+  const dog = createDevWatchdog({
+    failureBudget: watchdogFailureBudget(process.env),
+    graceMs: watchdogGraceMs(process.env),
+    root,
+    selfPid: process.pid,
+    log,
+    probe: () => loopbackHealthOk(DEV_PORT, 5_000, plan.protocol),
+    childPid: () => nextChild?.pid,
+    cwdOf: processCwd,
+    listChildren,
+    killTree: (pids) => {
+      suppressChildExit = true;
+      stopPids(pids);
+    },
+    onRestart: async () => {
+      spawnNext();
+      suppressChildExit = false;
+    },
+  });
+  const timer = setInterval(() => {
+    void dog.tick().catch((err) => log(`tick_failed ${err instanceof Error ? err.message : String(err)}`));
+  }, 60_000);
+  timer.unref();
+  log(
+    `armed grace_ms=${watchdogGraceMs(process.env)} failures_before_restart=${watchdogFailureBudget(process.env)}`,
+  );
+}

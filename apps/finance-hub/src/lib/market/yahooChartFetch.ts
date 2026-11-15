@@ -3,10 +3,7 @@
  * Shared by dividend payment history and trailing yield helpers.
  */
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { curlDeadlineArgs, execFileWithTimeout, fetchWithTimeout } from "@/lib/net/upstream";
 
 const MIN_GAP_MS = 450;
 const MAX_ATTEMPTS = 4;
@@ -30,9 +27,9 @@ async function throttleYahoo(): Promise<void> {
 
 async function fetchYahooChartViaCurl(url: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync(
+    const { stdout } = await execFileWithTimeout(
       "curl",
-      ["-sS", "-H", "User-Agent: Mozilla/5.0", "-H", "Accept: application/json", url],
+      ["-sS", ...curlDeadlineArgs(), "-H", "User-Agent: Mozilla/5.0", "-H", "Accept: application/json", url],
       { maxBuffer: 12 * 1024 * 1024 },
     );
     const text = String(stdout ?? "").trim();
@@ -96,7 +93,7 @@ async function fetchYahooChartUrl(
   let rateLimited = false;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     await throttleYahoo();
-    const resp = await fetch(url, {
+    const resp = await fetchWithTimeout(url, {
       headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
     });
 

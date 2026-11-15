@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 
+import { waitAtMost } from "@/lib/async/waitAtMost";
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
 import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
@@ -183,6 +184,20 @@ export function ensureOptionGreeksOnLatestSnapshots(db?: Database.Database): {
 
 let lastOptionDataRefreshAt = 0;
 
+/** Positions must not sit on a stuck global refresh until the browser gives up. */
+export const GLOBAL_REFRESH_WAIT_MS = 8_000;
+
+export async function awaitGlobalRefresh(maxMs = GLOBAL_REFRESH_WAIT_MS): Promise<"idle" | "done" | "timeout"> {
+  const pending = globalThis.__fhSchwabRefreshRunning;
+  if (!pending) return "idle";
+  const settled = pending.then(
+    () => "done" as const,
+    () => "done" as const,
+  );
+  const result = await waitAtMost(settled, maxMs);
+  return result ?? "timeout";
+}
+
 async function runOptionDataRefresh(
   db: Database.Database,
   freshness: OptionDataFreshness,
@@ -255,19 +270,17 @@ export async function ensureFreshOptionData(options?: {
   }
 
   if (globalThis.__fhSchwabRefreshRunning) {
-    try {
-      await globalThis.__fhSchwabRefreshRunning;
-    } catch {
-      // global refresh failed; still try a targeted option refresh below
-    }
+    const status = await awaitGlobalRefresh();
     ensureOptionGreeksOnLatestSnapshots(db);
     const afterGlobal = readOptionDataFreshness(db);
-    if (!afterGlobal.needsGreeksRefresh && !afterGlobal.needsHoldingsRefresh) {
+    // A refresh that is still running keeps the single-flight slot. Starting
+    // another holdings sync here would stack Schwab calls on top of it.
+    if (status === "timeout" || (!afterGlobal.needsGreeksRefresh && !afterGlobal.needsHoldingsRefresh)) {
       return {
         refreshed: false,
         holdingsSynced: false,
         greeksSynced: false,
-        reason: "waited_for_global_refresh",
+        reason: status === "timeout" ? "global_refresh_still_running" : "waited_for_global_refresh",
         freshness: afterGlobal,
       };
     }

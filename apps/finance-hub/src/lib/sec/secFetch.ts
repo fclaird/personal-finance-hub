@@ -1,18 +1,14 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
 import { logError } from "@/lib/log";
-
-const execFileAsync = promisify(execFile);
+import { curlDeadlineArgs, execFileWithTimeout } from "@/lib/net/upstream";
 
 /** SEC fair-access: app name + contact (required). */
 export const SEC_USER_AGENT = "FinanceHub admin@finance-hub.local";
 
 export async function secFetchText(url: string, maxBuffer = 12 * 1024 * 1024): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync(
+    const { stdout } = await execFileWithTimeout(
       "curl",
-      ["-sS", "-L", "-H", `User-Agent: ${SEC_USER_AGENT}`, "-H", "Accept: application/json,text/html,*/*", url],
+      ["-sS", "-L", ...curlDeadlineArgs(), "-H", `User-Agent: ${SEC_USER_AGENT}`, "-H", "Accept: application/json,text/html,*/*", url],
       { maxBuffer },
     );
     const text = String(stdout ?? "").trim();

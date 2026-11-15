@@ -76,6 +76,7 @@ export function parseFhfaMasterCsv(csv: string, placeIds: readonly string[]): Pa
 export async function fetchFhfaMasterCsv(fetchImpl: typeof fetch = fetch): Promise<string> {
   const response = await fetchImpl(FHFA_MASTER_CSV_URL, {
     headers: { Accept: "text/csv", "User-Agent": "finance-hub (local real-estate index)" },
+    signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok) throw new Error(`FHFA HPI download failed (${response.status})`);
   return response.text();

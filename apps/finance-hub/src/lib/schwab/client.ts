@@ -1,4 +1,6 @@
 import { getSecretsPassphrase } from "@/lib/env";
+import { fetchWithTimeout } from "@/lib/net/upstream";
+import { createSingleFlight } from "@/lib/singleFlight";
 import { marketDataQueueForPath, withMarketDataRateLimit } from "@/lib/schwab/marketDataRateLimit";
 import { SCHWAB_MARKETDATA_API_BASE, SCHWAB_TRADER_API_BASE } from "@/lib/schwab/config";
 import { assertSchwabTraderCallAllowed } from "@/lib/schwab/tradeWall";
@@ -7,6 +9,7 @@ import { isSchwabRefreshTokenRejectedMessage, refreshToken } from "@/lib/schwab/
 import { clearSchwabToken, getSchwabToken, setSchwabToken, type SchwabToken } from "@/lib/schwab/token";
 
 const REFRESH_SKEW_MS = 60_000;
+const tokenRefresh = createSingleFlight<SchwabToken>();
 
 function isExpired(token: SchwabToken) {
   const expiresAt = token.obtained_at + token.expires_in * 1000;
@@ -25,12 +28,7 @@ function joinBaseAndPath(base: string, path: string): URL {
   return u;
 }
 
-async function getValidToken(): Promise<SchwabToken> {
-  const passphrase = getSecretsPassphrase();
-  const token = getSchwabToken(passphrase);
-  if (!token) throw new Error("Schwab is not connected yet.");
-
-  if (!isExpired(token)) return token;
+async function refreshStoredToken(passphrase: string, token: SchwabToken): Promise<SchwabToken> {
   try {
     const refreshed = await refreshToken(token.refresh_token);
     const next: SchwabToken = { ...refreshed, obtained_at: Date.now() };
@@ -46,6 +44,16 @@ async function getValidToken(): Promise<SchwabToken> {
     }
     throw e;
   }
+}
+
+async function getValidToken(): Promise<SchwabToken> {
+  const passphrase = getSecretsPassphrase();
+  const token = getSchwabToken(passphrase);
+  if (!token) throw new Error("Schwab is not connected yet.");
+  if (!isExpired(token)) return token;
+  // One refresh for every caller that observed the same expiry. Parallel refreshes
+  // race Schwab's rotating refresh token and can invalidate the session.
+  return tokenRefresh.run(() => refreshStoredToken(passphrase, token));
 }
 
 /** Calendar YYYY-MM-DD in America/New_York for an instant (fallback when HTTP Date is missing). */
@@ -77,7 +85,7 @@ function nyIsoFromHttpDateHeader(header: string | null): string | null {
 export async function getSchwabTraderCalendarCapIso(): Promise<string> {
   const token = await getValidToken();
   const url = joinBaseAndPath(SCHWAB_TRADER_API_BASE, "accounts/accountNumbers");
-  const resp = await fetch(url, {
+  const resp = await fetchWithTimeout(url.toString(), {
     headers: {
       Authorization: `Bearer ${token.access_token}`,
       Accept: "application/json",
@@ -95,7 +103,7 @@ export async function schwabFetch<T>(
   assertSchwabTraderCallAllowed(path, init?.method);
   const token = await getValidToken();
   const url = joinBaseAndPath(SCHWAB_TRADER_API_BASE, path);
-  const resp = await fetch(url, {
+  const resp = await fetchWithTimeout(url.toString(), {
     ...init,
     headers: {
       ...(init?.headers ?? {}),
@@ -115,7 +123,7 @@ export async function schwabMarketFetch<T>(path: string, init?: RequestInit): Pr
   return withMarketDataRateLimit(queue, async () => {
     const token = await getValidToken();
     const url = joinBaseAndPath(SCHWAB_MARKETDATA_API_BASE, path);
-    const resp = await fetch(url, {
+    const resp = await fetchWithTimeout(url.toString(), {
       ...init,
       headers: {
         ...(init?.headers ?? {}),

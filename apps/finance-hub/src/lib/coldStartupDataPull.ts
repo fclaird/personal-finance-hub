@@ -1,4 +1,5 @@
 import { logError, logLine } from "@/lib/log";
+import { fetchWithTimeout } from "@/lib/net/upstream";
 import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import { runSchwabRefresh } from "@/lib/schwab/refreshOrchestrator";
 
@@ -11,6 +12,10 @@ declare global {
         lastSlowRunAt: number;
         lastAccountValueRunAt: number;
         lastTickAt: number;
+        inFlight: boolean;
+        overlapSkips: number;
+        ticksStarted: number;
+        stopGuard: (() => void) | null;
       }
     | undefined;
 }
@@ -96,7 +101,7 @@ function cronHeaders(): HeadersInit {
 
 async function postJson(base: string, path: string, body?: unknown, extraHeaders?: HeadersInit): Promise<void> {
   const url = `${base}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: "POST",
     headers: {
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
@@ -112,7 +117,7 @@ async function postJson(base: string, path: string, body?: unknown, extraHeaders
 }
 
 async function getOk(base: string, path: string): Promise<void> {
-  const res = await fetch(`${base}${path}`, { method: "GET", headers: cronHeaders() });
+  const res = await fetchWithTimeout(`${base}${path}`, { method: "GET", headers: cronHeaders() });
   if (!res.ok) throw new Error(`${path} ${res.status}`);
 }
 

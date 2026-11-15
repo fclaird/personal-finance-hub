@@ -27,6 +27,29 @@ function closeServer(server) {
   });
 }
 
+/** Forward stop signals to a spawned next process, then exit. Do not leave it running. */
+function superviseChild(child) {
+  let stopping = false;
+  const stop = (signal) => {
+    if (stopping) return;
+    stopping = true;
+    try {
+      child.kill(signal);
+    } catch {
+      /* already gone */
+    }
+    const timer = setTimeout(() => process.exit(0), 2_000);
+    timer.unref?.();
+  };
+  process.once("SIGINT", () => stop("SIGINT"));
+  process.once("SIGTERM", () => stop("SIGTERM"));
+  child.on("exit", (code, signal) => {
+    if (stopping) process.exit(0);
+    if (signal) process.kill(process.pid, signal);
+    process.exit(code ?? 0);
+  });
+}
+
 async function listenPlainHttpForInProcessFetch(onRequest) {
   const server = await listenLoopbackHttp({ port: 0, onRequest });
   const addr = server.address();
@@ -168,10 +191,7 @@ async function main() {
       console.error(err);
       process.exit(1);
     });
-    child.on("exit", (code, signal) => {
-      if (signal) process.kill(process.pid, signal);
-      process.exit(code ?? 0);
-    });
+    superviseChild(child);
     return;
   }
 

@@ -23,10 +23,30 @@ function freePort() {
   });
 }
 
+function killGroup(pid, signal) {
+  if (!pid) return;
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    /* group already gone */
+  }
+  try {
+    process.kill(pid, signal);
+  } catch {
+    /* process already gone */
+  }
+}
+
+/**
+ * Start scripts/start.mjs in its own process group and always tear the group down.
+ * Killing only the parent used to leave `next start` running, and a parent that
+ * ignored the first signal kept the test blocked.
+ */
 function runStart(env) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, ["scripts/start.mjs"], {
       cwd: root,
+      detached: true,
       env: {
         ...process.env,
         FINANCE_HUB_BIND_HOST: "127.0.0.1",
@@ -36,19 +56,25 @@ function runStart(env) {
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(termTimer);
+      clearTimeout(killTimer);
+      killGroup(child.pid, "SIGKILL");
+      resolve({ code, stdout, stderr });
+    };
     child.stdout.on("data", (d) => {
       stdout += d;
     });
     child.stderr.on("data", (d) => {
       stderr += d;
     });
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-    }, 4000);
-    child.on("exit", (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr });
-    });
+    const termTimer = setTimeout(() => killGroup(child.pid, "SIGTERM"), 4_000);
+    const killTimer = setTimeout(() => finish(null), 8_000);
+    child.on("exit", (code) => finish(code));
+    child.on("error", () => finish(null));
   });
 }
 
