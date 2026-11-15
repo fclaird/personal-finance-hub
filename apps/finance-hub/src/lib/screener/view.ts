@@ -5,6 +5,7 @@ import { SCREENER_NAME } from "@/lib/screener/name";
 import { screenerSeedMeta } from "@/lib/screener/seed";
 import { ALPHA_VANTAGE_ENV, FINNHUB_ENV, FMP_ENV } from "@/lib/screener/fetchers";
 import { FIELD_PRIORITY } from "@/lib/screener/sourcesMeta";
+import { loadJointBook } from "@/lib/screener/jointBook";
 import { listObservations, listPresets, listSecurities, listWarEdits } from "@/lib/screener/store";
 import type { Cited, CorrWindow, ScreenerPageData, ScreenerRow, SourceAvailability, StoredObservation } from "@/lib/screener/types";
 import { CORR_WINDOWS, EMPTY_CITED } from "@/lib/screener/types";
@@ -85,9 +86,11 @@ export function loadScreenerPage(db: Database.Database, now = new Date().toISOSt
     const own = byTicker.get(security.ticker) ?? [];
     const corrSpy = blankWindows();
     const corrQqq = blankWindows();
+    const corrJoint = blankWindows();
     for (const window of CORR_WINDOWS) {
       corrSpy[window] = choose(own, "corr_spy", window);
       corrQqq[window] = choose(own, "corr_qqq", window);
+      corrJoint[window] = choose(own, "corr_joint", window);
     }
     const war = choose(own, "war_exposure");
     const edit = edits.get(security.ticker);
@@ -132,6 +135,7 @@ export function loadScreenerPage(db: Database.Database, now = new Date().toISOSt
       epsTtm: choose(own, "eps_ttm"),
       corrSpy,
       corrQqq,
+      corrJoint,
       war: warShown,
       warUnverified,
       warNote: typeof war.meta?.note === "string" ? war.meta.note : null,
@@ -148,6 +152,7 @@ export function loadScreenerPage(db: Database.Database, now = new Date().toISOSt
   rows.sort((a, b) => (a.sizeRank ?? 10_000) - (b.sizeRank ?? 10_000) || a.ticker.localeCompare(b.ticker));
 
   const seed = screenerSeedMeta();
+  const jointBook = loadJointBook(db);
   return {
     name: SCREENER_NAME,
     rows,
@@ -156,6 +161,12 @@ export function loadScreenerPage(db: Database.Database, now = new Date().toISOSt
     universe: {
       ...seed,
       reportOnlyTickers: rows.filter((row) => row.origin === "report").map((row) => row.ticker),
+    },
+    joint: {
+      ready: jointBook.ready,
+      note: jointBook.note,
+      positionsAsOf: jointBook.positionsAsOf,
+      stockOnly: jointBook.stockOnly,
     },
     generatedAt: now,
   };

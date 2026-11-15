@@ -34,8 +34,10 @@ function numInRange(value: number | null, min: number | null, max: number | null
   return true;
 }
 
-function corrOf(row: ScreenerRow, which: "spy" | "qqq", window: CorrWindow): Cited {
-  return which === "spy" ? row.corrSpy[window] : row.corrQqq[window];
+function corrOf(row: ScreenerRow, which: "spy" | "qqq" | "joint", window: CorrWindow): Cited {
+  if (which === "spy") return row.corrSpy[window];
+  if (which === "qqq") return row.corrQqq[window];
+  return row.corrJoint[window];
 }
 
 function formatCorr(value: number): string {
@@ -47,7 +49,7 @@ export function rowHasCitedFigure(row: ScreenerRow): boolean {
   if (numeric.some((cited) => cited.valueNum != null)) return true;
   if (!citedIsBlank(row.war) || !citedIsBlank(row.blurb)) return true;
   for (const window of ["3m", "1y", "3y"] as const) {
-    if (row.corrSpy[window].valueNum != null || row.corrQqq[window].valueNum != null) return true;
+    if (row.corrSpy[window].valueNum != null || row.corrQqq[window].valueNum != null || row.corrJoint[window].valueNum != null) return true;
   }
   return false;
 }
@@ -89,7 +91,7 @@ export function matchRow(row: ScreenerRow, filters: ScreenerFilters): MatchResul
       if (value == null) return { ok: false, reasons: [] };
       if (filters.corrBand && correlationBand(value) !== filters.corrBand) return { ok: false, reasons: [] };
       if (!numInRange(value, filters.corrMin, filters.corrMax)) return { ok: false, reasons: [] };
-      const name = target === "spy" ? "SPY" : "QQQ";
+      const name = target === "spy" ? "SPY" : target === "qqq" ? "QQQ" : "Joint";
       const band = correlationBand(value);
       reasons.push(
         `${name} ${CORR_WINDOW_LABEL[filters.corrWindow]} correlation ${formatCorr(value)}${band ? ` ${band}` : ""}`,

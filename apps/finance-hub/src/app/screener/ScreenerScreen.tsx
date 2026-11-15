@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import { PAGE_FRAME } from "@/app/components/pageFrame";
 import { MARKET_CAP_BAND_RULES } from "@/lib/screener/bands";
@@ -18,7 +18,7 @@ const label = "text-[11px] font-semibold uppercase tracking-wide text-zinc-300";
 const button =
   "rounded-md border border-zinc-400 bg-zinc-950 px-3 py-1.5 text-sm font-semibold text-zinc-100 hover:bg-zinc-900";
 
-type SortKey = "ticker" | "name" | "sector" | "marketCap" | "peTrailing" | "peForward" | "peg" | "psTrailing" | "psForward" | "corrSpy" | "corrQqq" | "war" | "sizeRank";
+type SortKey = "ticker" | "name" | "sector" | "marketCap" | "peTrailing" | "peForward" | "peg" | "psTrailing" | "psForward" | "corrSpy" | "corrQqq" | "corrJoint" | "war" | "sizeRank";
 
 function numOf(cited: Cited): number | null {
   return cited.valueNum;
@@ -48,6 +48,8 @@ function sortValue(row: ScreenerRow, key: SortKey, window: CorrWindow): string |
       return numOf(row.corrSpy[window]);
     case "corrQqq":
       return numOf(row.corrQqq[window]);
+    case "corrJoint":
+      return numOf(row.corrJoint[window]);
     case "war":
       return row.war.valueText;
     case "sizeRank":
@@ -55,6 +57,46 @@ function sortValue(row: ScreenerRow, key: SortKey, window: CorrWindow): string |
     default:
       return null;
   }
+}
+
+/** Keeps thead pinned inside the card and to the page scroller above it. */
+function useLockScreenerHeader(frameRef: RefObject<HTMLDivElement | null>, watch: unknown) {
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    const main = frame.closest("main");
+    const thead = frame.querySelector("thead");
+    if (!main || !thead) return;
+    const group = thead.querySelector("tr.screener-groups");
+
+    const sync = () => {
+      const groupHeight = group?.getBoundingClientRect().height ?? 0;
+      frame.style.setProperty("--screener-head-top", `${groupHeight}px`);
+      const mainTop = main.getBoundingClientRect().top;
+      const frameRect = frame.getBoundingClientRect();
+      const headHeight = thead.getBoundingClientRect().height || 1;
+      const overflow = mainTop - frameRect.top;
+      const room = frameRect.bottom - mainTop - headHeight;
+      const shift = overflow > 0 && room > 0 ? Math.min(overflow, room) : 0;
+      const cardStuck = frame.scrollTop > 2;
+      frame.style.setProperty("--screener-stick-shift", `${shift}px`);
+      frame.classList.toggle("is-stuck", cardStuck || shift > 0);
+    };
+
+    sync();
+    main.addEventListener("scroll", sync, { passive: true });
+    frame.addEventListener("scroll", sync, { passive: true });
+    window.addEventListener("resize", sync);
+    const observer = new ResizeObserver(sync);
+    observer.observe(frame);
+    observer.observe(thead);
+    return () => {
+      main.removeEventListener("scroll", sync);
+      frame.removeEventListener("scroll", sync);
+      window.removeEventListener("resize", sync);
+      observer.disconnect();
+    };
+  }, [frameRef, watch]);
 }
 
 function compareSort(a: string | number | null, b: string | number | null): number {
@@ -77,6 +119,8 @@ export function ScreenerScreen({ initial = null }: { initial?: ScreenerPageData 
   const [presetName, setPresetName] = useState("");
   const [addTicker, setAddTicker] = useState("");
   const [busy, setBusy] = useState(false);
+  const tableFrameRef = useRef<HTMLDivElement>(null);
+  const compareFrameRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (data) return;
@@ -106,6 +150,9 @@ export function ScreenerScreen({ initial = null }: { initial?: ScreenerPageData 
     const dir = sortAsc ? 1 : -1;
     return matched.slice().sort((a, b) => dir * compareSort(sortValue(a, sortKey, filters.corrWindow), sortValue(b, sortKey, filters.corrWindow)) || a.ticker.localeCompare(b.ticker));
   }, [data, filters, sortAsc, sortKey]);
+
+  useLockScreenerHeader(tableFrameRef, filtered.length);
+  useLockScreenerHeader(compareFrameRef, selected.length);
 
   async function post(body: unknown) {
     setBusy(true);
@@ -292,6 +339,7 @@ export function ScreenerScreen({ initial = null }: { initial?: ScreenerPageData 
             <select className={control} value={filters.corrTarget} onChange={(event) => setFilters({ ...filters, corrTarget: event.target.value as ScreenerFilters["corrTarget"] })}>
               <option value="spy">SPY</option>
               <option value="qqq">QQQ</option>
+              <option value="joint">Joint</option>
               <option value="both">SPY and QQQ</option>
             </select>
           </label>
@@ -371,35 +419,44 @@ export function ScreenerScreen({ initial = null }: { initial?: ScreenerPageData 
 
       <p className="text-sm text-zinc-300 print:text-black">
         {filtered.length} of {data.rows.length} names. Superscript 1 is a single source. ≠ means another source differs by more than 5%. Hover or click a figure for the source and as-of date.
+        {" "}{data.joint.note}
       </p>
 
-      <div className="max-h-[70vh] overflow-auto rounded-lg border border-zinc-400 print:max-h-none print:overflow-visible">
-        <table className="w-full border-collapse text-left text-sm">
-          <thead className="sticky top-0 bg-zinc-950 text-zinc-200 print:bg-white print:text-black">
+      <div ref={tableFrameRef} className="screener-frame max-h-[min(70vh,calc(100dvh-2.5rem))] overflow-auto rounded-lg border print:max-h-none print:overflow-visible">
+        <table className="screener-table text-sm">
+          <thead>
+            <tr className="screener-groups">
+              <th className="px-2 pt-2" colSpan={6}>Company</th>
+              <th className="screener-split px-2 pt-2" colSpan={5}>Valuation</th>
+              <th className="screener-split px-2 pt-2" colSpan={2}>Fundamentals</th>
+              <th className="screener-split px-2 pt-2" colSpan={3}>Correlation</th>
+              <th className="px-2 pt-2" colSpan={2} />
+            </tr>
             <tr>
-              <th className="p-2" />
-              <SortHead label="Ticker" active={sortKey === "ticker"} onClick={() => toggleSort("ticker")} />
+              <th className="screener-pin screener-pin-check p-2" />
+              <SortHead label="Ticker" active={sortKey === "ticker"} onClick={() => toggleSort("ticker")} pin="ticker" />
               <SortHead label="Name" active={sortKey === "name"} onClick={() => toggleSort("name")} />
               <SortHead label="Sector" active={sortKey === "sector"} onClick={() => toggleSort("sector")} />
-              <th className="p-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-200 print:text-black">Industry</th>
+              <th className="p-2">Industry</th>
               <SortHead label="Mkt cap" active={sortKey === "marketCap"} onClick={() => toggleSort("marketCap")} />
-              <SortHead label="Trail P/E" active={sortKey === "peTrailing"} onClick={() => toggleSort("peTrailing")} />
+              <SortHead label="Trail P/E" active={sortKey === "peTrailing"} onClick={() => toggleSort("peTrailing")} split />
               <SortHead label="Fwd P/E" active={sortKey === "peForward"} onClick={() => toggleSort("peForward")} />
               <SortHead label="PEG" active={sortKey === "peg"} onClick={() => toggleSort("peg")} />
               <SortHead label="Trail P/S" active={sortKey === "psTrailing"} onClick={() => toggleSort("psTrailing")} />
               <SortHead label="Fwd P/S" active={sortKey === "psForward"} onClick={() => toggleSort("psForward")} />
-              <th className="p-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-200 print:text-black">Rev TTM</th>
-              <th className="p-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-200 print:text-black">EPS TTM</th>
-              <SortHead label="SPY" active={sortKey === "corrSpy"} onClick={() => toggleSort("corrSpy")} />
+              <th className="screener-split p-2">Rev TTM</th>
+              <th className="p-2">EPS TTM</th>
+              <SortHead label="SPY" active={sortKey === "corrSpy"} onClick={() => toggleSort("corrSpy")} split />
               <SortHead label="QQQ" active={sortKey === "corrQqq"} onClick={() => toggleSort("corrQqq")} />
+              <SortHead label="Joint" title="Corr to Joint" active={sortKey === "corrJoint"} onClick={() => toggleSort("corrJoint")} />
               <SortHead label="War" active={sortKey === "war"} onClick={() => toggleSort("war")} />
-              <th className="p-2 text-[11px] font-semibold uppercase tracking-wide">Why it matched</th>
+              <th className="p-2">Why it matched</th>
             </tr>
           </thead>
           <tbody>
             {filtered.map((row) => (
-              <tr key={row.ticker} className="border-t border-zinc-700 align-top text-zinc-100 print:border-zinc-300 print:text-black">
-                <td className="p-2">
+              <tr key={row.ticker} data-selected={selected.includes(row.ticker) ? "true" : "false"} className="align-top">
+                <td className="screener-pin screener-pin-check p-2">
                   <input
                     className="screener-no-print"
                     type="checkbox"
@@ -410,20 +467,21 @@ export function ScreenerScreen({ initial = null }: { initial?: ScreenerPageData 
                     }}
                   />
                 </td>
-                <td className="p-2 font-mono">{row.ticker}</td>
+                <td className="screener-pin screener-pin-ticker p-2 font-mono">{row.ticker}</td>
                 <td className="p-2">{row.name ?? "—"}</td>
                 <td className="p-2"><Cite id={`${row.ticker}:sector`} open={openCite} setOpen={setOpenCite} cited={row.sector} text={row.sector.valueText ?? "—"} /></td>
                 <td className="p-2"><Cite id={`${row.ticker}:ind`} open={openCite} setOpen={setOpenCite} cited={row.industry} text={row.industry.valueText ?? "—"} /></td>
                 <td className="p-2 font-mono"><Cite id={`${row.ticker}:cap`} open={openCite} setOpen={setOpenCite} cited={row.marketCap} text={formatMarketCap(row.marketCap.valueNum, row.marketCap.source === "report:2026-11-12-close" && typeof row.marketCap.meta?.marketCapText === "string" ? row.marketCap.meta.marketCapText : null)} /></td>
-                <td className="p-2 font-mono"><Cite id={`${row.ticker}:pet`} open={openCite} setOpen={setOpenCite} cited={row.peTrailing} text={formatRatio(row.peTrailing.valueNum)} /></td>
+                <td className="screener-split p-2 font-mono"><Cite id={`${row.ticker}:pet`} open={openCite} setOpen={setOpenCite} cited={row.peTrailing} text={formatRatio(row.peTrailing.valueNum)} /></td>
                 <td className="p-2 font-mono"><Cite id={`${row.ticker}:pef`} open={openCite} setOpen={setOpenCite} cited={row.peForward} text={formatRatio(row.peForward.valueNum)} estimate /></td>
                 <td className="p-2 font-mono"><Cite id={`${row.ticker}:peg`} open={openCite} setOpen={setOpenCite} cited={row.peg} text={formatRatio(row.peg.valueNum)} /></td>
                 <td className="p-2 font-mono"><Cite id={`${row.ticker}:pst`} open={openCite} setOpen={setOpenCite} cited={row.psTrailing} text={formatRatio(row.psTrailing.valueNum)} /></td>
                 <td className="p-2 font-mono"><Cite id={`${row.ticker}:psf`} open={openCite} setOpen={setOpenCite} cited={row.psForward} text={formatRatio(row.psForward.valueNum)} estimate /></td>
-                <td className="p-2 font-mono"><Cite id={`${row.ticker}:rev`} open={openCite} setOpen={setOpenCite} cited={row.revenueTtm} text={formatMarketCap(row.revenueTtm.valueNum)} /></td>
+                <td className="screener-split p-2 font-mono"><Cite id={`${row.ticker}:rev`} open={openCite} setOpen={setOpenCite} cited={row.revenueTtm} text={formatMarketCap(row.revenueTtm.valueNum)} /></td>
                 <td className="p-2 font-mono"><Cite id={`${row.ticker}:eps`} open={openCite} setOpen={setOpenCite} cited={row.epsTtm} text={formatRatio(row.epsTtm.valueNum)} /></td>
-                <td className="p-2 font-mono"><Cite id={`${row.ticker}:spy`} open={openCite} setOpen={setOpenCite} cited={row.corrSpy[filters.corrWindow]} text={formatCorrelation(row.corrSpy[filters.corrWindow].valueNum)} /></td>
+                <td className="screener-split p-2 font-mono"><Cite id={`${row.ticker}:spy`} open={openCite} setOpen={setOpenCite} cited={row.corrSpy[filters.corrWindow]} text={formatCorrelation(row.corrSpy[filters.corrWindow].valueNum)} /></td>
                 <td className="p-2 font-mono"><Cite id={`${row.ticker}:qqq`} open={openCite} setOpen={setOpenCite} cited={row.corrQqq[filters.corrWindow]} text={formatCorrelation(row.corrQqq[filters.corrWindow].valueNum)} /></td>
+                <td className="p-2 font-mono"><Cite id={`${row.ticker}:joint`} open={openCite} setOpen={setOpenCite} cited={row.corrJoint[filters.corrWindow]} text={formatCorrelation(row.corrJoint[filters.corrWindow].valueNum)} note={row.corrJoint[filters.corrWindow].valueNum == null ? data.joint.note : null} /></td>
                 <td className="p-2">
                   <Cite id={`${row.ticker}:war`} open={openCite} setOpen={setOpenCite} cited={row.war} text={row.war.valueText ?? "—"} unverified={row.warUnverified} note={row.warNote} />
                   {openCite === `${row.ticker}:war` ? (
@@ -437,25 +495,25 @@ export function ScreenerScreen({ initial = null }: { initial?: ScreenerPageData 
                     />
                   ) : null}
                 </td>
-                <td className="max-w-xs p-2 text-xs text-zinc-300 print:text-black">{row.why.join("; ")}</td>
+                <td className="screener-muted max-w-xs p-2 text-xs">{row.why.join("; ")}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
 
-      <section className="rounded-lg border border-zinc-400 bg-zinc-950 p-4 print:bg-white print:text-black">
-        <h2 className="text-lg font-semibold text-zinc-100 print:text-black">Compare</h2>
+      <section className="screener-frame rounded-lg border p-4">
+        <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Compare</h2>
         {compared.length < 2 ? (
-          <p className="mt-2 text-sm text-zinc-300 print:text-black">Select two or more tickers to put them side by side.</p>
+          <p className="screener-muted mt-2 text-sm">Select two or more tickers to put them side by side.</p>
         ) : (
-          <div className="mt-3 overflow-auto">
-            <table className="w-full border-collapse text-sm">
+          <div ref={compareFrameRef} className="screener-frame mt-3 max-h-[min(60vh,calc(100dvh-2.5rem))] overflow-auto">
+            <table className="screener-table text-sm">
               <thead>
                 <tr>
-                  <th className="p-2 text-left text-zinc-300">Field</th>
+                  <th className="screener-pin screener-pin-field p-2 text-left">Field</th>
                   {compared.map((row) => (
-                    <th key={row.ticker} className="p-2 text-left font-mono text-zinc-100 print:text-black">{row.ticker}</th>
+                    <th key={row.ticker} className="screener-ticker p-2 text-left font-mono">{row.ticker}</th>
                   ))}
                 </tr>
               </thead>
@@ -475,6 +533,7 @@ export function ScreenerScreen({ initial = null }: { initial?: ScreenerPageData 
                 <CompareRow label="Schwab P/E (basis unstated)" values={compared.map((row) => formatRatio(row.peSchwab.valueNum))} cites={compared.map((row) => row.peSchwab)} />
                 <CompareRow label={`SPY ${filters.corrWindow}`} values={compared.map((row) => formatCorrelation(row.corrSpy[filters.corrWindow].valueNum))} cites={compared.map((row) => row.corrSpy[filters.corrWindow])} />
                 <CompareRow label={`QQQ ${filters.corrWindow}`} values={compared.map((row) => formatCorrelation(row.corrQqq[filters.corrWindow].valueNum))} cites={compared.map((row) => row.corrQqq[filters.corrWindow])} />
+                <CompareRow label={`Corr to Joint ${filters.corrWindow}`} values={compared.map((row) => formatCorrelation(row.corrJoint[filters.corrWindow].valueNum))} cites={compared.map((row) => row.corrJoint[filters.corrWindow])} />
                 <CompareRow label="War exposure" values={compared.map((row) => `${row.war.valueText ?? "—"}${row.warUnverified ? " (unverified)" : ""}`)} cites={compared.map((row) => row.war)} />
               </tbody>
             </table>
@@ -506,10 +565,11 @@ function NumberField({ label: text, value, onChange }: { label: string; value: n
   );
 }
 
-function SortHead({ label: text, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+function SortHead({ label: text, active, onClick, split = false, pin, title }: { label: string; active: boolean; onClick: () => void; split?: boolean; pin?: "ticker"; title?: string }) {
+  const pinClass = pin === "ticker" ? "screener-pin screener-pin-ticker" : "";
   return (
-    <th className="p-2">
-      <button type="button" className={`text-[11px] font-semibold uppercase tracking-wide ${active ? "text-zinc-50" : "text-zinc-200"} print:text-black`} onClick={onClick}>
+    <th className={`${pinClass} ${split ? "screener-split p-2" : "p-2"}`}>
+      <button type="button" title={title} className={active ? "underline decoration-1 underline-offset-4" : undefined} onClick={onClick}>
         {text}
       </button>
     </th>
@@ -542,16 +602,16 @@ function Cite({
     <span className="relative inline-flex flex-col">
       <button
         type="button"
-        className="text-left text-zinc-100 print:text-black"
+        className="text-left text-inherit"
         title={tip}
         aria-expanded={open === id}
         onClick={() => setOpen(open === id ? null : id)}
       >
         {text}
-        {estimate && text !== "—" ? <span className="ml-1 text-[10px] uppercase tracking-wide text-zinc-300">cons.</span> : null}
-        {cited.singleSource && text !== "—" ? <sup className="ml-0.5 text-zinc-300">1</sup> : null}
-        {cited.disagreement ? <sup className="ml-0.5 text-amber-300">≠</sup> : null}
-        {unverified && text !== "—" ? <sup className="ml-0.5 text-zinc-300">?</sup> : null}
+        {estimate && text !== "—" ? <span className="screener-muted ml-1 text-[10px] uppercase tracking-wide">cons.</span> : null}
+        {cited.singleSource && text !== "—" ? <sup className="screener-muted ml-0.5">1</sup> : null}
+        {cited.disagreement ? <sup className="screener-mark ml-0.5">≠</sup> : null}
+        {unverified && text !== "—" ? <sup className="screener-muted ml-0.5">?</sup> : null}
       </button>
       <span className="screener-cite hidden text-[10px] leading-snug text-zinc-300">{sourceLabel(cited.source)}{cited.asOf ? ` · ${cited.asOf}` : ""}</span>
       {open === id ? (
@@ -609,12 +669,12 @@ function WarForm({
 
 function CompareRow({ label: text, values, cites }: { label: string; values: string[]; cites?: Cited[] }) {
   return (
-    <tr className="border-t border-zinc-700 print:border-zinc-300">
-      <th className="p-2 text-left font-medium text-zinc-300 print:text-black">{text}</th>
+    <tr>
+      <th className="screener-pin screener-pin-field screener-muted p-2 text-left text-xs font-medium normal-case">{text}</th>
       {values.map((value, index) => (
-        <td key={`${text}-${index}`} className="p-2 text-zinc-100 print:text-black" title={cites?.[index] ? citationLines(cites[index]!).join("\n") : undefined}>
+        <td key={`${text}-${index}`} className="p-2" title={cites?.[index] ? citationLines(cites[index]!).join("\n") : undefined}>
           {value}
-          {cites?.[index]?.asOf ? <span className="mt-1 block text-[10px] text-zinc-300 print:text-black">{sourceLabel(cites[index]!.source)} · {cites[index]!.asOf}</span> : null}
+          {cites?.[index]?.asOf ? <span className="screener-muted mt-1 block text-[10px]">{sourceLabel(cites[index]!.source)} · {cites[index]!.asOf}</span> : null}
         </td>
       ))}
     </tr>

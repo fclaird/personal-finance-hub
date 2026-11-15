@@ -87,6 +87,31 @@ export function pearson(xs: number[], ys: number[]): number | null {
   return value;
 }
 
+/** Pearson of a ticker's daily returns against an already-built return series (the joint book). */
+export function correlationAgainstReturns(
+  stock: PriceBar[],
+  benchmarkReturns: DailyReturn[],
+  window: CorrWindow,
+): CorrelationResult | null {
+  const aligned = alignReturns(dailyReturns(stock), benchmarkReturns);
+  const target = CORR_WINDOW_DAYS[window];
+  if (aligned.xs.length < MIN_PAIRED_RETURNS) return null;
+  const startIndex = aligned.xs.length > target ? aligned.xs.length - target : 0;
+  const xs = aligned.xs.slice(startIndex);
+  const ys = aligned.ys.slice(startIndex);
+  const dates = aligned.dates.slice(startIndex);
+  const value = pearson(xs, ys);
+  if (value == null || dates.length === 0) return null;
+  return {
+    value,
+    pairedReturns: xs.length,
+    targetReturns: target,
+    shortHistory: xs.length < target,
+    start: dates[0]!,
+    end: dates[dates.length - 1]!,
+  };
+}
+
 export function correlationForWindow(
   stock: PriceBar[],
   benchmark: PriceBar[],

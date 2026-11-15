@@ -34,6 +34,7 @@ export const FIELD_PRIORITY: Record<string, readonly string[]> = {
   eps_ttm: ["sec", "alphavantage"],
   corr_spy: ["yahoo_adjclose", "report:2026-11-12-close"],
   corr_qqq: ["yahoo_adjclose", "report:2026-11-12-close"],
+  corr_joint: ["yahoo_adjclose"],
   war_exposure: ["manual", "report:2026-11-12-close"],
   sector_vendor: ["yahoo", "finnhub", "fmp", "alphavantage", "schwab"],
   industry_vendor: ["yahoo", "finnhub", "fmp", "alphavantage", "schwab"],

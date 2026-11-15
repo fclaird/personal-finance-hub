@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 
-import { correlationForWindow } from "@/lib/screener/correlation";
+import { correlationAgainstReturns, correlationForWindow, type DailyReturn } from "@/lib/screener/correlation";
+import { loadJointBook, portfolioReturnSeries } from "@/lib/screener/jointBook";
 import { deriveCrossChecks, pullAlphaVantage, pullFinnhub, pullFmp, pullSchwab, pullSec, pullYahooAdjustedCloses, pullYahooSummary, type SourceAttempt } from "@/lib/screener/fetchers";
 import { listSecurities, replaceAdjustedCloses, upsertObservation } from "@/lib/screener/store";
 import type { CorrWindow, ObservationInput } from "@/lib/screener/types";
@@ -109,6 +110,31 @@ export async function refreshScreener(db: Database.Database, tickers: string[], 
     });
   }
 
+  const jointBook = loadJointBook(db);
+  let jointReturns: DailyReturn[] | null = null;
+  if (!jointBook.ready) {
+    attempts.push({ ticker: "JOINT", source: "positions", status: "skipped", detail: jointBook.note });
+  } else {
+    const barsByTicker = new Map<string, Array<{ date: string; adjClose: number }>>();
+    for (const weight of jointBook.weights) {
+      try {
+        const series = await adjustedCloses(db, weight.ticker);
+        if (series && series.length > 0) barsByTicker.set(weight.ticker, series);
+      } catch {
+        /* Missing prices stay out of the weights and are named on the citation. */
+      }
+    }
+    jointReturns = portfolioReturnSeries(jointBook.weights, barsByTicker)?.returns ?? null;
+    if (!jointReturns) {
+      attempts.push({
+        ticker: "JOINT",
+        source: PRICE_SOURCE,
+        status: "failed",
+        detail: "Corr to Joint is blank. Adjusted closes for the Joint book were unavailable.",
+      });
+    }
+  }
+
   for (const ticker of batch) {
     let sourceAttempts: SourceAttempt[] = [];
     try {
@@ -143,6 +169,35 @@ export async function refreshScreener(db: Database.Database, tickers: string[], 
             upsertObservation(db, ticker, observation, stamp);
           }
           attempts.push({ ticker, source: PRICE_SOURCE, status: "ok" });
+          if (jointReturns && jointBook.ready) {
+            for (const window of CORR_WINDOWS) {
+              const result = correlationAgainstReturns(bars, jointReturns, window);
+              if (!result) continue;
+              upsertObservation(
+                db,
+                ticker,
+                {
+                  field: "corr_joint",
+                  source: PRICE_SOURCE,
+                  valueNum: result.value,
+                  asOf: result.end,
+                  meta: {
+                    window,
+                    benchmark: "Joint brokerage",
+                    positionsAsOf: jointBook.positionsAsOf,
+                    weightBasis: jointBook.basis,
+                    priceSource: "Yahoo Finance chart adjclose",
+                    accounts: jointBook.accounts,
+                    stockOnly: jointBook.stockOnly,
+                    shortHistory: result.shortHistory,
+                    pairedReturns: result.pairedReturns,
+                    method: "Pearson correlation of daily simple returns. Weights are today's Joint brokerage market value.",
+                  },
+                },
+                stamp,
+              );
+            }
+          }
         }
       } catch (error) {
         attempts.push({

@@ -54,6 +54,11 @@ export function citationLines(cited: Cited): string[] {
     lines.push(note);
   }
   if (cited.meta?.shareClassesCombined === true) lines.push("Report combined share classes into this figure.");
+  if (typeof cited.meta?.positionsAsOf === "string") lines.push(`Positions snapshot: ${cited.meta.positionsAsOf}`);
+  if (typeof cited.meta?.weightBasis === "string") lines.push(cited.meta.weightBasis);
+  if (typeof cited.meta?.priceSource === "string" && cited.meta.benchmark === "Joint brokerage") {
+    lines.push(`Prices: ${cited.meta.priceSource}`);
+  }
   const formula = cited.meta?.formula;
   if (typeof formula === "string") lines.push(`Formula: ${formula}`);
   for (const peer of cited.peers) {

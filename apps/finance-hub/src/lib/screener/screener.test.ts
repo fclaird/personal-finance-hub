@@ -9,6 +9,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { ScreenerScreen } from "@/app/screener/ScreenerScreen";
+import { correlationAgainstReturns } from "@/lib/screener/correlation";
+import { isJointBrokerageAccount, jointWeights, loadJointBook, portfolioReturnSeries } from "@/lib/screener/jointBook";
 import { correlationBand, marketCapBand } from "@/lib/screener/bands";
 import { chooseCited, DISAGREEMENT_THRESHOLD, relativeGap } from "@/lib/screener/cited";
 import { correlationForWindow, pearson } from "@/lib/screener/correlation";
@@ -58,6 +60,7 @@ function row(partial: Partial<ScreenerRow> & Pick<ScreenerRow, "ticker">): Scree
     epsTtm: blank(),
     corrSpy: { "3m": blank(), "1y": blank(), "3y": blank() },
     corrQqq: { "3m": blank(), "1y": blank(), "3y": blank() },
+    corrJoint: { "3m": blank(), "1y": blank(), "3y": blank() },
     war: blank(),
     warUnverified: false,
     warNote: null,
@@ -232,6 +235,57 @@ test("filters reject blanks and honor the built-in screens", () => {
   assert.match(matchRow(low, qqqScreen).reasons.join(" "), /QQQ/);
   assert.equal(matchRow(high, qqqScreen).ok, false);
   assert.equal(matchRow(blankPeg, { ...EMPTY_FILTERS, sectors: ["Information Technology"] }).ok, false);
+  const jointRow = row({
+    ticker: "JN",
+    corrJoint: { "3m": { ...EMPTY_CITED, peers: [] }, "1y": citedNum(0.1), "3y": { ...EMPTY_CITED, peers: [] } },
+  });
+  assert.equal(matchRow(jointRow, { ...EMPTY_FILTERS, corrTarget: "joint", corrBand: "L", corrWindow: "1y", requireCited: false }).ok, true);
+  assert.equal(matchRow(blankPeg, { ...EMPTY_FILTERS, corrTarget: "joint", corrBand: "L", requireCited: false }).ok, false);
+});
+
+test("joint book weights use stored deltas and otherwise stay stock-only", () => {
+  assert.equal(isJointBrokerageAccount("joint_brokerage", "Brokerage"), true);
+  assert.equal(isJointBrokerageAccount("IRA", "Roth IRA"), false);
+  const stockOnly = jointWeights([
+    { securityType: "equity", symbol: "AAPL", underlying: null, quantity: 10, marketValue: 1000, price: 100, delta: null },
+    { securityType: "option", symbol: "AAPL  260116C00100000", underlying: "AAPL", quantity: 1, marketValue: 50, price: 0.5, delta: null },
+  ]);
+  assert.equal(stockOnly.stockOnly, true);
+  assert.deepEqual(stockOnly.weights, [{ ticker: "AAPL", weight: 1000 }]);
+  assert.match(stockOnly.basis, /Stock positions only/);
+
+  const withDelta = jointWeights([
+    { securityType: "equity", symbol: "AAPL", underlying: null, quantity: 10, marketValue: 1000, price: 100, delta: null },
+    { securityType: "option", symbol: "AAPL  260116C00100000", underlying: "AAPL", quantity: 1, marketValue: 50, price: 0.5, delta: 0.5 },
+  ]);
+  assert.equal(withDelta.stockOnly, false);
+  assert.equal(withDelta.weights.find((row) => row.ticker === "AAPL")?.weight, 1000 + 1 * 100 * 0.5 * 100);
+
+  const bars = Array.from({ length: 30 }, (_, index) => ({ date: `2024-02-${String(index + 1).padStart(2, "0")}`, adjClose: 100 + index }));
+  const series = portfolioReturnSeries([{ ticker: "AAPL", weight: 1000 }], new Map([["AAPL", bars]]));
+  assert.ok(series);
+  const corr = correlationAgainstReturns(bars, series!.returns, "1y");
+  assert.ok(corr);
+  assert.ok(Math.abs((corr?.value ?? 0) - 1) < 1e-9);
+
+  const db = new Database(":memory:");
+  assert.equal(loadJointBook(db).ready, false);
+  assert.match(loadJointBook(db).note, /blank/);
+  db.exec(`
+    CREATE TABLE accounts (id TEXT PRIMARY KEY, name TEXT, nickname TEXT);
+    CREATE TABLE holding_snapshots (id TEXT PRIMARY KEY, account_id TEXT, as_of TEXT);
+    CREATE TABLE securities (id TEXT PRIMARY KEY, symbol TEXT, security_type TEXT, underlying_security_id TEXT);
+    CREATE TABLE positions (id TEXT PRIMARY KEY, snapshot_id TEXT, security_id TEXT, quantity REAL, market_value REAL, price REAL);
+    CREATE TABLE option_greeks (position_id TEXT PRIMARY KEY, delta REAL);
+  `);
+  db.prepare(`INSERT INTO accounts (id, name, nickname) VALUES ('a1', 'Brokerage', 'joint_brokerage')`).run();
+  db.prepare(`INSERT INTO holding_snapshots (id, account_id, as_of) VALUES ('s1', 'a1', '2026-11-12T21:00:00Z')`).run();
+  db.prepare(`INSERT INTO securities (id, symbol, security_type, underlying_security_id) VALUES ('sec1', 'MSFT', 'equity', NULL)`).run();
+  db.prepare(`INSERT INTO positions (id, snapshot_id, security_id, quantity, market_value, price) VALUES ('p1', 's1', 'sec1', 5, 2000, 400)`).run();
+  const book = loadJointBook(db);
+  assert.equal(book.ready, true);
+  assert.equal(book.positionsAsOf, "2026-11-12T21:00:00Z");
+  assert.deepEqual(book.weights, [{ ticker: "MSFT", weight: 2000 }]);
 });
 
 test("refresh falls back when a source throws and leaves seed figures in place", async () => {
@@ -353,6 +407,8 @@ test("seeded page renders cited figures and leaves unsourced ratios blank", () =
   assert.equal(aapl?.sector.valueText, "Information Technology");
   assert.equal(aapl?.sector.singleSource, false);
   assert.equal(aapl?.corrQqq["1y"].valueNum, 0.22);
+  assert.equal(aapl?.corrJoint["1y"].valueNum, null);
+  assert.match(page.joint.note, /blank/);
   assert.equal(aapl?.war.valueText, "High");
   assert.equal(aapl?.warUnverified, true);
   const html = renderToStaticMarkup(createElement(ScreenerScreen, { initial: page }));

@@ -13,6 +13,7 @@ export const SCREENER_FIELDS = [
   "eps_ttm",
   "corr_spy",
   "corr_qqq",
+  "corr_joint",
   "war_exposure",
   "sector_vendor",
   "industry_vendor",
@@ -76,7 +77,7 @@ export type ScreenerFilters = {
   marketCapBands: MarketCapBand[];
   sizeRankMax: number | null;
   corrWindow: CorrWindow;
-  corrTarget: "spy" | "qqq" | "both";
+  corrTarget: "spy" | "qqq" | "joint" | "both";
   corrBand: CorrBand | null;
   corrMin: number | null;
   corrMax: number | null;
@@ -117,6 +118,7 @@ export type ScreenerRow = {
   epsTtm: Cited;
   corrSpy: Record<CorrWindow, Cited>;
   corrQqq: Record<CorrWindow, Cited>;
+  corrJoint: Record<CorrWindow, Cited>;
   war: Cited;
   warUnverified: boolean;
   warNote: string | null;
@@ -152,6 +154,12 @@ export type ScreenerPageData = {
     figuresAsOf: string;
     figuresAsOfDetail: string;
     reportOnlyTickers: string[];
+  };
+  joint: {
+    ready: boolean;
+    note: string;
+    positionsAsOf: string | null;
+    stockOnly: boolean;
   };
   generatedAt: string;
 };
