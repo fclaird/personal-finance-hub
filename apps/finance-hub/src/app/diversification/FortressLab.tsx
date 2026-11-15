@@ -3,10 +3,11 @@
 import { useMemo, useRef, useState } from "react";
 
 import { ChangeMeaning } from "@/app/diversification/ChangeMeaning";
+import { FortressCapabilities } from "@/app/diversification/FortressCapabilities";
 import { buildChange, EMPTY_DRAFT, type ChangeDraft } from "@/lib/fortress/composer";
 import type { FundingContext } from "@/lib/fortress/explainChange";
 import { evaluateFortress, type FortressResult, type PathPoint } from "@/lib/fortress/evaluate";
-import { isCurrentRun, syntheticMarginFixture } from "@/lib/fortress/fixtures";
+import { isCurrentRun, syntheticMarginFixture, syntheticUncoveredCall } from "@/lib/fortress/fixtures";
 import { applyChangeSet, debtPrincipal, netAssetValue } from "@/lib/fortress/ledger";
 import { longStockExcess } from "@/lib/fortress/margin";
 import { buildReturnReport, displayedVerdict, weightsFromSnapshot, type ReturnReport, type SeriesBundle } from "@/lib/fortress/returns";
@@ -206,6 +207,8 @@ export function FortressLab() {
   const [loadedSeries, setLoadedSeries] = useState<SeriesBundle[] | null>(null);
   const [report, setReport] = useState<ReturnReport | null>(null);
   const [funding, setFunding] = useState<FundingContext | null>(null);
+  const [listedSpots, setListedSpots] = useState<Record<string, number>>({});
+  const [listedVols, setListedVols] = useState<Record<string, number>>({});
   const [returnNote, setReturnNote] = useState("Adjusted returns are not loaded. A raw close is not used in their place.");
   const run = useRef(0);
 
@@ -242,9 +245,10 @@ export function FortressLab() {
     });
   }
 
-  function runModel() {
+  function runModel(factorText?: string) {
+    if (factorText) setFactors(factorText);
     const id = ++run.current;
-    const path: MarketNode[] = factors.split(",").map((part, index) => ({
+    const path: MarketNode[] = (factorText ?? factors).split(",").map((part, index) => ({
       id: `p${index}`,
       date: snapshot.asOf,
       spotFactor: Number(part.trim()),
@@ -261,7 +265,7 @@ export function FortressLab() {
     const next = evaluateFortress({
       baseline: book,
       changes,
-      market: { asOf: book.asOf, spots: spotsOf(book), vols: {}, rate: 0.04, dividendYield: {} },
+      market: { asOf: book.asOf, spots: { ...listedSpots, ...spotsOf(book) }, vols: listedVols, rate: 0.04, dividendYield: {} },
       path,
       assumptions: assumptions(),
       limits: [{ id: "excess", metric: "maintenanceExcess", limit: 0, direction: "min", required: true }],
@@ -431,7 +435,7 @@ export function FortressLab() {
         <button type="button" className={`px-3 py-1.5 text-xs font-semibold ${labControl}`} onClick={() => void importHoldings()}>
           Copy share counts from the book
         </button>
-        <button type="button" className={`px-3 py-1.5 text-xs font-semibold ${labControl}`} onClick={runModel}>
+        <button type="button" className={`px-3 py-1.5 text-xs font-semibold ${labControl}`} onClick={() => runModel()}>
           Run comparison
         </button>
         <button type="button" className={`px-3 py-1.5 text-xs font-semibold ${labControl}`} onClick={() => void loadAdjusted()}>
@@ -560,6 +564,22 @@ export function FortressLab() {
       </ul>
       <p className="mt-3 text-sm text-zinc-900 dark:text-zinc-100" data-returns-note="">{returnNote}</p>
       <ChangeMeaning report={report} funding={funding} scopeLabel={snapshot.scope.label} />
+      <FortressCapabilities
+        snapshot={snapshot}
+        spots={{ ...listedSpots, ...spotsOf(snapshot) }}
+        series={loadedSeries}
+        onShock={(nextFactors, label) => { setReturnNote(label); runModel(nextFactors); }}
+        onOptionFixture={() => {
+          setSnapshot(syntheticUncoveredCall());
+          setListedSpots({ SYN: 100 });
+          setListedVols({});
+          setChanges([]);
+          setResult(null);
+          setReport(null);
+          setFunding(null);
+          setNote("Synthetic uncovered SYN call, spot 100. Not a household book. The premium in the requirement is the entered mark.");
+        }}
+      />
       {report ? <ReturnPanel report={report} /> : null}
       <p className="mt-3 text-sm font-semibold text-zinc-50" data-fortress-note="" data-fortress-verdict={result ? displayedVerdict(result.verdict, report).kind : "none"}>
         {result ? displayedVerdict(result.verdict, report).summary : note}

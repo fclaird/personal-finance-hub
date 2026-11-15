@@ -1,7 +1,7 @@
 /**
  * Fortress simulator, phases 1 and 2, plus the adjusted-return subset of phase 3.
- * Tails, historical replay, proxy IV, factors, geography, and fund look-through
- * are not implemented. Callers must not invent those outputs.
+ * Expected shortfall, Monte Carlo, proxy IV, and unsourced geography are not implemented.
+ * Listed option margin, index-style shocks, and sourced exposures are separate.
  */
 
 export const FORTRESS_MODEL_VERSION = "fortress-ledger-1";

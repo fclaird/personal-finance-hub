@@ -37,6 +37,55 @@ export function syntheticMarginFixture(): { snapshot: Snapshot; market: MarketSt
   return { snapshot, market, path };
 }
 
+/** Synthetic uncovered call with the premium sitting in cash. Not a household book. */
+export function syntheticUncoveredCall(): Snapshot {
+  return {
+    id: "synthetic-uncovered-call",
+    version: 1,
+    currency: "USD",
+    asOf: "2026-11-15",
+    seed: 11,
+    scope: { regime: "synthetic", label: "Synthetic uncovered SYN call. Not a household book." },
+    completeness: RECORDED_BOOK,
+    vintages: { quotes: "synthetic-fixture", model: "fortress-ledger-1", rules: "manual-margin-1" },
+    positions: [{
+      id: "call",
+      kind: "option",
+      accountId: "primary",
+      quantity: -1,
+      averageCost: 2,
+      mark: 2,
+      delta: 0.5,
+      gamma: 0.01,
+      vegaPerVol: 10,
+      contract: {
+        underlying: "SYN",
+        right: "C",
+        strike: 100,
+        expiry: "2027-06-18",
+        style: "american",
+        multiplier: 100,
+        deliverableShares: 100,
+        settlement: "physical",
+        adjusted: false,
+        adjustedMetadata: "complete",
+        exotic: false,
+      },
+    }],
+    cash: [{ id: "cash", accountId: "primary", amount: 200 }],
+    receivables: [],
+    payables: [],
+    debt: [],
+    dividends: [],
+    margin: DEFAULT_MARGIN,
+    appliedOpIds: [],
+    appliedEventIds: [],
+    realized: [],
+    residuals: [],
+    externalCapital: 0,
+  };
+}
+
 export function isCurrentRun(runId: number, latest: number): boolean {
   return runId === latest;
 }

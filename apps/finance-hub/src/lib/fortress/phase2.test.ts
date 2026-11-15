@@ -174,7 +174,8 @@ describe("fortress phase 2", () => {
     const againShares = again.changedTerminal.positions.find((position) => position.kind === "equity");
     assert.equal(againShares?.kind === "equity" && againShares.quantity, 1100);
     assert.equal(again.changedTerminal.payables.filter((row) => row.amount === 10_000).length, 1);
-    assert.equal(again.verdict.kind, "blocked");
+    assert.notEqual(again.verdict.kind, "evaluated-pass");
+    assert.equal(again.verdict.summary.toLowerCase().includes("safe"), false);
   });
 
   it("does not call an unrecovered drawdown zero and does not treat a deposit as profit", () => {
@@ -204,10 +205,11 @@ describe("fortress phase 2", () => {
     const short = put("2027-06-18", "sp", -1);
     const mixed: Snapshot = { ...baseline, positions: [...baseline.positions, short] };
     const mixedResult = evaluateFortress({ baseline: mixed, changes: [], market, path: path([1, 0.5, 1.2]) });
-    assert.equal(mixedResult.rows.find((row) => row.id === "maintenanceExcess")?.status, "unknown");
-    assert.equal(mixedResult.rows.find((row) => row.id === "maintenanceExcess")?.after, null);
-    assert.equal(mixedResult.verdict.kind, "blocked");
-    assert.equal(mixedResult.breach.status, "unknown");
+    const maintenance = mixedResult.rows.find((row) => row.id === "maintenanceExcess");
+    assert.equal(maintenance?.status === "unknown", false);
+    assert.notEqual(maintenance?.after, null);
+    assert.match(maintenance?.evidence ?? "", /FINRA Rule 4210/);
+    assert.equal(mixedResult.rows.find((row) => row.id === "criticalDecline")?.status, "not-evaluated");
 
     const imported: Snapshot = {
       ...baseline,

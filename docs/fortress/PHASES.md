@@ -47,7 +47,11 @@ Accepted for the part that is built:
 
 ## Phase 3
 
-Status: PARTIAL. Historical replay, proxy implied vol, expected shortfall, Monte Carlo, and stressed liquidity are not computed. The deterministic maintenance shortfall stays on the path scorecard and is not a tail probability.
+Status: PARTIAL. Expected shortfall, Monte Carlo, and proxy implied vol are not computed. Deterministic index-style shocks for 2008, 2020, and 2022 are sourced S&P 500 closes applied as one factor, not a name's own path and not a probability. A name's adjusted-close replay is shown only when those bars cover the window.
+
+Listed option margin uses FINRA Rule 4210(f)(2)(E) and the CBOE strategy-based table, read 2026-11-15. It is not a Schwab house call. The broad-index 15% schedule is not used. A spread is charged its full strike width, and the credit is not subtracted. Long options have no loan value. A missing premium or spot stays unknown.
+
+Liquidity is days-to-liquidate and half-spread cost, and only when volume or a bid and ask were entered. Economic sector and geography appear only from a stored taxonomy row with a source and a date. Rate exposure is blank. Demo labels are not used.
 
 The adjusted-return subset is in. It reads Yahoo chart `indicators.adjclose` only, stores it as provider `yahoo-adjusted` version `yahoo-adjclose-v1`, and does not write those values into `price_points`. A missing adjclose array is a gap. The chart close is not substituted.
 

@@ -1,9 +1,10 @@
 import { crrPrice } from "@/lib/fortress/american";
 import { bookGap, marginCoverage } from "@/lib/fortress/coverage";
+import { regTMargin } from "@/lib/fortress/optionMargin";
 import { yearFraction } from "@/lib/fortress/dates";
 import { exposures, nWeight, type Known } from "@/lib/fortress/exposure";
 import { applyChangeSet, cloneSnapshot, debtPrincipal, netAssetValue, settleDue, settledCash } from "@/lib/fortress/ledger";
-import { declineToCritical, firstMaintenanceBreach, longStockExcess, marginPoints } from "@/lib/fortress/margin";
+import { declineToCritical, firstMaintenanceBreach, longStockExcess, marginPoints, type FirstBreach } from "@/lib/fortress/margin";
 import type { Assumptions, Change, MarketNode, MarketState, OptionPosition, Snapshot, Threshold } from "@/lib/fortress/types";
 import { DEFAULT_ASSUMPTIONS, FORTRESS_MODEL_VERSION, FORTRESS_PHASE, FORTRESS_RULE_VERSION } from "@/lib/fortress/types";
 
@@ -199,7 +200,13 @@ function walk(snapshot: Snapshot, market: MarketState, path: readonly MarketNode
     const symbol = book.positions.find((position) => position.kind !== "option")?.symbol;
     const spot = symbol ? (market.spots[symbol] ?? 0) * node.spotFactor : 0;
     const gross = symbol ? book.positions.reduce((sum, position) => (position.kind !== "option" && position.symbol === symbol ? sum + position.quantity * spot : sum), 0) : 0;
-    const excess = coverage.kind === "long-stock" ? longStockExcess(gross, debtPrincipal(book), book.margin.maintenanceLong + node.houseHike) : null;
+    const scaledSpots = Object.fromEntries(Object.entries(market.spots).map(([name, value]) => [name, value * node.spotFactor]));
+    const regT = coverage.kind === "reg-t" ? regTMargin(book, scaledSpots, book.margin.maintenanceLong, node.houseHike) : null;
+    const excess = coverage.kind === "long-stock"
+      ? longStockExcess(gross, debtPrincipal(book), book.margin.maintenanceLong + node.houseHike)
+      : coverage.kind === "reg-t" && regT?.status === "known"
+        ? regT.excess
+        : null;
     points.push({
       nodeId: node.id,
       date: node.date,
@@ -239,6 +246,35 @@ function row(partial: Omit<MetricRow, "diff"> & { readonly before: number | null
   return { ...partial, diff };
 }
 
+function marginBefore(snapshot: Snapshot, spots: Readonly<Record<string, number>>): number | null {
+  const coverage = marginCoverage(snapshot);
+  if (coverage.kind === "long-stock") {
+    const start = snapshot.positions.reduce((sum, position) => (position.kind === "option" ? sum : sum + position.quantity * position.mark), 0);
+    return longStockExcess(start, debtPrincipal(snapshot), snapshot.margin.maintenanceLong);
+  }
+  if (coverage.kind !== "reg-t") return null;
+  const result = regTMargin(snapshot, spots, snapshot.margin.maintenanceLong, 0);
+  return result.status === "known" ? result.excess : null;
+}
+
+function firstPathBreach(points: readonly PathPoint[]): FirstBreach {
+  if (points.length === 0 || points.some((point) => point.maintenanceExcess == null)) {
+    return { status: "unknown", nodeId: null, date: null, interval: null, refinedFactor: null, evidence: "An option-book node has no Reg-T excess." };
+  }
+  const first = points[0]!;
+  if ((first.maintenanceExcess ?? 0) < 0) {
+    return { status: "already-deficient", nodeId: first.nodeId, date: first.date, interval: null, refinedFactor: null, evidence: "Reg-T excess is already negative at the first node. The long-stock formula is not used." };
+  }
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1]!;
+    const point = points[i]!;
+    if ((prev.maintenanceExcess ?? 0) >= 0 && (point.maintenanceExcess ?? 0) < 0) {
+      return { status: "breach", nodeId: point.nodeId, date: point.date, interval: [prev.spotFactor, point.spotFactor], refinedFactor: null, evidence: `Reg-T excess turns negative at ${point.nodeId}. This is not a bisected long-stock decline.` };
+    }
+  }
+  return { status: "no-breach-tested", nodeId: null, date: null, interval: null, refinedFactor: null, evidence: "Every tested option-book node has non-negative Reg-T excess." };
+}
+
 export function evaluateFortress(input: {
   readonly baseline: Snapshot;
   readonly changes: readonly Change[];
@@ -263,18 +299,32 @@ export function evaluateFortress(input: {
   const points = coverage.kind === "long-stock" ? marginPoints(input.path, startValue, debtPrincipal(applied.snapshot), applied.snapshot.margin.maintenanceLong) : [];
   const breach = coverage.kind === "unknown"
     ? { status: "unknown" as const, nodeId: null, date: null, interval: null, refinedFactor: null, evidence: coverage.reason }
-    : firstMaintenanceBreach(points, applied.snapshot.margin.maintenanceLong, debtPrincipal(applied.snapshot), startValue);
+    : coverage.kind === "reg-t"
+      ? firstPathBreach(changedPath)
+      : firstMaintenanceBreach(points, applied.snapshot.margin.maintenanceLong, debtPrincipal(applied.snapshot), startValue);
   const beforeExposure = exposures(beforeFrozen, input.market.spots);
   const afterExposure = exposures(changedWalk.terminal, input.market.spots);
   const beforeN = nWeight(beforeExposure);
   const afterN = nWeight(afterExposure);
-  const decline = declineToCritical(startValue, debtPrincipal(applied.snapshot), applied.snapshot.margin.maintenanceLong);
-  const cure = coverage.kind === "unknown" ? null : Math.max(0, ...points.map((point) => (point.excess == null ? 0 : -point.excess)));
+  const decline = coverage.kind === "long-stock" ? declineToCritical(startValue, debtPrincipal(applied.snapshot), applied.snapshot.margin.maintenanceLong) : null;
+  const cure = coverage.kind === "unknown"
+    ? null
+    : coverage.kind === "reg-t"
+      ? (changedPath.some((point) => point.maintenanceExcess == null) ? null : Math.max(0, ...changedPath.map((point) => -(point.maintenanceExcess ?? 0))))
+      : Math.max(0, ...points.map((point) => (point.excess == null ? 0 : -point.excess)));
 
   const limitFor = (metric: string) => limits.find((item) => item.metric === metric);
   const maintenanceLimit = limitFor("maintenanceExcess");
-  const maintenanceValue = coverage.kind === "unknown" ? null : points.reduce<number | null>((worst, point) => (point.excess == null ? worst : worst == null ? point.excess : Math.min(worst, point.excess)), null);
-  const maintenanceEvidence = coverage.kind === "unknown" ? coverage.reason : "Manual long-stock maintenance. Not a broker calculation, and not used when any option is in the book.";
+  const maintenanceValue = coverage.kind === "unknown"
+    ? null
+    : coverage.kind === "reg-t"
+      ? changedPath.reduce<number | null>((worst, point) => (point.maintenanceExcess == null ? null : worst == null ? point.maintenanceExcess : Math.min(worst, point.maintenanceExcess)), null)
+      : points.reduce<number | null>((worst, point) => (point.excess == null ? worst : worst == null ? point.excess : Math.min(worst, point.excess)), null);
+  const maintenanceEvidence = coverage.kind === "unknown"
+    ? coverage.reason
+    : coverage.kind === "reg-t"
+      ? `${coverage.source}. Read ${coverage.sourceDate}. Not a Schwab house margin call, and not the long-stock formula.`
+      : "Manual long-stock maintenance. Not a broker calculation, and not used when any option is in the book.";
   const maintenanceStatus = judge(maintenanceValue, maintenanceLimit, maintenanceEvidence, breach.nodeId);
   const maintenanceRowStatus: MetricStatus = coverage.kind === "unknown" ? "unknown" : breach.status === "breach" || breach.status === "already-deficient" ? "breach" : breach.status === "unknown" ? "unknown" : maintenanceStatus.status;
   const rows: MetricRow[] = [
@@ -295,7 +345,7 @@ export function evaluateFortress(input: {
     row({
       id: "maintenanceExcess",
       label: "Maintenance excess",
-      before: marginCoverage(beforeFrozen).kind === "long-stock" ? longStockExcess(startValue, debtPrincipal(beforeFrozen), beforeFrozen.margin.maintenanceLong) : null,
+      before: marginBefore(beforeFrozen, input.market.spots),
       after: maintenanceValue,
       unit: "USD",
       denominator: "market value − debit − maintenance × market value",
@@ -316,9 +366,9 @@ export function evaluateFortress(input: {
       horizon: "instantaneous spot",
       limit: limitFor("criticalDecline")?.limit ?? null,
       direction: limitFor("criticalDecline")?.direction ?? null,
-      status: coverage.kind === "unknown" || decline == null ? "unknown" : judge(decline, limitFor("criticalDecline"), "Stock fixture D/(1−m).", null).status,
+      status: coverage.kind === "reg-t" ? "not-evaluated" : coverage.kind === "unknown" || decline == null ? "unknown" : judge(decline, limitFor("criticalDecline"), "Stock fixture D/(1−m).", null).status,
       bindingScenario: null,
-      evidence: coverage.kind === "unknown" ? coverage.reason : "Long stock only. Not a mixed-option or broker house formula.",
+      evidence: coverage.kind === "reg-t" ? "The long-stock decline formula is not applied to an option book." : coverage.kind === "unknown" ? coverage.reason : "Long stock only. Not a mixed-option or broker house formula.",
     }),
     row({
       id: "nWeight",
@@ -391,7 +441,7 @@ export function evaluateFortress(input: {
     changedTerminal: changedWalk.terminal,
     verdict,
     unavailable: [
-      "Phase 3 tail ES, historical replay, and proxy implied vol are not computed.",
+      "Phase 3 expected shortfall and Monte Carlo are not computed. A 2008, 2020, or 2022-style shock is a sourced index factor, not a probability.",
       "Adjusted-return correlation is a separate subset. It stays unknown until a Yahoo adjclose series loads, and it is not a tail or expected-shortfall result.",
       "Phase 4 factor scores, revenue geography, and fund look-through are not computed.",
       "The raw close cache is not used as an adjusted total return.",

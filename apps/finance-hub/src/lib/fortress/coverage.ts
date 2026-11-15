@@ -1,10 +1,12 @@
+import { OPTION_MARGIN_SOURCE, OPTION_MARGIN_SOURCE_DATE } from "@/lib/fortress/optionMargin";
 import type { MarketState, OptionPosition, Snapshot } from "@/lib/fortress/types";
 
 /**
  * Supported set: equity and ETF, plus single-name American or European calls and puts
  * with an explicit multiplier, deliverable, and physical or cash settlement.
  * Not supported: exotics, adjusted contracts without deliverable metadata, broker portfolio margin,
- * short-option margin, and a share-count import that omitted cash, debt, or contracts.
+ * and a share-count import that omitted cash, debt, or contracts.
+ * Listed equity option margin uses FINRA Rule 4210 and the CBOE strategy-based table.
  */
 export function contractGap(position: OptionPosition): string | null {
   const contract = position.contract;
@@ -41,21 +43,21 @@ export function bookGap(snapshot: Snapshot, market: MarketState): string | null 
   return null;
 }
 
-export type MarginCoverage = { readonly kind: "long-stock" } | { readonly kind: "unknown"; readonly reason: string };
+export type MarginCoverage =
+  | { readonly kind: "long-stock" }
+  | { readonly kind: "reg-t"; readonly source: string; readonly sourceDate: string }
+  | { readonly kind: "unknown"; readonly reason: string };
 
-/** Long-stock maintenance applies only to a book with no option contracts. */
+/** A pure stock book keeps the long-stock fixture. A listed option book uses the cited Reg-T schedule. */
 export function marginCoverage(snapshot: Snapshot): MarginCoverage {
-  if (snapshot.positions.some((position) => position.kind === "option")) {
-    const short = snapshot.positions.some((position) => position.kind === "option" && position.quantity < 0);
-    return {
-      kind: "unknown",
-      reason: short
-        ? "Short-option margin is unknown. The long-stock formula is not used."
-        : "Option contracts are in the book. The long-stock maintenance formula is not used.",
-    };
-  }
   if (snapshot.completeness.contracts !== "recorded" || snapshot.completeness.cash === "missing" || snapshot.completeness.debt === "missing") {
     return { kind: "unknown", reason: "Cash, debt, or contract metadata is missing, so maintenance is unknown." };
   }
-  return { kind: "long-stock" };
+  const options = snapshot.positions.filter((position): position is OptionPosition => position.kind === "option");
+  if (options.length === 0) return { kind: "long-stock" };
+  for (const position of options) {
+    const gap = contractGap(position);
+    if (gap) return { kind: "unknown", reason: gap };
+  }
+  return { kind: "reg-t", source: OPTION_MARGIN_SOURCE, sourceDate: OPTION_MARGIN_SOURCE_DATE };
 }
