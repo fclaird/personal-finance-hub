@@ -217,4 +217,53 @@ describe("risk budget", () => {
     assert.equal(ev.match?.label, "Put");
     assert.equal(ev.match?.capital, 8_000);
   });
+
+  it("treats shares alone as uncapped on the upside and a total loss at zero", () => {
+    const started = editLab(
+      createLab(chain),
+      {
+        kind: "addStructure",
+        label: "Shares",
+        expiry: isoDate(EXPIRY),
+        request: { template: "longCall", strike: { by: "strike", strike: 100 } },
+      },
+      chain,
+    );
+    const id = started.structures[0]!.id;
+    const longShares = editLab(
+      started,
+      [
+        { kind: "setLeg", id, legIndex: 0, instrument: "stock", side: "long", quantity: 100 },
+        { kind: "setLegCost", id, legIndex: 0, manualPrice: 100, manualDate: null },
+      ],
+      chain,
+    );
+    const longRow = evaluateLab(longShares, chain).structures[0];
+    assert.ok(longRow && longRow.status === "priced");
+    if (!longRow || longRow.status !== "priced") return;
+    assert.equal(longRow.debit, 10_000);
+    assert.equal(longRow.risk.slopeAbove, 100);
+    assert.equal(longRow.risk.maxGain, "unbounded");
+    assert.equal(longRow.risk.maxLoss, 10_000);
+    assert.equal(longRow.risk.maxLossDown, 10_000);
+    assert.deepEqual(longRow.risk.breakevens, [100]);
+    const open = evaluateLab(longShares, chain).expiryBoards.flatMap((board) => board.zones).find((zone) => zone.hi == null);
+    assert.ok(open);
+    assert.equal(open?.allLose, false);
+    assert.equal(open?.uncapped, true);
+
+    const shortShares = editLab(
+      longShares,
+      [{ kind: "setLeg", id, legIndex: 0, instrument: "stock", side: "short", quantity: 100 }],
+      chain,
+    );
+    const shortRow = evaluateLab(shortShares, chain).structures[0];
+    assert.ok(shortRow && shortRow.status === "priced");
+    if (!shortRow || shortRow.status !== "priced") return;
+    assert.equal(shortRow.risk.maxLoss, "unbounded");
+    assert.equal(shortRow.risk.maxLossUp, "unbounded");
+    assert.equal(shortRow.risk.maxGain, 10_000);
+    assert.equal(shortRow.risk.maxLossDown, "flat");
+    assert.equal(shortRow.callRiskRequired, true);
+  });
 });

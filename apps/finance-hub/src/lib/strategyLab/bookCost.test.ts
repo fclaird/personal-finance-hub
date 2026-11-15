@@ -68,6 +68,23 @@ describe("book cost reconstruction", () => {
     assert.equal(leg.partial, false);
   });
 
+  it("does not treat one missing contract as a matched ledger", () => {
+    const leg = assembleBook(
+      [
+        position({
+          id: "p1",
+          quantity: 2,
+          metadataJson: JSON.stringify({ averagePrice: 18 }),
+        }),
+      ],
+      [txn({ quantity: 1, price: 10 })],
+    )[0]!;
+    assert.equal(leg.partial, true);
+    assert.equal(leg.costSource, "position");
+    assert.equal(leg.bookPrice, 18);
+    assert.equal(leg.fillCount, 1);
+  });
+
   it("uses the position average when the ledger is short, and flags a leg with neither", () => {
     const partial = assembleBook(
       [position({ id: "p1", quantity: 10, metadataJson: JSON.stringify({ averagePrice: 8, purchaseDate: "2026-08-01" }) })],

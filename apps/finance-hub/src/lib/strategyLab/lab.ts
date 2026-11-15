@@ -15,6 +15,7 @@ import {
   entryDollars,
   expiryPnl,
   expiryRisk,
+  terminalValueSlope,
   markAt,
   netFromLegs,
   packageGreeks,
@@ -335,6 +336,23 @@ function withLegs(chain: OptionChain, lab: LabScenario, spec: StructureSpec, req
   };
 }
 
+/**
+ * Copy names stay within the 40-character label cap.
+ * The alt suffix is kept whole. Slicing the whole string first would drop that
+ * suffix on a 40-character name and make every candidate identical, so Copy
+ * would spin forever.
+ */
+function uniqueCopyLabel(base: string, taken: ReadonlySet<string>): string {
+  const cleaned = base.replace(/ alt( \d+)?$/, "");
+  for (let n = 1; n < 100; n++) {
+    const tail = n === 1 ? " alt" : ` alt ${n}`;
+    const stem = cleaned.slice(0, Math.max(0, 40 - tail.length));
+    const label = `${stem}${tail}`;
+    if (!taken.has(label)) return label;
+  }
+  return "alt".slice(0, 40);
+}
+
 function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScenario {
   switch (edit.kind) {
     case "setAssumptions":
@@ -565,14 +583,8 @@ function applyOne(lab: LabScenario, edit: LabEdit, chain: OptionChain): LabScena
         }
       }
       if (slot == null) return lab;
-      const base = spec.label.replace(/ alt( \d+)?$/, "");
       const taken = new Set(lab.structures.map((item) => item.label));
-      let label = `${base} alt`.slice(0, 40);
-      let n = 2;
-      while (taken.has(label)) {
-        label = `${base} alt ${n}`.slice(0, 40);
-        n += 1;
-      }
+      const label = uniqueCopyLabel(spec.label, taken);
       const copy: StructureSpec = {
         ...spec,
         id: `s${lab.seq}`,
@@ -1264,8 +1276,7 @@ function zoneSeriesOf(row: PricedStructure, label: string): ZoneSeries | null {
   const packages = row.sizing.packages;
   const strikes = [...new Set(row.legs.map((leg) => leg.strike).filter((strike): strike is number => strike != null))].sort((a, b) => a - b);
   const last = strikes[strikes.length - 1] ?? 0;
-  const slope =
-    last > 0 ? (expiryPnl(row.legs, row.debit, last + 1) - expiryPnl(row.legs, row.debit, last)) * packages : 0;
+  const slope = terminalValueSlope(row.legs, last) * packages;
   return {
     id: row.spec.id,
     label,
