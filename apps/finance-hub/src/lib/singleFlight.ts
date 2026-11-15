@@ -17,8 +17,7 @@ export function createSingleFlight<T>() {
       if (inflight) return inflight;
       started += 1;
       const p = Promise.resolve().then(fn);
-      let wrapped: Promise<T>;
-      wrapped = p.finally(() => {
+      const wrapped = p.finally(() => {
         if (inflight === wrapped) inflight = null;
       });
       inflight = wrapped;
