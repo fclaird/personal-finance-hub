@@ -136,10 +136,24 @@ function bridge(facts: SecFact[]): TtmResult | null {
   };
 }
 
-export function trailingFromFacts(facts: SecFact[], concept: string): TtmResult | null {
+/** Period end older than this is not current trailing revenue or EPS. */
+export const STALE_FACT_MONTHS = 18;
+
+export function isStaleAsOf(asOf: string | null | undefined, now: Date = new Date()): boolean {
+  if (!asOf) return false;
+  const end = Date.parse(`${asOf.slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(end)) return false;
+  const endDate = new Date(end);
+  let months = (now.getUTCFullYear() - endDate.getUTCFullYear()) * 12 + (now.getUTCMonth() - endDate.getUTCMonth());
+  if (now.getUTCDate() < endDate.getUTCDate()) months -= 1;
+  return months > STALE_FACT_MONTHS;
+}
+
+export function trailingFromFacts(facts: SecFact[], concept: string, now: Date = new Date()): TtmResult | null {
   const clean = usable(facts);
-  const quarterly = fourQuarters(clean);
-  const result = quarterly ?? bridge(clean);
+  const candidates = [fourQuarters(clean), bridge(clean)].filter((item): item is TtmResult => item != null);
+  candidates.sort((a, b) => b.asOf.localeCompare(a.asOf));
+  const result = candidates.find((item) => !isStaleAsOf(item.asOf, now));
   if (!result) return null;
   return { ...result, concept };
 }
@@ -150,7 +164,7 @@ type CompanyFacts = {
   };
 };
 
-export function trailingFromCompanyFacts(payload: unknown, concepts: readonly string[]): TtmResult | null {
+export function trailingFromCompanyFacts(payload: unknown, concepts: readonly string[], now: Date = new Date()): TtmResult | null {
   const root = payload as CompanyFacts;
   const gaap = root?.facts?.["us-gaap"];
   if (!gaap) return null;
@@ -159,7 +173,7 @@ export function trailingFromCompanyFacts(payload: unknown, concepts: readonly st
     if (!units) continue;
     const unitKey = Object.keys(units).find((key) => key.startsWith("USD")) ?? Object.keys(units)[0];
     if (!unitKey) continue;
-    const result = trailingFromFacts(units[unitKey] ?? [], concept);
+    const result = trailingFromFacts(units[unitKey] ?? [], concept, now);
     if (result) return result;
   }
   return null;

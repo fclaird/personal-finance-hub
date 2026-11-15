@@ -14,6 +14,15 @@ export const SCREENER_FIELDS = [
   "corr_spy",
   "corr_qqq",
   "corr_joint",
+  "corr_spy_3m",
+  "corr_spy_1y",
+  "corr_spy_3y",
+  "corr_qqq_3m",
+  "corr_qqq_1y",
+  "corr_qqq_3y",
+  "corr_joint_3m",
+  "corr_joint_1y",
+  "corr_joint_3y",
   "war_exposure",
   "sector_vendor",
   "industry_vendor",
@@ -23,6 +32,11 @@ export type ScreenerField = (typeof SCREENER_FIELDS)[number];
 
 export const CORR_WINDOWS = ["3m", "1y", "3y"] as const;
 export type CorrWindow = (typeof CORR_WINDOWS)[number];
+
+/** Stored separately per window so 3m, 1y, and 3y do not overwrite one row. */
+export function corrStorageField(base: "corr_spy" | "corr_qqq" | "corr_joint", window: CorrWindow): ScreenerField {
+  return `${base}_${window}`;
+}
 
 export const WAR_RATINGS = ["High", "Medium", "Low", "Beneficiary", "n/a"] as const;
 export type WarRating = (typeof WAR_RATINGS)[number];

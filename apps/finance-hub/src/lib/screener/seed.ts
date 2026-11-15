@@ -4,6 +4,7 @@ import reportsJson from "@/lib/screener/seed/reports.json";
 import sp500Json from "@/lib/screener/seed/sp500.json";
 import { BUILTIN_PRESETS } from "@/lib/screener/presets";
 import { REPORT_AS_OF, REPORT_PREPARED_AT, REPORT_SOURCE, WIKI_SOURCE } from "@/lib/screener/sourcesMeta";
+import { corrStorageField } from "@/lib/screener/types";
 import type { ReportCompany } from "@/lib/screener/parseReports";
 import { savePreset, upsertObservation, upsertSecurity } from "@/lib/screener/store";
 
@@ -159,13 +160,13 @@ export function seedScreener(db: Database.Database): void {
       upsertObservation(
         db,
         row.ticker,
-        { field: "corr_spy", source: REPORT_SOURCE, valueNum: row.corrSpy, asOf: REPORT_AS_OF, meta: corrMeta },
+        { field: corrStorageField("corr_spy", "1y"), source: REPORT_SOURCE, valueNum: row.corrSpy, asOf: REPORT_AS_OF, meta: corrMeta },
         REPORT_PREPARED_AT,
       );
       upsertObservation(
         db,
         row.ticker,
-        { field: "corr_qqq", source: REPORT_SOURCE, valueNum: row.corrQqq, asOf: REPORT_AS_OF, meta: corrMeta },
+        { field: corrStorageField("corr_qqq", "1y"), source: REPORT_SOURCE, valueNum: row.corrQqq, asOf: REPORT_AS_OF, meta: corrMeta },
         REPORT_PREPARED_AT,
       );
       upsertObservation(

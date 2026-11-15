@@ -8,16 +8,20 @@ import { FIELD_PRIORITY } from "@/lib/screener/sourcesMeta";
 import { loadJointBook } from "@/lib/screener/jointBook";
 import { listObservations, listPresets, listSecurities, listWarEdits } from "@/lib/screener/store";
 import type { Cited, CorrWindow, ScreenerPageData, ScreenerRow, SourceAvailability, StoredObservation } from "@/lib/screener/types";
-import { CORR_WINDOWS, EMPTY_CITED } from "@/lib/screener/types";
+import { isStaleAsOf } from "@/lib/screener/secTtm";
+import { CORR_WINDOWS, EMPTY_CITED, corrStorageField } from "@/lib/screener/types";
 import { getSchwabToken } from "@/lib/schwab/token";
 
 function choose(observations: StoredObservation[], field: StoredObservation["field"], window?: CorrWindow): Cited {
+  const stored = window && (field === "corr_spy" || field === "corr_qqq" || field === "corr_joint") ? corrStorageField(field, window) : field;
   const matching = observations.filter((obs) => {
-    if (obs.field !== field) return false;
-    if (!window) return true;
-    return obs.meta?.window === window;
+    const sameField = obs.field === stored || (window != null && obs.field === field && obs.meta?.window === window);
+    if (!sameField) return false;
+    if ((field === "revenue_ttm" || field === "eps_ttm") && isStaleAsOf(obs.asOf)) return false;
+    return true;
   });
-  return chooseCited(matching, FIELD_PRIORITY[field] ?? []);
+  const base = field.replace(/_(3m|1y|3y)$/, "");
+  return chooseCited(matching, FIELD_PRIORITY[base] ?? FIELD_PRIORITY[field] ?? []);
 }
 
 function withVendorPeers(cited: Cited, own: StoredObservation[], field: StoredObservation["field"]): Cited {

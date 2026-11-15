@@ -29,6 +29,9 @@ export function ensureScreenerSchema(db: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_screener_observation_ticker ON screener_observation(ticker);
+  `);
+  migrateCorrelationWindows(db);
+  db.exec(`
 
     CREATE TABLE IF NOT EXISTS screener_war_edit (
       ticker TEXT PRIMARY KEY COLLATE NOCASE,
@@ -69,6 +72,41 @@ export function ensureScreenerSchema(db: Database.Database): void {
       PRIMARY KEY (source, day)
     );
   `);
+}
+
+/** Rename corr_spy / corr_qqq / corr_joint rows to corr_*_<window> so each window keeps its own primary key. */
+function migrateCorrelationWindows(db: Database.Database): void {
+  const legacy = db
+    .prepare(
+      `SELECT ticker, field, source, meta_json AS metaJson
+       FROM screener_observation
+       WHERE field IN ('corr_spy', 'corr_qqq', 'corr_joint')`,
+    )
+    .all() as Array<{ ticker: string; field: string; source: string; metaJson: string | null }>;
+  const update = db.prepare(
+    `UPDATE screener_observation SET field = ? WHERE ticker = ? AND field = ? AND source = ?`,
+  );
+  const tx = db.transaction(() => {
+    for (const row of legacy) {
+      let window = "1y";
+      try {
+        const meta = row.metaJson ? (JSON.parse(row.metaJson) as { window?: unknown }) : null;
+        if (meta?.window === "3m" || meta?.window === "1y" || meta?.window === "3y") window = meta.window;
+      } catch {
+        window = "1y";
+      }
+      const next = `${row.field}_${window}`;
+      const clash = db
+        .prepare(`SELECT 1 FROM screener_observation WHERE ticker = ? AND field = ? AND source = ?`)
+        .get(row.ticker, next, row.source);
+      if (clash) {
+        db.prepare(`DELETE FROM screener_observation WHERE ticker = ? AND field = ? AND source = ?`).run(row.ticker, row.field, row.source);
+        continue;
+      }
+      update.run(next, row.ticker, row.field, row.source);
+    }
+  });
+  tx();
 }
 
 export type SecurityRow = {

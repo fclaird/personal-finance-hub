@@ -5,7 +5,7 @@ import { loadJointBook, portfolioReturnSeries } from "@/lib/screener/jointBook";
 import { deriveCrossChecks, pullAlphaVantage, pullFinnhub, pullFmp, pullSchwab, pullSec, pullYahooAdjustedCloses, pullYahooSummary, type SourceAttempt } from "@/lib/screener/fetchers";
 import { listSecurities, replaceAdjustedCloses, upsertObservation } from "@/lib/screener/store";
 import type { CorrWindow, ObservationInput } from "@/lib/screener/types";
-import { CORR_WINDOWS } from "@/lib/screener/types";
+import { CORR_WINDOWS, corrStorageField } from "@/lib/screener/types";
 
 import { SCREENER_REFRESH_LIMIT } from "@/lib/screener/name";
 
@@ -57,7 +57,7 @@ function correlationObservations(
       const result = correlationForWindow(stock, bench, active);
       if (!result) continue;
       out.push({
-        field,
+        field: corrStorageField(field, active),
         source: PRICE_SOURCE,
         valueNum: result.value,
         asOf: result.end,
@@ -177,7 +177,7 @@ export async function refreshScreener(db: Database.Database, tickers: string[], 
                 db,
                 ticker,
                 {
-                  field: "corr_joint",
+                  field: corrStorageField("corr_joint", window),
                   source: PRICE_SOURCE,
                   valueNum: result.value,
                   asOf: result.end,

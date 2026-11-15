@@ -24,7 +24,7 @@ import { trailingFromFacts } from "@/lib/screener/secTtm";
 import { seedScreener } from "@/lib/screener/seed";
 import reportsJson from "@/lib/screener/seed/reports.json";
 import sp500Json from "@/lib/screener/seed/sp500.json";
-import { ensureScreenerSchema } from "@/lib/screener/store";
+import { ensureScreenerSchema, upsertObservation } from "@/lib/screener/store";
 import type { ScreenerPageData, ScreenerRow, StoredObservation } from "@/lib/screener/types";
 import { EMPTY_CITED } from "@/lib/screener/types";
 import { pullFinnhub, pullFmp, pullAlphaVantage } from "@/lib/screener/fetchers";
@@ -151,6 +151,7 @@ test("SEC trailing figures sum four quarters or bridge a fiscal year", () => {
       { start: "2024-10-01", end: "2024-12-31", val: 40, form: "10-Q", filed: "2025-02-01" },
     ],
     "Revenues",
+    new Date("2025-06-01T00:00:00Z"),
   );
   assert.equal(summed?.method, "four-quarters");
   assert.equal(summed?.value, 100);
@@ -166,6 +167,90 @@ test("SEC trailing figures sum four quarters or bridge a fiscal year", () => {
   assert.equal(bridged?.value, 110);
   assert.equal(bridged?.asOf, "2025-09-30");
   assert.equal(trailingFromFacts([{ start: "2025-01-01", end: "2025-03-31", val: 10, form: "10-Q" }], "Revenues"), null);
+  const staleQuarters = trailingFromFacts(
+    [
+      { start: "2019-02-01", end: "2019-04-28", val: 2, form: "10-Q", filed: "2019-05-20" },
+      { start: "2019-04-29", end: "2019-07-28", val: 3, form: "10-Q", filed: "2019-08-20" },
+      { start: "2019-07-29", end: "2019-10-27", val: 2.5, form: "10-Q", filed: "2019-11-20" },
+      { start: "2019-10-28", end: "2020-01-26", val: 3.42, form: "10-Q", filed: "2020-02-20" },
+    ],
+    "Revenues",
+    new Date("2026-11-15T00:00:00Z"),
+  );
+  assert.equal(staleQuarters, null);
+  const freshOverStale = trailingFromFacts(
+    [
+      { start: "2019-02-01", end: "2019-04-28", val: 2, form: "10-Q", filed: "2019-05-20" },
+      { start: "2019-04-29", end: "2019-07-28", val: 3, form: "10-Q", filed: "2019-08-20" },
+      { start: "2019-07-29", end: "2019-10-27", val: 2.5, form: "10-Q", filed: "2019-11-20" },
+      { start: "2019-10-28", end: "2020-01-26", val: 3.42, form: "10-Q", filed: "2020-02-20" },
+      { start: "2025-01-27", end: "2026-01-26", val: 200, form: "10-K", filed: "2026-02-26" },
+      { start: "2025-01-27", end: "2025-10-26", val: 150, form: "10-Q", filed: "2025-11-20" },
+      { start: "2026-01-27", end: "2026-10-26", val: 180, form: "10-Q", filed: "2026-11-19" },
+    ],
+    "Revenues",
+    new Date("2026-11-15T00:00:00Z"),
+  );
+  assert.equal(freshOverStale?.asOf, "2026-10-26");
+  assert.notEqual(freshOverStale?.value, 10.92);
+});
+
+test("each correlation window is stored and the 1y view does not show the 3y value", () => {
+  const db = memoryDb();
+  const stamp = "2026-11-15T00:00:00.000Z";
+  db.prepare(
+    `INSERT INTO screener_observation (ticker, field, source, value_num, as_of, fetched_at, meta_json)
+     VALUES ('NVDA', 'corr_joint', 'yahoo_adjclose', 0.11, '2026-11-12', ?, '{"window":"1y"}')`,
+  ).run(stamp);
+  ensureScreenerSchema(db);
+  const migrated = db
+    .prepare(`SELECT field, value_num AS valueNum FROM screener_observation WHERE ticker = 'NVDA' AND source = 'yahoo_adjclose'`)
+    .get() as { field: string; valueNum: number };
+  assert.deepEqual(migrated, { field: "corr_joint_1y", valueNum: 0.11 });
+  for (const window of ["3m", "1y", "3y"] as const) {
+    upsertObservation(
+      db,
+      "NVDA",
+      {
+        field: `corr_joint_${window}`,
+        source: "yahoo_adjclose",
+        valueNum: window === "3m" ? 0.31 : window === "1y" ? 0.55 : 0.77,
+        asOf: "2026-11-12",
+        meta: { window },
+      },
+      stamp,
+    );
+  }
+  const row = loadScreenerPage(db).rows.find((item) => item.ticker === "NVDA");
+  assert.equal(row?.corrJoint["3m"].valueNum, 0.31);
+  assert.equal(row?.corrJoint["1y"].valueNum, 0.55);
+  assert.equal(row?.corrJoint["3y"].valueNum, 0.77);
+  const html = renderToStaticMarkup(createElement(ScreenerScreen, { initial: loadScreenerPage(db) }));
+  assert.match(html, /0\.55 H/);
+  assert.doesNotMatch(html, /0\.77/);
+});
+
+test("stale SEC revenue is not shown when a newer source exists", () => {
+  const db = memoryDb();
+  const stamp = "2026-11-15T00:00:00.000Z";
+  upsertObservation(
+    db,
+    "NVDA",
+    { field: "revenue_ttm", source: "sec", valueNum: 10.92e9, asOf: "2020-01-26", meta: { concept: "Revenues" } },
+    stamp,
+  );
+  let row = loadScreenerPage(db).rows.find((item) => item.ticker === "NVDA");
+  assert.equal(row?.revenueTtm.valueNum, null);
+  upsertObservation(
+    db,
+    "NVDA",
+    { field: "revenue_ttm", source: "alphavantage", valueNum: 130e9, asOf: "2026-09-30", meta: { field: "RevenueTTM" } },
+    stamp,
+  );
+  row = loadScreenerPage(db).rows.find((item) => item.ticker === "NVDA");
+  assert.equal(row?.revenueTtm.source, "alphavantage");
+  assert.equal(row?.revenueTtm.valueNum, 130e9);
+  assert.equal(row?.revenueTtm.asOf, "2026-09-30");
 });
 
 test("correlation, bands, and the 5% disagreement flag", () => {
