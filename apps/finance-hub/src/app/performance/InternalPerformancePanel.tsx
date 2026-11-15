@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
+import { PerformanceChartMarkers } from "@/app/performance/PerformanceChartMarkers";
 import { filletLinearCurve } from "@/lib/charts/curveFilletLinear";
 import { formatDisplayDate } from "@/lib/formatDate";
 import { PORTFOLIO_LINE_COLOR } from "@/lib/market/performanceBenchmarks";
@@ -62,6 +63,7 @@ export function InternalPerformancePanel({
   const chartData = useMemo(() => {
     return rows.map((row) => {
       const point: Record<string, string | number | null> = {
+        asOf: row.date,
         asOfLabel: formatDisplayDate(row.date, { fallback: row.date }),
         seqIndex: row.seq_index,
         Portfolio: row.portfolio,
@@ -241,6 +243,9 @@ export function InternalPerformancePanel({
               stroke={PORTFOLIO_LINE_COLOR}
               connectNulls={false}
               isAnimationActive={false}
+            />
+            <PerformanceChartMarkers
+              points={chartData.map((row) => ({ date: String(row.asOf ?? ""), x: Number(row.seqIndex) }))}
             />
           </LineChart>
         </ResponsiveContainer>
