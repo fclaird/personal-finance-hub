@@ -21,6 +21,10 @@ function rememberQuote(sym: string, now: number, entry: unknown) {
   boundCacheSet(quoteCache, sym, { at: now, entry }, QUOTE_CACHE_MAX);
 }
 
+export function quoteCacheSize(): number {
+  return quoteCache.size;
+}
+
 /** Test helper: fill the process quote cache and return its size. */
 export function primeQuoteCacheForTests(count: number): number {
   quoteCache.clear();

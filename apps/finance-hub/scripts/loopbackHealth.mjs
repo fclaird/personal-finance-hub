@@ -2,11 +2,17 @@ import http from "node:http";
 import https from "node:https";
 
 export async function loopbackHealthOk(port, timeoutMs = 5000, protocol = "http") {
-  if (protocol === "https") return probe(https, port, timeoutMs, { rejectUnauthorized: false });
-  return probe(http, port, timeoutMs, {});
+  const report = await readLoopbackHealth(port, timeoutMs, protocol);
+  return report != null;
 }
 
-function probe(mod, port, timeoutMs, extra) {
+/** Parsed /api/health body, or null when the probe times out or is not 200. */
+export async function readLoopbackHealth(port, timeoutMs = 5000, protocol = "http") {
+  if (protocol === "https") return readProbe(https, port, timeoutMs, { rejectUnauthorized: false });
+  return readProbe(http, port, timeoutMs, {});
+}
+
+function readProbe(mod, port, timeoutMs, extra) {
   return new Promise((resolve) => {
     const req = mod.get(
       {
@@ -17,14 +23,25 @@ function probe(mod, port, timeoutMs, extra) {
         ...extra,
       },
       (res) => {
-        res.resume();
-        resolve(res.statusCode === 200);
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => {
+          if (res.statusCode !== 200) {
+            resolve(null);
+            return;
+          }
+          try {
+            resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+          } catch {
+            resolve(null);
+          }
+        });
       },
     );
-    req.on("error", () => resolve(false));
+    req.on("error", () => resolve(null));
     req.on("timeout", () => {
       req.destroy();
-      resolve(false);
+      resolve(null);
     });
   });
 }

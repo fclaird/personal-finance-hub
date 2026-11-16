@@ -78,7 +78,22 @@ function readCacheRow(db: Database.Database, cacheKey: string, sessionYmd: strin
   return row ?? null;
 }
 
+/** Ignore updatedAt so a warm tick does not rewrite an unchanged glance JSON. */
+export function glancePayloadChanged(prevJson: string | null, next: GlancePayload): boolean {
+  if (!prevJson) return true;
+  try {
+    const prev = JSON.parse(prevJson) as GlancePayload;
+    const { updatedAt: _prevAt, ...prevBody } = prev;
+    const { updatedAt: _nextAt, ...nextBody } = next;
+    return JSON.stringify(prevBody) !== JSON.stringify(nextBody);
+  } catch {
+    return true;
+  }
+}
+
 function writeCacheRow(db: Database.Database, cacheKey: string, sessionYmd: string, payload: GlancePayload): void {
+  const prev = readCacheRow(db, cacheKey, sessionYmd);
+  if (prev && !glancePayloadChanged(prev.payload_json, payload)) return;
   db.prepare(
     `
     INSERT INTO glance_cache (cache_key, session_ymd, payload_json, updated_at)

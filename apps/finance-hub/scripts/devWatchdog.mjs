@@ -1,6 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
 
+/** macOS lsof reports /private/var for /var. Next's wrapper cwd is often not the hub root. */
+export function sameHubPath(cwd, root) {
+  if (!cwd || !root) return false;
+  const norm = (value) => path.resolve(String(value)).replace(/\/+$/, "");
+  const strip = (value) => norm(value).replace(/^\/private(?=\/)/, "");
+  const a = strip(cwd);
+  const b = strip(root);
+  return a === b || a.startsWith(`${b}${path.sep}`);
+}
+
+export function isHubNextCommand(command) {
+  const text = String(command ?? "");
+  if (!text) return false;
+  if (/next-server/.test(text)) return true;
+  return /\bnext\b/.test(text) && /\bdev\b/.test(text);
+}
+
 /** Off unless explicitly armed. "true" and "yes" do not count. */
 export function watchdogEnabled(env = process.env) {
   return env.FINANCE_HUB_DEV_WATCHDOG === "1";
@@ -19,17 +36,36 @@ export function watchdogGraceMs(env = process.env) {
 }
 
 /**
- * Restart only the dev server this process spawned.
- * A reused pid, init, this process, or a cwd outside the hub is refused.
+ * Restart the next-server tree this process spawned.
+ * The `next dev` wrapper's cwd often does not equal the hub root (the 24h soak
+ * refused every restart with reason=cwd pid=<next dev>). A descendant whose
+ * command is next-server, or a wrapper command that is `next dev`, is enough.
+ * An unrelated node process, init, or this process is still refused.
  */
-export function planRestart({ pid, cwd, root, selfPid }) {
+export function planRestart({ pid, cwd, root, selfPid, command, childCommands }) {
   if (pid == null || !Number.isFinite(Number(pid)) || Number(pid) <= 1) {
     return { ok: false, reason: "no_child" };
   }
   const child = Number(pid);
   if (child === selfPid) return { ok: false, reason: "self" };
-  if (!root || cwd !== root) return { ok: false, reason: "cwd" };
+  const commands = [command, ...(childCommands ?? [])];
+  const ownsNext = commands.some((entry) => isHubNextCommand(entry));
+  if (!sameHubPath(cwd, root) && !ownsNext) return { ok: false, reason: "cwd" };
   return { ok: true, pid: child };
+}
+
+/** Health answered, but the dev heap has grown past the watchdog cap. */
+export function healthProbeFailure(report, heapLimitBytes) {
+  if (!report || report.ok !== true) return "unresponsive";
+  const heap = report.memory && report.memory.heapUsed;
+  if (heapLimitBytes > 0 && typeof heap === "number" && heap > heapLimitBytes) return "heap";
+  return null;
+}
+
+export function watchdogHeapLimitBytes(env = process.env) {
+  const raw = Number(env.FINANCE_HUB_DEV_WATCHDOG_HEAP_MB ?? 1536);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.floor(raw) * 1024 * 1024;
 }
 
 /** Children first, so a worker is not reparented when the Next parent exits. */
@@ -89,20 +125,29 @@ export function createDevWatchdog(deps) {
     async tick(now = Date.now()) {
       if (restarting) return { action: "busy" };
       if (now - armedAt < deps.graceMs) return { action: "grace" };
-      const ok = await deps.probe();
-      if (ok) {
+      const report = await deps.probe();
+      const heapLimit = deps.heapLimitBytes ?? 0;
+      const failure = healthProbeFailure(report, heapLimit);
+      if (!failure) {
         failures = 0;
         return { action: "ok" };
       }
       failures += 1;
-      deps.log(`health_unresponsive consecutive=${failures} budget=${deps.failureBudget}`);
+      const heap = report && report.memory ? report.memory.heapUsed : "";
+      deps.log(
+        `health_unresponsive reason=${failure} consecutive=${failures} budget=${deps.failureBudget} heap_used=${heap}`,
+      );
       if (failures < deps.failureBudget) return { action: "wait", failures };
       const pid = Number(deps.childPid());
+      const childPids = Number.isFinite(pid) ? (deps.listChildren(pid) ?? []) : [];
+      const commandOf = deps.commandOf ?? (() => "");
       const decision = planRestart({
         pid,
         cwd: Number.isFinite(pid) ? deps.cwdOf(pid) : "",
         root: deps.root,
         selfPid: deps.selfPid,
+        command: Number.isFinite(pid) ? commandOf(pid) : "",
+        childCommands: childPids.map((child) => commandOf(child)),
       });
       if (!decision.ok) {
         deps.log(`restart_refused reason=${decision.reason} pid=${Number.isFinite(pid) ? pid : ""}`);

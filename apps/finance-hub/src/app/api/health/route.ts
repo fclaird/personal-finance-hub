@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { readWalFileBytes } from "@/lib/dbPragmas";
 import { buildHealthReport, readProcessVitals } from "@/lib/healthReport";
 import { getDbPath } from "@/lib/paths";
+import { quoteCacheSize } from "@/lib/schwab/quotesFetch";
 import { schedulerDebugState, startSchedulerOnce } from "@/lib/scheduler";
 
 export async function GET() {
@@ -30,6 +31,7 @@ export async function GET() {
       },
       latestMigration: row ?? null,
       walBytes: readWalFileBytes(getDbPath()),
+      quoteCacheEntries: quoteCacheSize(),
       dbPath: isProd ? null : getDbPath(),
     }),
   );

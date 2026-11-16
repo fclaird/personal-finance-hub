@@ -12,6 +12,7 @@ declare global {
         lastSlowRunAt: number;
         lastAccountValueRunAt: number;
         lastTickAt: number;
+        lastCheckpointAt: number;
         inFlight: boolean;
         overlapSkips: number;
         ticksStarted: number;

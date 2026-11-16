@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
+import { rememberNewsCache } from "@/lib/news/newsCache";
 import { loadRecentNewsItems } from "@/lib/news/store";
 import { mergeDedupedNews } from "@/lib/news/mergeDeduped";
 import { textMatchesSymbol } from "@/lib/news/matchSymbols";
@@ -137,7 +138,7 @@ async function fetchSymbolNews(sym: string, category: string): Promise<NewsItem[
     symbols: [s],
     cap: MAX_YAHOO_PER_SYMBOL,
   });
-  cache.set(url, { expiresAt: Date.now() + TTL_MS, items });
+  rememberNewsCache(cache, url, { expiresAt: Date.now() + TTL_MS, items });
   return items;
 }
 
@@ -147,7 +148,7 @@ async function fetchMacroFeed(feed: StaticFeed): Promise<NewsItem[]> {
 
   const xml = await fetchText(feed.url);
   if (!xml) {
-    cache.set(feed.url, { expiresAt: Date.now() + TTL_MS, items: [] });
+    rememberNewsCache(cache, feed.url, { expiresAt: Date.now() + TTL_MS, items: [] });
     return [];
   }
   const items = parseRssItems(xml, {
@@ -156,7 +157,7 @@ async function fetchMacroFeed(feed: StaticFeed): Promise<NewsItem[]> {
     symbols: [],
     cap: MAX_PER_FEED,
   });
-  cache.set(feed.url, { expiresAt: Date.now() + TTL_MS, items });
+  rememberNewsCache(cache, feed.url, { expiresAt: Date.now() + TTL_MS, items });
   return items;
 }
 

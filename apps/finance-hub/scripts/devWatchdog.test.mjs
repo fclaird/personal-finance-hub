@@ -8,8 +8,11 @@ import {
   appendDevLog,
   collectRestartPids,
   createDevWatchdog,
+  healthProbeFailure,
+  isHubNextCommand,
   planRestart,
   rotateOwnedLog,
+  sameHubPath,
   watchdogEnabled,
   watchdogFailureBudget,
   watchdogGraceMs,
@@ -35,6 +38,63 @@ describe("dev watchdog", () => {
     assert.equal(planRestart({ pid: 9, cwd: "/app", root: "/app", selfPid: 9 }).ok, false);
     assert.equal(planRestart({ pid: 42, cwd: "/elsewhere", root: "/app", selfPid: 9 }).reason, "cwd");
     assert.equal(planRestart({ pid: 42, cwd: "/app", root: "/app", selfPid: 9 }).ok, true);
+    assert.equal(sameHubPath("/private/var/hub", "/var/hub"), true);
+    assert.equal(
+      planRestart({
+        pid: 19040,
+        cwd: "/private/tmp/next-wrapper",
+        root: "/Users/chris/apps/finance-hub",
+        selfPid: 19013,
+        command: "node /Users/chris/apps/finance-hub/node_modules/next/dist/bin/next dev --experimental-https",
+        childCommands: ["next-server (v16.2.4)"],
+      }).ok,
+      true,
+    );
+    assert.equal(isHubNextCommand("node /tmp/unrelated.js"), false);
+    assert.equal(
+      planRestart({
+        pid: 19040,
+        cwd: "/private/tmp/next-wrapper",
+        root: "/Users/chris/apps/finance-hub",
+        selfPid: 19013,
+        command: "node /tmp/unrelated.js",
+        childCommands: ["node /tmp/other.js"],
+      }).reason,
+      "cwd",
+    );
+  });
+
+  it("restarts next-server when the next dev wrapper cwd is not the hub root", async () => {
+    const killed = [];
+    const commands = new Map([
+      [19040, "node /hub/node_modules/next/dist/bin/next dev --hostname 127.0.0.1"],
+      [19067, "next-server (v16.2.4)"],
+    ]);
+    const dog = createDevWatchdog({
+      failureBudget: 1,
+      graceMs: 0,
+      root: "/hub",
+      selfPid: 19013,
+      heapLimitBytes: 0,
+      log() {},
+      probe: async () => null,
+      childPid: () => 19040,
+      cwdOf: () => "/private/tmp/next-wrapper",
+      commandOf: (pid) => commands.get(pid) ?? "",
+      listChildren: (pid) => (pid === 19040 ? [19067] : []),
+      killTree: (pids) => killed.push(pids),
+      onRestart: async () => {},
+    });
+    dog.noteSpawn(0);
+    const result = await dog.tick(1_000);
+    assert.equal(result.action, "restarted");
+    assert.deepEqual(killed, [[19067, 19040]]);
+  });
+
+  it("counts a large heap as a failed probe even when health is 200", () => {
+    assert.equal(healthProbeFailure(null, 100), "unresponsive");
+    assert.equal(healthProbeFailure({ ok: true, memory: { heapUsed: 50 } }, 100), null);
+    assert.equal(healthProbeFailure({ ok: true, memory: { heapUsed: 200 } }, 100), "heap");
   });
 
   it("collects only descendants, children first", () => {

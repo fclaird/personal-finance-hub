@@ -16,9 +16,10 @@ import {
   watchdogEnabled,
   watchdogFailureBudget,
   watchdogGraceMs,
+  watchdogHeapLimitBytes,
 } from "./devWatchdog.mjs";
 import { loadEnvLocal } from "./loadEnvLocal.mjs";
-import { loopbackHealthOk } from "./loopbackHealth.mjs";
+import { readLoopbackHealth } from "./loopbackHealth.mjs";
 import { devNextArgs, resolveListen } from "./schwabListen.mjs";
 
 const root = path.join(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -50,6 +51,16 @@ function pidAlive(pid) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function processCommand(pid) {
+  const n = Number(pid);
+  if (!Number.isFinite(n) || n <= 1) return "";
+  try {
+    return execSync(`ps -p ${n} -o command=`, { encoding: "utf8" }).trim();
+  } catch {
+    return "";
   }
 }
 
@@ -239,9 +250,11 @@ if (watchdogEnabled(process.env)) {
     root,
     selfPid: process.pid,
     log,
-    probe: () => loopbackHealthOk(DEV_PORT, 5_000, plan.protocol),
+    probe: () => readLoopbackHealth(DEV_PORT, 5_000, plan.protocol),
+    heapLimitBytes: watchdogHeapLimitBytes(process.env),
     childPid: () => nextChild?.pid,
     cwdOf: processCwd,
+    commandOf: processCommand,
     listChildren,
     killTree: (pids) => {
       suppressChildExit = true;

@@ -15,6 +15,14 @@ const nextConfig: NextConfig = {
     // Prevent Turbopack from walking up to ~ and selecting the wrong lockfile.
     root: __dirname,
   },
+  experimental: {
+    // Next 16 turns this on by default. The dev server then rewrites a persistent
+    // Turbopack cache under .next for the life of the process. The 24h soak still
+    // dirtied 156–267 KB/s of file-backed memory with the WAL file size flat.
+    turbopackFileSystemCacheForDev: false,
+    // Dev keeps every server-component payload for HMR. A day of polling retains it.
+    serverComponentsHmrCache: false,
+  },
 };
 
 export default nextConfig;

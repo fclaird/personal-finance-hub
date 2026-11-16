@@ -14,6 +14,7 @@ type SchedulerState = {
   lastSlowRunAt: number;
   lastAccountValueRunAt: number;
   lastTickAt: number;
+  lastCheckpointAt: number;
   inFlight: boolean;
   overlapSkips: number;
   ticksStarted: number;
@@ -28,6 +29,12 @@ const META_MS = 60_000;
 const SLOW_MS = 600_000;
 /** RTH account_value_points sync between full slow bundles (portfolio glance). */
 const ACCOUNT_VALUE_RTH_MS = 180_000;
+/** Copying the WAL into the main database every minute rewrote the same pages. */
+export const WAL_CHECKPOINT_INTERVAL_MS = 10 * 60_000;
+
+export function shouldCheckpointWal(now: number, lastAt: number, intervalMs = WAL_CHECKPOINT_INTERVAL_MS): boolean {
+  return now - lastAt >= intervalMs;
+}
 
 export type SchedulerTimers = {
   setTimeout: (fn: () => void, ms: number) => NodeJS.Timeout;
@@ -51,6 +58,7 @@ function state(): SchedulerState {
       lastSlowRunAt: 0,
       lastAccountValueRunAt: 0,
       lastTickAt: 0,
+      lastCheckpointAt: 0,
       inFlight: false,
       overlapSkips: 0,
       ticksStarted: 0,
@@ -146,10 +154,14 @@ async function productionTick(s: SchedulerState): Promise<void> {
   );
   await maybeSyncRealEstateMonthly().catch((e) => logError("scheduler_real_estate_failed", e));
   await warmGlanceCache().catch((e) => logError("scheduler_glance_warm_failed", e));
-  try {
-    checkpointWalPassive(getDb());
-  } catch (e) {
-    logError("scheduler_wal_checkpoint_failed", e);
+  const now = Date.now();
+  if (shouldCheckpointWal(now, s.lastCheckpointAt ?? 0)) {
+    try {
+      checkpointWalPassive(getDb());
+      s.lastCheckpointAt = now;
+    } catch (e) {
+      logError("scheduler_wal_checkpoint_failed", e);
+    }
   }
 }
 

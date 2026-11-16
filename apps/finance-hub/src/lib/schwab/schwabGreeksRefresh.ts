@@ -5,7 +5,7 @@ import { newId } from "@/lib/id";
 import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import { carryForwardGreeksFromPriorSnapshots, getLatestSchwabSnapshotIds } from "@/lib/schwab/greeksCarryForward";
 import { optionMarketValueFromMark, resolveOptionContractMultiplier } from "@/lib/options/optionContractMultiplier";
-import { pickSchwabQuotePrice } from "@/lib/schwab/schwabQuotesPersist";
+import { pickSchwabQuotePrice, writeQuoteCloses } from "@/lib/schwab/schwabQuotesPersist";
 import { schwabMarketFetch } from "@/lib/schwab/client";
 import { schwabQuoteObjectFromEntry } from "@/lib/schwab/quoteEntry";
 
@@ -114,16 +114,11 @@ export async function runSchwabGreeksRefresh(db?: Database.Database): Promise<Sc
     let pricesUpdated = 0;
     const today = new Date().toISOString().slice(0, 10);
 
-    const upsertPrice = database.prepare(`
-      INSERT INTO price_points (provider, symbol, date, close)
-      VALUES ('schwab', @symbol, @date, @close)
-      ON CONFLICT(provider, symbol, date) DO UPDATE SET close = excluded.close, created_at = datetime('now')
-    `);
-
     const updatePositionMark = database.prepare(`
       UPDATE positions
       SET market_value = @market_value
       WHERE id = @position_id
+        AND IFNULL(market_value, -1e308) != IFNULL(@market_value, -1e308)
     `);
 
     const upsertGreek = database.prepare(`
@@ -177,8 +172,7 @@ export async function runSchwabGreeksRefresh(db?: Database.Database): Promise<Sc
 
         const px = pickSchwabQuotePrice(quote);
         if (px != null && px > 0) {
-          upsertPrice.run({ symbol: sym.toUpperCase(), date: today, close: px });
-          pricesUpdated++;
+          pricesUpdated += writeQuoteCloses(database, [{ symbol: sym, date: today, close: px }]).written;
         }
 
         const delta = pickGreek(quote, "delta");

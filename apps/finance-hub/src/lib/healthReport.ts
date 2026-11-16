@@ -26,6 +26,8 @@ export type HealthReport = {
   latestMigration: { name: string; applied_at: string } | null;
   /** Bytes in the SQLite WAL. Null when the file is absent. */
   walBytes: number | null;
+  /** App-level quote cache entries. The multi-GB dev heap is not this map. */
+  quoteCacheEntries: number;
   dbPath?: string;
 };
 
@@ -61,6 +63,7 @@ export function buildHealthReport(input: {
   scheduler: HealthSchedulerSnapshot;
   latestMigration: { name: string; applied_at: string } | null;
   walBytes?: number | null;
+  quoteCacheEntries?: number;
   dbPath?: string | null;
 }): HealthReport {
   const vitals = input.vitals ?? readProcessVitals();
@@ -70,6 +73,7 @@ export function buildHealthReport(input: {
     scheduler: input.scheduler,
     latestMigration: input.latestMigration,
     walBytes: input.walBytes ?? null,
+    quoteCacheEntries: input.quoteCacheEntries ?? 0,
   };
   if (input.dbPath) report.dbPath = input.dbPath;
   return report;
