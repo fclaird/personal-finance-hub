@@ -3,6 +3,21 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  /* Screener table. Lightness steps are about 3 points so stripes stay quiet. */
+  --screener-surface: #fbfcfd;
+  --screener-row: #f7f9fa;
+  --screener-row-alt: #edf0f3;
+  --screener-row-hover: #e1e7ed;
+  --screener-row-selected: #e1e9ef;
+  --screener-header: #e3eaef;
+  --screener-header-text: #344e65;
+  --screener-group: #dbe2e9;
+  --screener-group-text: #32495d;
+  --screener-cell: #171717;
+  --screener-muted: #49505a;
+  --screener-mark: #74542f;
+  --screener-line: #c5d0da;
+  --screener-header-shadow: rgba(30, 42, 56, 0.16);
 }
 
 @theme inline {
@@ -16,8 +31,178 @@
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+    --screener-surface: #0c0f13;
+    --screener-row: #101316;
+    --screener-row-alt: #181b20;
+    --screener-row-hover: #212830;
+    --screener-row-selected: #1c2631;
+    --screener-header: #202832;
+    --screener-header-text: #a4bacc;
+    --screener-group: #1c2229;
+    --screener-group-text: #9ab1c1;
+    --screener-cell: #ededed;
+    --screener-muted: #c0c7ce;
+    --screener-mark: #ccb48e;
+    --screener-line: #314050;
+    --screener-header-shadow: rgba(0, 0, 0, 0.45);
     color-scheme: dark;
   }
+}
+
+@media print {
+  body {
+    background: #fff !important;
+    color: #111 !important;
+  }
+
+  .screener-table,
+  .screener-table tr,
+  .screener-table th,
+  .screener-table td {
+    position: static !important;
+    background: #fff !important;
+    color: #111 !important;
+    box-shadow: none !important;
+    top: auto !important;
+  }
+}
+
+.screener-frame {
+  background: var(--screener-surface);
+  border-color: var(--screener-line);
+}
+
+.screener-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  text-align: left;
+  color: var(--screener-cell);
+}
+
+.screener-table thead th {
+  position: sticky;
+  top: calc(var(--screener-head-top, 0px) + var(--screener-stick-shift, 0px));
+  z-index: 3;
+  background: var(--screener-header);
+  color: var(--screener-header-text);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.screener-table thead tr.screener-groups th {
+  top: var(--screener-stick-shift, 0px);
+  z-index: 4;
+  background: var(--screener-group);
+  color: var(--screener-group-text);
+  font-size: 10px;
+}
+
+.screener-table thead tr:last-child th {
+  box-shadow: inset 0 -1px 0 var(--screener-line);
+}
+
+.screener-frame.is-stuck .screener-table thead tr:last-child th {
+  box-shadow:
+    inset 0 -1px 0 var(--screener-line),
+    0 8px 14px -10px var(--screener-header-shadow);
+}
+
+.screener-pin {
+  position: sticky;
+  z-index: 1;
+}
+
+.screener-pin-check {
+  left: 0;
+  width: 2.25rem;
+  min-width: 2.25rem;
+}
+
+.screener-pin-ticker {
+  left: 2.25rem;
+}
+
+.screener-pin-field {
+  left: 0;
+  min-width: 9.5rem;
+}
+
+.screener-table thead th.screener-pin {
+  z-index: 6;
+}
+
+.screener-pin-ticker,
+.screener-pin-field {
+  border-right: 1px solid var(--screener-line);
+}
+
+.screener-table tbody td.screener-pin,
+.screener-table tbody th.screener-pin {
+  background: var(--screener-row);
+}
+
+.screener-table tbody tr:nth-child(even) td.screener-pin,
+.screener-table tbody tr:nth-child(even) th.screener-pin {
+  background: var(--screener-row-alt);
+}
+
+.screener-table tbody tr:hover td.screener-pin,
+.screener-table tbody tr:hover th.screener-pin {
+  background: var(--screener-row-hover);
+}
+
+.screener-table tbody tr[data-selected="true"] td.screener-pin,
+.screener-table tbody tr[data-selected="true"] th.screener-pin,
+.screener-table tbody tr[data-selected="true"]:hover td.screener-pin,
+.screener-table tbody tr[data-selected="true"]:hover th.screener-pin {
+  background: var(--screener-row-selected);
+}
+
+.screener-table thead th.screener-ticker {
+  font-size: 0.875rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.screener-table tbody tr {
+  background: var(--screener-row);
+}
+
+.screener-table tbody tr:nth-child(even) {
+  background: var(--screener-row-alt);
+}
+
+.screener-table tbody tr:hover {
+  background: var(--screener-row-hover);
+}
+
+.screener-table tbody tr[data-selected="true"] {
+  background: var(--screener-row-selected);
+}
+
+.screener-table tbody tr[data-selected="true"]:hover {
+  background: var(--screener-row-hover);
+}
+
+.screener-table th,
+.screener-table td {
+  border-bottom: 1px solid var(--screener-line);
+}
+
+.screener-split {
+  box-shadow: inset 1px 0 0 var(--screener-line);
+}
+
+.screener-mark {
+  color: var(--screener-mark);
+}
+
+.screener-muted {
+  color: var(--screener-muted);
 }
 
 body {

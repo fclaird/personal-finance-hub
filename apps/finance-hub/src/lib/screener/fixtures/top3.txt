@@ -1,0 +1,358 @@
+Largest S&P 500 Companies by Sector
+Three largest S&P 500 members in each of the 11 GICS sectors, ranked by market cap at the Nov 12, 2026 close. Figures as of the Nov 12, 2026 stock-market close (4:00 p.m. ET). Prepared Fri Nov 13, 2026, about 8:00 a.m. ET, before the U.S. open.
+S&P 500 membership and GICS sectors: Wikipedia List of S&P 500 companies, cross-checked with StockAnalysis (SPY holdings). SpaceX is not in the S&P 500. Linde is included as an S&P 500 Materials member.
+Correlation and China/Taiwan methods match the top-50 list. See the appendix for filing links.
+Information Technology
+Rk
+Company
+Ticker
+Market cap
+What they do
+SPY / QQQ corr
+China/Taiwan
+1
+Apple
+AAPL
+$5.157T
+Makes the iPhone, Mac, and iPad, and runs the App Store and iCloud.
+0.34 M / 0.22 L
+High
+2
+NVIDIA
+NVDA
+$4.013T
+Designs the chips that power AI data centers and many gaming PCs.
+0.63 H / 0.67 H
+High
+3
+Microsoft
+MSFT
+$3.884T
+Sells Windows, Office, and Azure cloud computing to businesses and consumers.
+0.41 M / 0.35 M
+Medium
+Communication Services
+Rk
+Company
+Ticker
+Market cap
+What they do
+SPY / QQQ corr
+China/Taiwan
+1
+Alphabet
+GOOGL
+$3.67T
+Owns Google Search, YouTube, Android, and Google Cloud.
+0.52 H / 0.47 M
+Low
+2
+Meta Platforms
+META
+$1.594T
+Runs Facebook, Instagram, WhatsApp, and the Quest headset business.
+0.45 M / 0.40 M
+Low
+3
+Netflix
+NFLX
+$257.42B
+The leading subscription streaming service for TV shows and movies.
+0.09 L / 0.01 L
+Low
+Consumer Discretionary
+Rk
+Company
+Ticker
+Market cap
+What they do
+SPY / QQQ corr
+China/Taiwan
+1
+Amazon
+AMZN
+$2.891T
+Runs the main online store, Prime, and Amazon Web Services cloud.
+0.54 H / 0.47 M
+Low
+2
+Tesla
+TSLA
+$1.571T
+Builds electric cars, energy storage, and some solar products.
+0.63 H / 0.67 H
+High
+3
+Home Depot
+HD
+$347.45B
+The largest U.S. home-improvement retailer for contractors and do-it-yourself customers.
+0.34 M / 0.15 L
+Medium
+Consumer Staples
+Rk
+Company
+Ticker
+Market cap
+What they do
+SPY / QQQ corr
+China/Taiwan
+1
+Walmart
+WMT
+$1.00T
+The largest U.S. retailer, including Sam's Club and a growing online business.
+-0.03 L / -0.14 L
+Low
+2
+Costco
+COST
+$483.99B
+A membership warehouse club selling food and household goods in bulk.
+-0.11 L / -0.23 L
+Low
+3
+Coca-Cola
+KO
+$419.17B
+Sells Coca-Cola and other drinks through bottlers around the world.
+-0.16 L / -0.31 M
+Medium
+Health Care
+Rk
+Company
+Ticker
+Market cap
+What they do
+SPY / QQQ corr
+China/Taiwan
+1
+Eli Lilly
+LLY
+$1.271T
+Makes prescription drugs, including widely used diabetes and weight-loss medicines.
+0.12 L / -0.02 L
+Low
+2
+Johnson & Johnson
+JNJ
+$682.52B
+Makes prescription drugs and medical devices (Band-Aid to surgical tools).
+-0.05 L / -0.20 L
+Medium
+3
+AbbVie
+ABBV
+$520.47B
+A drugmaker known for immunology and other specialty medicines.
+-0.01 L / -0.12 L
+Low
+Financials
+Rk
+Company
+Ticker
+Market cap
+What they do
+SPY / QQQ corr
+China/Taiwan
+1
+Berkshire Hathaway
+BRK-B
+$1.253T
+A holding company for insurance (GEICO), the BNSF railroad, utilities, and a large stock portfolio.
+0.05 L / -0.11 L
+Low
+2
+JPMorgan Chase
+JPM
+$910.39B
+The largest U.S. bank, with consumer banking, credit cards, and a global investment bank.
+0.48 M / 0.29 M
+Low
+3
+Visa
+V
+$784.21B
+Runs the Visa card network that banks use to process payments worldwide.
+0.20 L / 0.03 L
+Low
+Energy
+Rk
+Company
+Ticker
+Market cap
+What they do
+SPY / QQQ corr
+China/Taiwan
+1
+Exxon Mobil
+XOM
+$692.57B
+An integrated oil and gas company: it finds, produces, refines, and sells fuel.
+-0.30 M / -0.31 M
+Medium
+2
+Chevron
+CVX
+$422.15B
+An integrated oil and gas company with large production and refining operations.
+-0.31 M / -0.34 M
+Medium
+3
+ConocoPhillips
+COP
+$165.60B
+An oil and gas producer with large U.S. shale and LNG operations.
+-0.29 M / -0.31 M
+Medium
+Industrials
+Rk
+Company
+Ticker
+Market cap
+What they do
+SPY / QQQ corr
+China/Taiwan
+1
+GE Aerospace
+GE
+$341.89B
+Builds jet engines and provides maintenance for commercial and military aircraft.
+0.49 M / 0.38 M
+Medium
+2
+Caterpillar
+CAT
+$276.97B
+Makes construction, mining, and power-generation machines, plus the Cat dealer network.
+0.61 H / 0.64 H
+Medium
+3
+RTX
+RTX
+$267.67B
+A major defense and aerospace contractor (Raytheon, Pratt & Whitney, Collins).
+0.16 L / 0.03 L
+Beneficiary
+Materials
+Rk
+Company
+Ticker
+Market cap
+What they do
+SPY / QQQ corr
+China/Taiwan
+1
+Linde
+LIN
+$239.87B
+The world's largest industrial-gases company (oxygen, nitrogen, hydrogen).
+0.06 L / -0.04 L
+Medium
+2
+Newmont
+NEM
+$117.05B
+The world's largest gold-mining company, with mines in the Americas, Australia, and Africa.
+0.46 M / 0.42 M
+Low
+3
+Freeport-McMoRan
+FCX
+$86.74B
+A major copper and gold miner (Grasberg in Indonesia, plus U.S. and South American mines).
+0.60 H / 0.62 H
+Medium
+Utilities
+Rk
+Company
+Ticker
+Market cap
+What they do
+SPY / QQQ corr
+China/Taiwan
+1
+NextEra Energy
+NEE
+$178.88B
+Florida's main electric utility, plus a large U.S. wind and solar generation business.
+0.05 L / -0.07 L
+Low
+2
+Southern Company
+SO
+$107.66B
+An electric utility serving customers in the southeastern United States.
+-0.15 L / -0.27 M
+Low
+3
+Duke Energy
+DUK
+$100.26B
+An electric and gas utility serving customers in the Carolinas, Florida, and the Midwest.
+-0.22 L / -0.35 M
+Low
+Real Estate
+Rk
+Company
+Ticker
+Market cap
+What they do
+SPY / QQQ corr
+China/Taiwan
+1
+Welltower
+WELL
+$179.68B
+A healthcare real-estate company that owns senior-housing and medical buildings.
+-0.01 L / -0.13 L
+Low
+2
+Prologis
+PLD
+$124.99B
+The largest warehouse-and-logistics landlord, serving e-commerce and supply-chain customers.
+0.28 M / 0.12 L
+Medium
+3
+Equinix
+EQIX
+$106.19B
+Owns data-center campuses where companies plug their networks and cloud gear together.
+0.39 M / 0.36 M
+Medium
+
+Appendix: China / Taiwan rating notes
+High  Apple (AAPL). Greater China (mainland, Hong Kong, Taiwan) was $82.4B, or 17% of FY2026 sales ($478.8B). Substantially all hardware is made by partners primarily in mainland China, Taiwan, India, Japan, South Korea, and Vietnam.  https://www.sec.gov/Archives/edgar/data/320193/000032019326000026/aapl-20260926.htm
+High  NVIDIA (NVDA). Wafers come mainly from TSMC (and Samsung). FY2026 revenue: China incl. Hong Kong $19.7B (9%) and Taiwan-headquartered customers $42.3B (20%) of $215.9B.  https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm
+Medium  Microsoft (MSFT). FY2026 revenue was 51% U.S. ($170.8B) and 49% other countries ($161.0B); China is not broken out. Rating is Medium because nearly half of sales are abroad, not because a China share is disclosed.  https://www.sec.gov/Archives/edgar/data/789019/000119312526323660/msft-20260630.htm
+Low  Alphabet (GOOGL). FY2025 revenue was 48% U.S., 29% EMEA, 17% Asia-Pacific, 6% other Americas. China is not a disclosed market; core consumer services are largely unavailable there. All share classes counted once.  https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm
+Low  Meta Platforms (META). FY2025 revenue: U.S. $74.8B of $201.0B; Asia-Pacific $53.8B (27%). China is not a disclosed segment; Facebook and Instagram are not generally available there.  https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm
+Low  Netflix (NFLX). FY2025 streaming revenue: U.S. and Canada $20.0B, EMEA $14.5B, Latin America $5.4B, Asia-Pacific $5.4B (12%) of $45.2B. The service is not generally available in China.  https://www.sec.gov/Archives/edgar/data/1065280/000106528026000034/nflx-20251231.htm
+Low  Amazon (AMZN). FY2025 sales: North America $426.3B (59%), International $161.9B (23%), AWS $128.7B (18%). China is not broken out.  https://www.sec.gov/Archives/edgar/data/1018724/000101872426000004/amzn-20251231.htm
+High  Tesla (TSLA). China was $21.0B, or 22%, of FY2025 revenue ($94.8B), and Tesla builds cars in Shanghai.  https://www.sec.gov/Archives/edgar/data/1318605/000162828026003952/tsla-20251231.htm
+Medium  Home Depot (HD). Only a small share of sales is international, but the 10-K says it kept sourcing offices in China, Taiwan, Vietnam, India, Mexico, and Canada in fiscal 2025.  https://www.sec.gov/Archives/edgar/data/354950/000162828026019436/hd-20260201.htm
+Low  Walmart (WMT). Walmart U.S. was 68% of FY2026 sales; International was $130.4B (19%) across 18 countries including China. China is not broken out as a material stand-alone line.  https://www.sec.gov/Archives/edgar/data/104169/000010416926000055/wmt-20260131.htm
+Low  Costco (COST). Operates warehouses in the U.S. and many other countries, including Taiwan and China, but the U.S. is the core of the business. China/Taiwan sales are not broken out.  https://www.sec.gov/Archives/edgar/data/909832/000090983226000093/cost-20260830.htm
+Medium  Coca-Cola (KO). Swire Coca-Cola, a major bottler, operates in 11 mainland China provinces, Hong Kong, and Taiwan. Coca-Cola does not break out a China revenue percentage.  https://www.sec.gov/Archives/edgar/data/21344/000162828026010047/ko-20251231.htm
+Low  Eli Lilly (LLY). China was $1.95B, or 3%, of FY2025 revenue ($65.2B).  https://www.sec.gov/Archives/edgar/data/59478/000005947826000013/lly-20251231.htm
+Medium  Johnson & Johnson (JNJ). About 43% of FY2025 sales were outside the U.S., including 15% in Asia-Pacific and Africa. China is not broken out.  https://www.sec.gov/Archives/edgar/data/200406/000020040626000016/jnj-20251228.htm
+Low  AbbVie (ABBV). FY2025 10-K does not present China as a 10%+ market. Midgard's compiled 10-K table shows about 2% China; that percentage is unverified here (single compiled source).  https://www.sec.gov/Archives/edgar/data/1551152/000155115226000008/abbv-20251231.htm
+Low  Berkshire Hathaway (BRK-B). FY2025 10-K has no material China revenue line. Operations are mainly U.S. insurance, rail, and energy. Portfolio holdings (including Apple) are indirect and are not treated as the company's own China sales. Combined Class A and B.  https://www.sec.gov/Archives/edgar/data/1067983/000119312526083899/brka-20251231.htm
+Low  JPMorgan Chase (JPM). FY2025 10-K does not break out a material China revenue share. The only Taiwan mention in the extract is about fund share classes, not operations.  https://www.sec.gov/Archives/edgar/data/19617/000162828026008131/jpm-20251231.htm
+Low  Visa (V). U.S. was about 38% of FY2026 net revenue; no other country was 10% or more. The 10-K names UnionPay as the leading network in China.  https://www.sec.gov/Archives/edgar/data/1403161/000140316126000134/v-20260930.htm
+Medium  Exxon Mobil (XOM). FY2025 10-K shows material Asia production (consolidated crude 445 kbd) and a global shipping/marketing system. The filing does not name the Strait of Hormuz.  https://www.sec.gov/Archives/edgar/data/34088/000003408826000045/xom-20251231.htm
+Medium  Chevron (CVX). FY2025 10-K reports substantial proved reserves and production in Asia and other international areas. The filing does not name the Strait of Hormuz.  https://www.sec.gov/Archives/edgar/data/93410/000009341026000078/cvx-20251231.htm
+Medium  ConocoPhillips (COP). Produces in the U.S., Norway, Canada, Australia, Malaysia, Libya, China, Qatar, and Equatorial Guinea. Asia Pacific was 4% of 2025 liquids production and 2% of natural gas.  https://www.sec.gov/Archives/edgar/data/1163165/000116316526000009/cop-20251231.htm
+Medium  GE Aerospace (GE). Defense & Systems revenue was $6.57B in 2025, a minority of the company versus commercial engines and services. Global aviation supply and Asia sales are material, but this is not primarily a defense name.  https://www.sec.gov/Archives/edgar/data/40545/000004054526000008/ge-20251231.htm
+Medium  Caterpillar (CAT). FY2025 external sales were $32.9B inside the U.S. and $34.7B outside (51% international). Asia/Pacific is a reported region; China is not broken out.  https://www.sec.gov/Archives/edgar/data/18230/000001823026000008/cat-20251231.htm
+Beneficiary  RTX (RTX). A U.S. defense prime. The 10-K discusses Chinese sanctions on the Raytheon business over foreign military sales to Taiwan.  https://www.sec.gov/Archives/edgar/data/101829/000010182926000006/rtx-20251231.htm
+Medium  Linde (LIN). Operates in about 15 Asian and South Pacific countries, including China. A compiled 10-K table (Midgard) puts China at about 8%; that exact share is unverified here. Incorporated in the U.K.; included because it is in the S&P 500.  https://www.sec.gov/Archives/edgar/data/1707925/000162828026011430/lin-20251231.htm
+Low  Newmont (NEM). FY2025 10-K discusses China as a factor in gold and metal demand, not as a disclosed revenue geography. Mines are in the Americas, Australia, and Africa.  https://www.sec.gov/Archives/edgar/data/1164727/000116472726000010/nem-20251231.htm
+Medium  Freeport-McMoRan (FCX). The 10-K says China is currently the largest consumer of refined copper and that U.S.-China tension can affect demand. Operations are in Indonesia, the U.S., and South America.  https://www.sec.gov/Archives/edgar/data/831259/000083125926000012/fcx-20251231.htm
+Low  NextEra Energy (NEE). FY2025 10-K is focused on Florida Power & Light and U.S. clean-energy generation. No China operations are disclosed.  https://www.sec.gov/Archives/edgar/data/753308/000075330826000015/nee-20251231.htm
+Low  Southern Company (SO). A U.S. regulated utility. FY2025 10-K does not disclose China operations.  https://www.sec.gov/Archives/edgar/data/92122/000009212226000006/so-20251231.htm
+Low  Duke Energy (DUK). A U.S. regulated utility. FY2025 10-K does not disclose China operations.  https://www.sec.gov/Archives/edgar/data/1326160/000132616026000014/duk-20251231.htm
+Low  Welltower (WELL). FY2025 10-K describes U.S., U.K., and Canadian healthcare properties. China is not a disclosed market.  https://www.sec.gov/Archives/edgar/data/766704/000076670426000010/well-20251231.htm
+Medium  Prologis (PLD). A global logistics landlord with a material Asia portfolio in addition to the Americas and Europe. A precise China percentage was not extracted from the 10-K text used here, so the Asia exposure is qualitative.  https://www.sec.gov/Archives/edgar/data/1045609/000119312526051453/pld-20251231.htm
+Medium  Equinix (EQIX). A global data-center operator with a disclosed Asia-Pacific footprint in addition to the Americas and EMEA. A precise China revenue share was not extracted from the 10-K text used here, so the Asia exposure is qualitative.  https://www.sec.gov/Archives/edgar/data/1101239/000110123926000032/eqix-20251231.htm
