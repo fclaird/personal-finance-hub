@@ -8,6 +8,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { DraggableTileLayout } from "@/app/components/DraggableTileLayout";
 import { EditablePageHeading } from "@/app/components/EditableHeading";
 import { InternalPerformancePanel, type InternalChartRow, type InternalSymbol } from "@/app/performance/InternalPerformancePanel";
+import { PerformanceChartMarkers } from "@/app/performance/PerformanceChartMarkers";
 import { filletLinearCurve } from "@/lib/charts/curveFilletLinear";
 import { formatDisplayDate } from "@/lib/formatDate";
 import {
@@ -622,6 +623,7 @@ export default function PerformancePage() {
                   stroke={PORTFOLIO_LINE_COLOR}
                   isAnimationActive={false}
                 />
+                <PerformanceChartMarkers points={chartData.map((row) => ({ date: row.asOf, x: row.seqIndex }))} />
               </LineChart>
             </ResponsiveContainer>
           </div>
