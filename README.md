@@ -58,7 +58,16 @@ npm install
 npm run build && npm start         # same scheme as SCHWAB_REDIRECT_URI, on 127.0.0.1:3000
 ```
 
-Day-to-day, point a Dock icon at `apps/finance-hub/scripts/open-finance-hub.command` (it does not build). `npm start` listens with the scheme in `SCHWAB_REDIRECT_URI`. An `https://127.0.0.1:3000/api/schwab/callback` URI serves HTTPS with the mkcert files `npm run dev` writes under `apps/finance-hub/certificates/`. An `http://` URI stays plain HTTP. Leave `FINANCE_HUB_ALLOW_BROKER_ORDERS` unset. Do not leave `npm run dev` running — Turbopack dev RSS grows to many GB.
+Day-to-day, the Mac login item `com.chris.financialbridge` runs a production build (`next build` + `next start`) on `https://127.0.0.1:3000`. Install and verify steps: [apps/finance-hub/docs/production-launcher.md](apps/finance-hub/docs/production-launcher.md). Leave `FINANCE_HUB_ALLOW_BROKER_ORDERS` unset.
+
+Development is manual and is not what launchd starts:
+
+```bash
+cd apps/finance-hub
+npm run dev
+```
+
+Do not leave `npm run dev` running overnight. Turbopack dev RSS and disk writes grow for as long as that process stays up.
 
 From the repo root you can also run `npm run start` (delegates to `apps/finance-hub`).
 

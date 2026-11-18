@@ -28,6 +28,8 @@ export type HealthReport = {
   walBytes: number | null;
   /** App-level quote cache entries. The multi-GB dev heap is not this map. */
   quoteCacheEntries: number;
+  /** `production` when the login launcher is serving `next start`. */
+  runtime: "production" | "development";
   dbPath?: string;
 };
 
@@ -64,6 +66,7 @@ export function buildHealthReport(input: {
   latestMigration: { name: string; applied_at: string } | null;
   walBytes?: number | null;
   quoteCacheEntries?: number;
+  runtime?: "production" | "development";
   dbPath?: string | null;
 }): HealthReport {
   const vitals = input.vitals ?? readProcessVitals();
@@ -74,6 +77,7 @@ export function buildHealthReport(input: {
     latestMigration: input.latestMigration,
     walBytes: input.walBytes ?? null,
     quoteCacheEntries: input.quoteCacheEntries ?? 0,
+    runtime: input.runtime ?? (process.env.NODE_ENV === "production" ? "production" : "development"),
   };
   if (input.dbPath) report.dbPath = input.dbPath;
   return report;

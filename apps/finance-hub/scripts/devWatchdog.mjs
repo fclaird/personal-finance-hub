@@ -15,7 +15,8 @@ export function isHubNextCommand(command) {
   const text = String(command ?? "");
   if (!text) return false;
   if (/next-server/.test(text)) return true;
-  return /\bnext\b/.test(text) && /\bdev\b/.test(text);
+  if (/scripts\/(?:start|dev|serve-production)\.mjs/.test(text)) return true;
+  return /\bnext\b/.test(text) && (/\bdev\b/.test(text) || /\bstart\b/.test(text));
 }
 
 /** Off unless explicitly armed. "true" and "yes" do not count. */

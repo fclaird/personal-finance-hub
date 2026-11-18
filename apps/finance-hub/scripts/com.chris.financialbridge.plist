@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.chris.financialbridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>__BIN__/launch-financial-bridge.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__APP_ROOT__</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>FINANCE_HUB_LAUNCHD</key>
+    <string>1</string>
+    <key>FINANCE_HUB_OPEN_WINDOW</key>
+    <string>1</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/finance-hub/bridge.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/finance-hub/bridge.log</string>
+</dict>
+</plist>

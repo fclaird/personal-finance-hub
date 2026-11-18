@@ -52,6 +52,10 @@ describe("dev watchdog", () => {
     );
     assert.equal(isHubNextCommand("node /tmp/unrelated.js"), false);
     assert.equal(
+      isHubNextCommand("node /Users/chris/apps/finance-hub/scripts/start.mjs"),
+      true,
+    );
+    assert.equal(
       planRestart({
         pid: 19040,
         cwd: "/private/tmp/next-wrapper",
