@@ -69,11 +69,74 @@ export async function buildGlancePayload(now: Date = new Date(), flavor: FlavorI
   };
 }
 
-type CacheRow = { payload_json: string; updated_at: string };
+type CacheRow = { payload_json: string; series_json: string | null; updated_at: string };
+
+type SeriesSlot = { series: UsMarketGlanceItem["series"]; extendedSeries: UsMarketGlanceItem["extendedSeries"] | null };
+
+type SeriesBundle = {
+  items: SeriesSlot[];
+  alternateGlanceItems: SeriesSlot[];
+  futuresGlanceItems: SeriesSlot[];
+};
+
+function seriesSlot(item: UsMarketGlanceItem): SeriesSlot {
+  return { series: item.series ?? [], extendedSeries: item.extendedSeries ?? null };
+}
+
+function shellItem(item: UsMarketGlanceItem): UsMarketGlanceItem {
+  const { extendedSeries: _extended, ...rest } = item;
+  return { ...rest, series: [] };
+}
+
+/** Series live in their own row so a last-price tick does not rewrite the charts. */
+export function splitGlancePayload(payload: GlancePayload): { shell: GlancePayload; series: SeriesBundle } {
+  return {
+    shell: {
+      ...payload,
+      items: payload.items.map(shellItem),
+      alternateGlanceItems: payload.alternateGlanceItems.map(shellItem),
+      futuresGlanceItems: payload.futuresGlanceItems.map(shellItem),
+    },
+    series: {
+      items: payload.items.map(seriesSlot),
+      alternateGlanceItems: payload.alternateGlanceItems.map(seriesSlot),
+      futuresGlanceItems: payload.futuresGlanceItems.map(seriesSlot),
+    },
+  };
+}
+
+function graftItems(items: UsMarketGlanceItem[], slots: SeriesSlot[] | undefined): UsMarketGlanceItem[] {
+  if (!slots || slots.length === 0) return items;
+  return items.map((item, i) => {
+    const slot = slots[i];
+    if (!slot) return item;
+    const next: UsMarketGlanceItem = { ...item, series: slot.series ?? item.series };
+    if (slot.extendedSeries && slot.extendedSeries.length > 0) next.extendedSeries = slot.extendedSeries;
+    return next;
+  });
+}
+
+export function mergeGlancePayload(shell: GlancePayload, series: SeriesBundle | null): GlancePayload {
+  if (!series) return shell;
+  return {
+    ...shell,
+    items: graftItems(shell.items, series.items),
+    alternateGlanceItems: graftItems(shell.alternateGlanceItems, series.alternateGlanceItems),
+    futuresGlanceItems: graftItems(shell.futuresGlanceItems, series.futuresGlanceItems),
+  };
+}
 
 function readCacheRow(db: Database.Database, cacheKey: string, sessionYmd: string): CacheRow | null {
   const row = db
-    .prepare(`SELECT payload_json, updated_at FROM glance_cache WHERE cache_key = ? AND session_ymd = ?`)
+    .prepare(
+      `
+      SELECT c.payload_json, c.updated_at, s.series_json
+      FROM glance_cache c
+      LEFT JOIN glance_cache_series s
+        ON s.cache_key = c.cache_key AND s.session_ymd = c.session_ymd
+      WHERE c.cache_key = ? AND c.session_ymd = ?
+    `,
+    )
     .get(cacheKey, sessionYmd) as CacheRow | undefined;
   return row ?? null;
 }
@@ -91,38 +154,94 @@ export function glancePayloadChanged(prevJson: string | null, next: GlancePayloa
   }
 }
 
-function writeCacheRow(db: Database.Database, cacheKey: string, sessionYmd: string, payload: GlancePayload): void {
+export type GlancePersistResult = {
+  wroteShell: boolean;
+  wroteSeries: boolean;
+  shellBytes: number;
+  seriesBytes: number;
+};
+
+/**
+ * Store a glance payload. The shell row holds prices and labels. The series
+ * row holds the chart points and is skipped when those points did not change.
+ */
+export function persistGlancePayload(
+  db: Database.Database,
+  cacheKey: string,
+  sessionYmd: string,
+  payload: GlancePayload,
+): GlancePersistResult {
+  const { shell, series } = splitGlancePayload(payload);
+  const shellJson = JSON.stringify(shell);
+  const seriesJson = JSON.stringify(series);
   const prev = readCacheRow(db, cacheKey, sessionYmd);
-  if (prev && !glancePayloadChanged(prev.payload_json, payload)) return;
-  db.prepare(
-    `
-    INSERT INTO glance_cache (cache_key, session_ymd, payload_json, updated_at)
-    VALUES (@cache_key, @session_ymd, @payload_json, @updated_at)
-    ON CONFLICT(cache_key, session_ymd) DO UPDATE SET
-      payload_json = excluded.payload_json,
-      updated_at = excluded.updated_at
-  `,
-  ).run({
-    cache_key: cacheKey,
-    session_ymd: sessionYmd,
-    payload_json: JSON.stringify(payload),
-    updated_at: payload.updatedAt,
-  });
-  db.prepare(
-    `
-    DELETE FROM glance_cache
-    WHERE cache_key = @cache_key
-      AND session_ymd NOT IN (
-        SELECT session_ymd FROM glance_cache WHERE cache_key = @cache_key
-        ORDER BY session_ymd DESC LIMIT 2
-      )
-  `,
-  ).run({ cache_key: cacheKey });
+  const wroteSeries = !prev || prev.series_json !== seriesJson;
+  const wroteShell = !prev || glancePayloadChanged(prev.payload_json, shell);
+  if (wroteShell || wroteSeries) {
+    const tx = db.transaction(() => {
+      if (wroteSeries) {
+        db.prepare(
+          `
+          INSERT INTO glance_cache_series (cache_key, session_ymd, series_json)
+          VALUES (@cache_key, @session_ymd, @series_json)
+          ON CONFLICT(cache_key, session_ymd) DO UPDATE SET
+            series_json = excluded.series_json
+            WHERE glance_cache_series.series_json IS NOT excluded.series_json
+        `,
+        ).run({ cache_key: cacheKey, session_ymd: sessionYmd, series_json: seriesJson });
+      }
+      if (wroteShell || wroteSeries) {
+        db.prepare(
+          `
+          INSERT INTO glance_cache (cache_key, session_ymd, payload_json, updated_at)
+          VALUES (@cache_key, @session_ymd, @payload_json, @updated_at)
+          ON CONFLICT(cache_key, session_ymd) DO UPDATE SET
+            payload_json = excluded.payload_json,
+            updated_at = excluded.updated_at
+            WHERE glance_cache.payload_json IS NOT excluded.payload_json
+               OR glance_cache.updated_at IS NOT excluded.updated_at
+        `,
+        ).run({
+          cache_key: cacheKey,
+          session_ymd: sessionYmd,
+          payload_json: shellJson,
+          updated_at: payload.updatedAt,
+        });
+      }
+      db.prepare(
+        `
+        DELETE FROM glance_cache
+        WHERE cache_key = @cache_key
+          AND session_ymd NOT IN (
+            SELECT session_ymd FROM glance_cache WHERE cache_key = @cache_key
+            ORDER BY session_ymd DESC LIMIT 2
+          )
+      `,
+      ).run({ cache_key: cacheKey });
+      db.prepare(
+        `
+        DELETE FROM glance_cache_series
+        WHERE cache_key = @cache_key
+          AND session_ymd NOT IN (
+            SELECT session_ymd FROM glance_cache WHERE cache_key = @cache_key
+          )
+      `,
+      ).run({ cache_key: cacheKey });
+    });
+    tx();
+  }
+  return { wroteShell, wroteSeries, shellBytes: shellJson.length, seriesBytes: seriesJson.length };
+}
+
+function writeCacheRow(db: Database.Database, cacheKey: string, sessionYmd: string, payload: GlancePayload): void {
+  persistGlancePayload(db, cacheKey, sessionYmd, payload);
 }
 
 function parsePayload(row: CacheRow): GlancePayload | null {
   try {
-    return JSON.parse(row.payload_json) as GlancePayload;
+    const shell = JSON.parse(row.payload_json) as GlancePayload;
+    if (!row.series_json) return shell;
+    return mergeGlancePayload(shell, JSON.parse(row.series_json) as SeriesBundle);
   } catch {
     return null;
   }

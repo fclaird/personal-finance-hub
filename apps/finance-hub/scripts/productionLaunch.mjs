@@ -30,6 +30,15 @@ export function resolveProductionNode({
   return override || execPath;
 }
 
+/** launchd's default PATH is /usr/bin:/bin, so PostCSS cannot spawn `node`. */
+export function productionPath(existing = "") {
+  const prefix = "/usr/local/bin";
+  const parts = String(existing)
+    .split(":")
+    .filter((part) => part && part !== prefix);
+  return [prefix, ...parts].join(":");
+}
+
 export function readNodeArch(nodeBin) {
   const result = spawnSync(nodeBin, ["-p", "process.arch"], { encoding: "utf8" });
   if (result.status !== 0) return "";

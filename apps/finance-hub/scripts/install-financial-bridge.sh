@@ -24,7 +24,21 @@ sed \
   "$APP_ROOT/scripts/com.chris.financialbridge.plist" >"$PLIST"
 
 launchctl bootout "gui/${UID_NUM}/com.chris.financialbridge" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/${UID_NUM}" "$PLIST"
+# bootout can return before the job is fully gone; the next bootstrap then fails with EIO.
+sleep 1
+bootstrapped=0
+for attempt in 1 2 3 4 5; do
+  if launchctl bootstrap "gui/${UID_NUM}" "$PLIST"; then
+    bootstrapped=1
+    break
+  fi
+  print -u2 "launchctl bootstrap failed (attempt ${attempt}); retrying"
+  sleep 1
+done
+if (( bootstrapped == 0 )); then
+  print -u2 "launchctl bootstrap failed after 5 attempts"
+  exit 1
+fi
 launchctl enable "gui/${UID_NUM}/com.chris.financialbridge"
 launchctl kickstart -k "gui/${UID_NUM}/com.chris.financialbridge" || true
 

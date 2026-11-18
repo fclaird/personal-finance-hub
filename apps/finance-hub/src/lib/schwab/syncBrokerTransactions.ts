@@ -47,15 +47,17 @@ function upsertTransaction(
     leg_count: number;
     now: string;
   },
-): string {
+): string | null {
   const existing = db
     .prepare(
-      `SELECT id FROM broker_transactions WHERE account_id = @account_id AND external_activity_id = @external_activity_id`,
+      `SELECT id, raw_json FROM broker_transactions WHERE account_id = @account_id AND external_activity_id = @external_activity_id`,
     )
     .get({
       account_id: params.account_id,
       external_activity_id: params.external_activity_id,
-    }) as { id: string } | undefined;
+    }) as { id: string; raw_json: string } | undefined;
+
+  if (existing && existing.raw_json === params.raw_json) return null;
 
   const id = existing?.id ?? params.id;
 
@@ -135,7 +137,7 @@ export async function syncSchwabBrokerTransactions(options?: {
         const norm = normalizeSchwabTransaction(tx);
         if (!norm) continue;
         const rowId = newId("btx");
-        const id = upsertTransaction(db, {
+        const wrote = upsertTransaction(db, {
           id: rowId,
           account_id: accountId,
           external_activity_id: norm.external_activity_id,
@@ -157,23 +159,26 @@ export async function syncSchwabBrokerTransactions(options?: {
           leg_count: norm.leg_count,
           now,
         });
+        if (wrote == null) continue;
         transactionsUpserted++;
-        touchedIds.add(id);
+        touchedIds.add(wrote);
       }
     });
   }
 
   let classified = 0;
-  for (const id of touchedIds) {
-    reclassifyBrokerTransactionRow(db, id);
-    classified++;
-  }
+  if (touchedIds.size > 0) {
+    for (const id of touchedIds) {
+      reclassifyBrokerTransactionRow(db, id);
+      classified++;
+    }
 
-  try {
-    rebuildAutoSituations(db);
-    recordSituationsLinkFingerprint(db);
-  } catch {
-    // Situations are best-effort; TRADE sync should still succeed.
+    try {
+      rebuildAutoSituations(db);
+      recordSituationsLinkFingerprint(db);
+    } catch {
+      // Situations are best-effort; TRADE sync should still succeed.
+    }
   }
 
   return { ok: true, lookbackDays, accountsUpdated, transactionsUpserted, classified };

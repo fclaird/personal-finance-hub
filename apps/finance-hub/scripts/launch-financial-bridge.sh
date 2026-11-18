@@ -10,6 +10,8 @@
 #
 # Does not rewrite .env.local or token files. Does not run npm rebuild.
 set -eu
+# launchd's PATH is /usr/bin:/bin. Turbopack's PostCSS worker spawns `node` from PATH.
+export PATH="/usr/local/bin:${PATH:-/usr/bin:/bin}"
 
 SCRIPT_DIR="${0:A:h}"
 APP_ROOT="${SCRIPT_DIR:h}"

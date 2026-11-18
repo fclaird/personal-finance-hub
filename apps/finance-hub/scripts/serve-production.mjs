@@ -4,7 +4,7 @@
  * Builds when HEAD or the lockfile changed, then serves `next start` (HTTPS
  * when SCHWAB_REDIRECT_URI is https). Dev mode stays `npm run dev`.
  */
-import { spawn, execSync } from "node:child_process";
+import { spawn, spawnSync, execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -27,6 +27,7 @@ import {
   formatBuildStamp,
   hashFile,
   readBuildStamp,
+  productionPath,
   resolveProductionNode,
   restoreNextDir,
 } from "./productionLaunch.mjs";
@@ -88,13 +89,21 @@ function writeSaved(stamp) {
   fs.writeFileSync(stampPath, formatBuildStamp(stamp));
 }
 
+function childEnv() {
+  return {
+    ...process.env,
+    PATH: productionPath(process.env.PATH),
+    NODE_ENV: "production",
+  };
+}
+
 function runBuild(nodeBin) {
   log("build_start");
   const bin = path.join(root, "node_modules", "next", "dist", "bin", "next");
   const result = spawnSync(nodeBin, [bin, "build"], {
     cwd: root,
     stdio: "inherit",
-    env: { ...process.env, NODE_ENV: "production" },
+    env: childEnv(),
   });
   if (result.status !== 0) {
     throw new Error(`next build exited ${result.status ?? result.signal ?? "unknown"}`);
@@ -292,8 +301,7 @@ function main() {
       cwd: root,
       stdio: "inherit",
       env: {
-        ...process.env,
-        NODE_ENV: "production",
+        ...childEnv(),
         PORT: String(PORT),
         FINANCE_HUB_BIND_HOST: "127.0.0.1",
       },

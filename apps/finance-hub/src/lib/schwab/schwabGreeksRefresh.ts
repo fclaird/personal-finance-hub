@@ -6,6 +6,7 @@ import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import { carryForwardGreeksFromPriorSnapshots, getLatestSchwabSnapshotIds } from "@/lib/schwab/greeksCarryForward";
 import { optionMarketValueFromMark, resolveOptionContractMultiplier } from "@/lib/options/optionContractMultiplier";
 import { pickSchwabQuotePrice, writeQuoteCloses } from "@/lib/schwab/schwabQuotesPersist";
+import { numbersDiffer } from "@/lib/sqlite/valueEqual";
 import { schwabMarketFetch } from "@/lib/schwab/client";
 import { schwabQuoteObjectFromEntry } from "@/lib/schwab/quoteEntry";
 
@@ -60,6 +61,90 @@ export type SchwabGreeksRefreshResult = {
   message?: string;
   error?: string;
 };
+
+export type OptionGreekWrite = {
+  position_id: string;
+  delta: number | null;
+  gamma: number | null;
+  theta: number | null;
+  vega: number | null;
+  iv: number | null;
+};
+
+function resolvedDelta(prev: number | null, incoming: number | null): number | null {
+  if (incoming != null && Math.abs(incoming) > 1e-12) return incoming;
+  if (incoming != null && prev == null) return incoming;
+  return prev;
+}
+
+function greekRowDiffers(
+  prev: { delta: number | null; gamma: number | null; theta: number | null; vega: number | null; iv: number | null },
+  next: OptionGreekWrite,
+): boolean {
+  const delta = resolvedDelta(prev.delta, next.delta);
+  const gamma = next.gamma ?? prev.gamma;
+  const theta = next.theta ?? prev.theta;
+  const vega = next.vega ?? prev.vega;
+  const iv = next.iv ?? prev.iv;
+  return (
+    numbersDiffer(prev.delta, delta) ||
+    numbersDiffer(prev.gamma, gamma) ||
+    numbersDiffer(prev.theta, theta) ||
+    numbersDiffer(prev.vega, vega) ||
+    numbersDiffer(prev.iv, iv)
+  );
+}
+
+/** Skip the upsert when the stored greeks already match. That used to bump updated_at every minute. */
+export function writeOptionGreeks(
+  db: Database.Database,
+  rows: OptionGreekWrite[],
+): { written: number; unchanged: number } {
+  if (rows.length === 0) return { written: 0, unchanged: 0 };
+  const read = db.prepare(
+    `SELECT delta, gamma, theta, vega, iv FROM option_greeks WHERE position_id = ?`,
+  );
+  const upsert = db.prepare(`
+    INSERT INTO option_greeks (id, position_id, delta, gamma, theta, vega, iv, updated_at)
+    VALUES (@id, @position_id, @delta, @gamma, @theta, @vega, @iv, datetime('now'))
+    ON CONFLICT(position_id) DO UPDATE SET
+      delta = CASE
+        WHEN excluded.delta IS NOT NULL AND ABS(excluded.delta) > 1e-12 THEN excluded.delta
+        WHEN excluded.delta IS NOT NULL AND option_greeks.delta IS NULL THEN excluded.delta
+        ELSE option_greeks.delta
+      END,
+      gamma = COALESCE(excluded.gamma, option_greeks.gamma),
+      theta = COALESCE(excluded.theta, option_greeks.theta),
+      vega = COALESCE(excluded.vega, option_greeks.vega),
+      iv = COALESCE(excluded.iv, option_greeks.iv),
+      updated_at = datetime('now')
+  `);
+  let written = 0;
+  let unchanged = 0;
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      const prev = read.get(row.position_id) as
+        | { delta: number | null; gamma: number | null; theta: number | null; vega: number | null; iv: number | null }
+        | undefined;
+      if (prev && !greekRowDiffers(prev, row)) {
+        unchanged += 1;
+        continue;
+      }
+      upsert.run({
+        id: newId("greek"),
+        position_id: row.position_id,
+        delta: row.delta,
+        gamma: row.gamma,
+        theta: row.theta,
+        vega: row.vega,
+        iv: row.iv,
+      });
+      written += 1;
+    }
+  });
+  tx();
+  return { written, unchanged };
+}
 
 export async function runSchwabGreeksRefresh(db?: Database.Database): Promise<SchwabGreeksRefreshResult> {
   const database = db ?? getDb();
@@ -121,27 +206,7 @@ export async function runSchwabGreeksRefresh(db?: Database.Database): Promise<Sc
         AND IFNULL(market_value, -1e308) != IFNULL(@market_value, -1e308)
     `);
 
-    const upsertGreek = database.prepare(`
-    INSERT INTO option_greeks (id, position_id, delta, gamma, theta, vega, iv, updated_at)
-    VALUES (@id, @position_id, @delta, @gamma, @theta, @vega, @iv, datetime('now'))
-    ON CONFLICT(position_id) DO UPDATE SET
-      delta = CASE
-        WHEN excluded.delta IS NOT NULL AND ABS(excluded.delta) > 1e-12 THEN excluded.delta
-        WHEN excluded.delta IS NOT NULL AND option_greeks.delta IS NULL THEN excluded.delta
-        ELSE option_greeks.delta
-      END,
-      gamma = COALESCE(excluded.gamma, option_greeks.gamma),
-      theta = COALESCE(excluded.theta, option_greeks.theta),
-      vega = COALESCE(excluded.vega, option_greeks.vega),
-      iv = COALESCE(excluded.iv, option_greeks.iv),
-      updated_at = CASE
-        WHEN excluded.delta IS NOT NULL AND ABS(excluded.delta) > 1e-12
-          OR excluded.gamma IS NOT NULL OR excluded.theta IS NOT NULL
-          OR excluded.vega IS NOT NULL OR excluded.iv IS NOT NULL
-        THEN excluded.updated_at
-        ELSE option_greeks.updated_at
-      END
-  `);
+    const greekWrites: OptionGreekWrite[] = [];
 
     const rthOpen = isUsEquityRegularSessionOpen();
 
@@ -193,20 +258,14 @@ export async function runSchwabGreeksRefresh(db?: Database.Database): Promise<Sc
             });
           }
           if (applyGreeks) {
-            upsertGreek.run({
-              id: newId("greek"),
-              position_id: row.position_id,
-              delta,
-              gamma,
-              theta,
-              vega,
-              iv,
-            });
+            greekWrites.push({ position_id: row.position_id, delta, gamma, theta, vega, iv });
           }
         }
         if (applyGreeks) updatedCount++;
       }
     }
+
+    writeOptionGreeks(database, greekWrites);
 
     return { ok: true, carryForwardApplied, updated: updatedCount, pricesUpdated };
   } catch (e) {

@@ -17,6 +17,8 @@ chmod +x scripts/launch-financial-bridge.sh scripts/open-bridge-window.sh script
 
 That symlinks `~/bin/launch-financial-bridge.sh` at this repo script and reloads `~/Library/LaunchAgents/com.chris.financialbridge.plist`. It does not run `npm rebuild`, does not change `.env.local`, and does not touch token files.
 
+launchd's PATH is `/usr/bin:/bin`. The launcher and the plist put `/usr/local/bin` first so Turbopack's PostCSS worker can spawn `node` during `next build`. If `launchctl bootstrap` fails right after `bootout` (often `EIO`), the installer retries it.
+
 The Dock / Automator icon can keep pointing at `scripts/open-finance-hub.command`. That file execs the same launcher. If the server is already up, it only closes Bridge tabs and opens one full-screen window.
 
 ## What it does

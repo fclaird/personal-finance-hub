@@ -25,6 +25,8 @@
     <string>1</string>
     <key>FINANCE_HUB_OPEN_WINDOW</key>
     <string>1</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>StandardOutPath</key>
   <string>__HOME__/Library/Logs/finance-hub/bridge.log</string>

@@ -11,6 +11,7 @@ import {
   ensureProductionBuild,
   formatBuildStamp,
   needsRebuild,
+  productionPath,
   readBuildStamp,
   resolveProductionNode,
   restoreNextDir,
@@ -43,6 +44,14 @@ describe("production node", () => {
       }),
       "/opt/node",
     );
+  });
+});
+
+describe("production PATH", () => {
+  it("puts /usr/local/bin first without dropping the rest", () => {
+    assert.equal(productionPath("/usr/bin:/bin"), "/usr/local/bin:/usr/bin:/bin");
+    assert.equal(productionPath("/usr/local/bin:/usr/bin"), "/usr/local/bin:/usr/bin");
+    assert.equal(productionPath(""), "/usr/local/bin");
   });
 });
 

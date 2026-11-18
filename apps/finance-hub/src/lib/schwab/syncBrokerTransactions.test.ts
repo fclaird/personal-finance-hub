@@ -82,6 +82,20 @@ describe("syncSchwabBrokerTransactions", () => {
       hash: string;
     };
     assert.equal(hash.hash, "hash-1");
+
+    const again = await syncSchwabBrokerTransactions({
+      db,
+      lookbackDays: SCHWAB_REFRESH_TRANSACTION_LOOKBACK_DAYS,
+      fetchAccountNumbers: async () => [{ accountNumber: "999", hashValue: "hash-1" }],
+      fetchTransactionsChunked: (hash, days, onChunk) =>
+        fetchSchwabTransactionsChunked(hash, days, onChunk, {
+          endCapIso: "2020-06-15",
+          fetchWindow: async () => [trade(1, "2020-06-10"), trade(2, "2020-06-12")],
+        }),
+    });
+    assert.equal(again.transactionsUpserted, 0);
+    assert.equal(again.classified, 0);
+    assert.equal(again.accountsUpdated, 0);
   });
 
   it("upserts each streamed chunk and does not double-count overlap", async () => {
