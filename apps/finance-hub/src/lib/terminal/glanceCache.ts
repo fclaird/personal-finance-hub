@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 
 import { getDb } from "@/lib/db";
+import { bridgeLog } from "@/lib/eventLoopDiag";
 import { FLAVOR_IDS, type FlavorId } from "@/lib/flavor";
 import { logError } from "@/lib/log";
 import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
@@ -172,8 +173,15 @@ export function persistGlancePayload(
   payload: GlancePayload,
 ): GlancePersistResult {
   const { shell, series } = splitGlancePayload(payload);
+  const stringifyStarted = Date.now();
   const shellJson = JSON.stringify(shell);
   const seriesJson = JSON.stringify(series);
+  const stringifyMs = Date.now() - stringifyStarted;
+  if (stringifyMs >= 50) {
+    bridgeLog(
+      `glance_json ms=${stringifyMs} shell_bytes=${shellJson.length} series_bytes=${seriesJson.length} key=${cacheKey}`,
+    );
+  }
   const prev = readCacheRow(db, cacheKey, sessionYmd);
   const wroteSeries = !prev || prev.series_json !== seriesJson;
   const wroteShell = !prev || glancePayloadChanged(prev.payload_json, shell);

@@ -1,6 +1,6 @@
 import { scheduleColdStartupDataPullOnce } from "@/lib/coldStartupDataPull";
-import { checkpointWalPassive } from "@/lib/dbPragmas";
-import { getDb } from "@/lib/db";
+import { getDbPath } from "@/lib/paths";
+import { checkpointWalOffThread, runTracked, startEventLoopMonitor } from "@/lib/eventLoopDiag";
 import { logError, logLine } from "@/lib/log";
 import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import { runSchwabRefreshSchedulerTick } from "@/lib/schwab/refreshOrchestrator";
@@ -135,34 +135,41 @@ export function createHubScheduler(
 }
 
 async function productionTick(s: SchedulerState): Promise<void> {
-  try {
-    s.lastTickAt = Date.now();
-    const { lastSlowRunAt, lastAccountValueRunAt } = await runSchwabRefreshSchedulerTick({
-      lastSlowRunAt: s.lastSlowRunAt,
-      lastAccountValueRunAt: s.lastAccountValueRunAt,
-      slowIntervalMs: SLOW_MS,
-      accountValueIntervalMs: ACCOUNT_VALUE_RTH_MS,
-    });
-    s.lastSlowRunAt = lastSlowRunAt;
-    s.lastAccountValueRunAt = lastAccountValueRunAt;
-  } catch (e) {
-    logError("scheduler_schwab_refresh_tick_failed", e);
-  }
-  // Await these so a slow glance or dividend snap cannot run beside the next tick.
-  await maybeSyncBookForwardSnapsOnSchedulerTick().catch((e) =>
-    logError("scheduler_book_forward_snap_failed", e),
-  );
-  await maybeSyncRealEstateMonthly().catch((e) => logError("scheduler_real_estate_failed", e));
-  await warmGlanceCache().catch((e) => logError("scheduler_glance_warm_failed", e));
-  const now = Date.now();
-  if (shouldCheckpointWal(now, s.lastCheckpointAt ?? 0)) {
+  await runTracked("scheduler_tick", async () => {
     try {
-      checkpointWalPassive(getDb());
-      s.lastCheckpointAt = now;
+      s.lastTickAt = Date.now();
+      const { lastSlowRunAt, lastAccountValueRunAt } = await runSchwabRefreshSchedulerTick({
+        lastSlowRunAt: s.lastSlowRunAt,
+        lastAccountValueRunAt: s.lastAccountValueRunAt,
+        slowIntervalMs: SLOW_MS,
+        accountValueIntervalMs: ACCOUNT_VALUE_RTH_MS,
+      });
+      s.lastSlowRunAt = lastSlowRunAt;
+      s.lastAccountValueRunAt = lastAccountValueRunAt;
     } catch (e) {
-      logError("scheduler_wal_checkpoint_failed", e);
+      logError("scheduler_schwab_refresh_tick_failed", e);
     }
-  }
+    // Await these so a slow glance or dividend snap cannot run beside the next tick.
+    await runTracked("book_forward", () => maybeSyncBookForwardSnapsOnSchedulerTick()).catch((e) =>
+      logError("scheduler_book_forward_snap_failed", e),
+    );
+    await runTracked("real_estate", () => maybeSyncRealEstateMonthly()).catch((e) =>
+      logError("scheduler_real_estate_failed", e),
+    );
+    await runTracked("glance_warm", () => warmGlanceCache()).catch((e) => logError("scheduler_glance_warm_failed", e));
+    const now = Date.now();
+    if (shouldCheckpointWal(now, s.lastCheckpointAt ?? 0)) {
+      try {
+        const checkpoint = await runTracked("wal_checkpoint", () => checkpointWalOffThread(getDbPath()));
+        s.lastCheckpointAt = now;
+        logLine(
+          `wal_checkpoint busy=${checkpoint.busy} log=${checkpoint.log} checkpointed=${checkpoint.checkpointed}`,
+        );
+      } catch (e) {
+        logError("scheduler_wal_checkpoint_failed", e);
+      }
+    }
+  });
 }
 
 export function startSchedulerOnce(opts?: SchedulerStartOptions): { stop: () => void } {
@@ -173,6 +180,7 @@ export function startSchedulerOnce(opts?: SchedulerStartOptions): { stop: () => 
   if (phase.toLowerCase().includes("build")) return { stop: () => {} };
 
   s.started = true;
+  startEventLoopMonitor();
   logLine("scheduler_start");
   if (!opts?.tick) scheduleColdStartupDataPullOnce();
 

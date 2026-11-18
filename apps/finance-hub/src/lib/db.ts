@@ -9,6 +9,12 @@ import { ensureDirSync } from "@/lib/fs";
 import { getAppDataDir, getDbPath } from "@/lib/paths";
 
 let _db: Database.Database | null = null;
+let cachedLatestMigration: { name: string; applied_at: string } | null = null;
+
+/** Last migration row captured when the database was opened. Health does not query SQLite. */
+export function readCachedLatestMigration(): { name: string; applied_at: string } | null {
+  return cachedLatestMigration;
+}
 
 declare global {
   var __fhSqlite: Database.Database | undefined;
@@ -242,5 +248,9 @@ function migrate(db: Database.Database) {
     ensureColumn(db, "real_estate_loans", "extra_principal", "extra_principal REAL NOT NULL DEFAULT 0");
   }
   seedRealEstate(db);
+  const latest = db
+    .prepare(`SELECT name, applied_at FROM schema_migrations ORDER BY applied_at DESC LIMIT 1`)
+    .get() as { name: string; applied_at: string } | undefined;
+  cachedLatestMigration = latest ?? null;
 }
 

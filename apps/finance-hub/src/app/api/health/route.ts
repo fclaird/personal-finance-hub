@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getDb } from "@/lib/db";
+import { readCachedLatestMigration } from "@/lib/db";
 import { readWalFileBytes } from "@/lib/dbPragmas";
 import { buildHealthReport, readProcessVitals } from "@/lib/healthReport";
 import { getDbPath } from "@/lib/paths";
@@ -9,10 +9,9 @@ import { schedulerDebugState, startSchedulerOnce } from "@/lib/scheduler";
 
 export async function GET() {
   startSchedulerOnce();
-  const db = getDb();
-  const row = db.prepare("SELECT name, applied_at FROM schema_migrations ORDER BY applied_at DESC LIMIT 1").get() as
-    | { name: string; applied_at: string }
-    | undefined;
+  // Memory and a WAL stat only. A schema query here waited behind whatever
+  // better-sqlite3 call was already on this thread, so three probes timed out
+  // together and the watchdog restarted the server.
 
   const isProd = process.env.NODE_ENV === "production";
   const scheduler = schedulerDebugState();
@@ -29,7 +28,7 @@ export async function GET() {
         lastSlowRunAt: scheduler.lastSlowRunAt,
         lastAccountValueRunAt: scheduler.lastAccountValueRunAt,
       },
-      latestMigration: row ?? null,
+      latestMigration: readCachedLatestMigration(),
       walBytes: readWalFileBytes(getDbPath()),
       quoteCacheEntries: quoteCacheSize(),
       dbPath: isProd ? null : getDbPath(),

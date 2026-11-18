@@ -43,6 +43,8 @@ tail -n 50 ~/Library/Logs/finance-hub/bridge.log
 
 Look for `build_skipped` or `build_ok`, then `serve pid=… runtime=production`. Watchdog lines in the same file look like `health_unresponsive` and `restarting next-server`.
 
+Event-loop lines in the same file are prefixed `[event-loop]`. Once a minute: `vitals heap_mb=… rss_mb=… lag_p99_ms=…`. When the 10-second p99 exceeds 500ms: `event_loop_lag` plus `inflight=`, each job as `name start=<ISO> age_ms=<n>`. Every scheduled job also logs `job_start` and `job_end` with `name`, `start`, `end`, and `ms`. A stall that ends in `health_unresponsive` should have a `job_start` with no `job_end` yet, usually `wal_checkpoint`, `schwab_holdings`, `schwab_transactions`, or `glance_warm`.
+
 `lsof -nP -iTCP:3000 -sTCP:LISTEN` should show a `node` process running `scripts/start.mjs`, not `next dev`.
 
 ## Dev mode

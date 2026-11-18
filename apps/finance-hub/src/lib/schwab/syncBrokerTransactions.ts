@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 
 import { getDb } from "@/lib/db";
+import { yieldEventLoop } from "@/lib/eventLoopDiag";
 import { newId } from "@/lib/id";
 import { DEFAULT_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
 import {
@@ -12,7 +13,7 @@ import {
 } from "@/lib/schwab/fetchAccountTransactions";
 import { normalizeSchwabTransaction, type SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
 import { recordSituationsLinkFingerprint } from "@/lib/situations/ensureSituationsFresh";
-import { rebuildAutoSituations } from "@/lib/situations/persistSituations";
+import { rebuildAutoSituationsCooperative } from "@/lib/situations/persistSituations";
 import { reclassifyBrokerTransactionRow } from "@/lib/strategy/classifyTransaction";
 
 export type SyncBrokerTransactionsResult = {
@@ -133,9 +134,12 @@ export async function syncSchwabBrokerTransactions(options?: {
 
   for (const { accountId, hash } of accountHashes) {
     await fetchTransactionsChunked(hash, lookbackDays, async (txs) => {
+      let seen = 0;
       for (const tx of txs) {
         const norm = normalizeSchwabTransaction(tx);
         if (!norm) continue;
+        seen += 1;
+        if (seen % 25 === 0) await yieldEventLoop();
         const rowId = newId("btx");
         const wrote = upsertTransaction(db, {
           id: rowId,
@@ -168,13 +172,16 @@ export async function syncSchwabBrokerTransactions(options?: {
 
   let classified = 0;
   if (touchedIds.size > 0) {
+    let classifiedBatch = 0;
     for (const id of touchedIds) {
       reclassifyBrokerTransactionRow(db, id);
       classified++;
+      classifiedBatch += 1;
+      if (classifiedBatch % 25 === 0) await yieldEventLoop();
     }
 
     try {
-      rebuildAutoSituations(db);
+      await rebuildAutoSituationsCooperative(db);
       recordSituationsLinkFingerprint(db);
     } catch {
       // Situations are best-effort; TRADE sync should still succeed.

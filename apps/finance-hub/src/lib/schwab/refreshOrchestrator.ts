@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 
 import { getDb } from "@/lib/db";
+import { runTracked } from "@/lib/eventLoopDiag";
 import { capDiagnosticText } from "@/lib/diagnosticText";
 import { logLine } from "@/lib/log";
 import type { DataMode } from "@/lib/dataMode";
@@ -67,7 +68,7 @@ async function runStep(
 ): Promise<SchwabRefreshStepResult> {
   const t0 = Date.now();
   try {
-    const res = await fn();
+    const res = await runTracked(`schwab_${step}`, fn);
     const { ok, error, ...detail } = res;
     return {
       step,

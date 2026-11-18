@@ -4,9 +4,13 @@ import type { FlavorId } from "@/lib/flavor";
 import { accountsInFlavorWhereSql } from "@/lib/flavors/accounts";
 import { newId } from "@/lib/id";
 import { expandSituationMember } from "@/lib/situations/expandOptionLegs";
-import { clumpLinkablePartials, loadLinkableBrokerTransactions } from "@/lib/situations/fromBrokerTx";
+import {
+  clumpLinkablePartials,
+  loadLinkableBrokerTransactions,
+  loadLinkableBrokerTransactionsCooperative,
+} from "@/lib/situations/fromBrokerTx";
 import { proposeSituations } from "@/lib/situations/linkSituations";
-import type { ProposedSituation, SituationLinkStatus, SituationMemberRole } from "@/lib/situations/types";
+import type { LinkableTxn, ProposedSituation, SituationLinkStatus, SituationMemberRole } from "@/lib/situations/types";
 import { hasCoveringShares } from "@/lib/strategy/equityCoverage";
 import { deltaAtFillFromDb } from "@/lib/situations/fillDelta";
 
@@ -67,7 +71,7 @@ function coveredCallTxnIds(db: Database.Database, txns: ReturnType<typeof loadLi
  * Rejected pairs stay for audit but their fills are not locked, so the linker
  * can split them into singles. Rejected singles stay locked so dismissals stick.
  */
-export function rebuildAutoSituations(db: Database.Database): { proposed: number; kept: number } {
+function rebuildAutoSituationsFrom(db: Database.Database, loaded: LinkableTxn[]): { proposed: number; kept: number } {
   const lockedIds = new Set(
     (
       db
@@ -96,7 +100,7 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
       .get() as { c: number }
   ).c;
 
-  const rawTxns = loadLinkableBrokerTransactions(db).filter((t) => !lockedIds.has(t.id));
+  const rawTxns = loaded.filter((t) => !lockedIds.has(t.id));
   const allTxns = clumpLinkablePartials(rawTxns);
   const sourceIdsByPrimary = new Map<string, string[]>();
   for (const t of allTxns) {
@@ -156,6 +160,18 @@ export function rebuildAutoSituations(db: Database.Database): { proposed: number
   });
   write(proposed);
   return { proposed: proposed.length, kept };
+}
+
+export function rebuildAutoSituations(db: Database.Database): { proposed: number; kept: number } {
+  return rebuildAutoSituationsFrom(db, loadLinkableBrokerTransactions(db));
+}
+
+/** Scheduler path. Pages the raw_json parse so /api/health can run between pages. */
+export async function rebuildAutoSituationsCooperative(
+  db: Database.Database,
+): Promise<{ proposed: number; kept: number }> {
+  const loaded = await loadLinkableBrokerTransactionsCooperative(db);
+  return rebuildAutoSituationsFrom(db, loaded);
 }
 
 export function listSituations(db: Database.Database, flavor?: FlavorId): SituationListRow[] {
