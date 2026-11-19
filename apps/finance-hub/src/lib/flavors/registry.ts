@@ -1,4 +1,5 @@
 import type { FlavorId } from "@/lib/flavor";
+import { SCREENER_HREF, SCREENER_NAME } from "@/lib/screener/name";
 import { POSTERITY_ACCOUNT_IDS } from "@/lib/posterity";
 
 export type SidebarNavItem = { href: string; label: string; prefix?: string };
@@ -47,6 +48,7 @@ const MAIN_NAV: SidebarNavItem[] = [
   { href: "/strategy-lab", label: "Strategy Lab" },
   { href: "/allocation", label: "Allocation" },
   { href: "/diversification", label: "Diversification" },
+  { href: SCREENER_HREF, label: SCREENER_NAME },
   { href: "/real-estate", label: "Real Estate" },
   { href: "/earnings", label: "Earnings" },
   { href: "/performance", label: "Performance" },
@@ -63,6 +65,7 @@ const DEDICATED_NAV: SidebarNavItem[] = [
   { href: "/positions", label: "Positions" },
   { href: "/allocation", label: "Allocation" },
   { href: "/diversification", label: "Diversification" },
+  { href: SCREENER_HREF, label: SCREENER_NAME },
   { href: "/performance", label: "Performance" },
   { href: "/reports", label: "Realized gain/loss", prefix: "/reports" },
   { href: "/dividends", label: "Dividends" },

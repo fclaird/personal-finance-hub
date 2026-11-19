@@ -4,6 +4,8 @@ import Database from "better-sqlite3";
 
 import { applyRuntimePragmas } from "@/lib/dbPragmas";
 import { seedRealEstate } from "@/lib/realEstate/seed";
+import { seedScreener } from "@/lib/screener/seed";
+import { ensureScreenerSchema } from "@/lib/screener/store";
 
 import { ensureDirSync } from "@/lib/fs";
 import { getAppDataDir, getDbPath } from "@/lib/paths";
@@ -248,6 +250,8 @@ function migrate(db: Database.Database) {
     ensureColumn(db, "real_estate_loans", "extra_principal", "extra_principal REAL NOT NULL DEFAULT 0");
   }
   seedRealEstate(db);
+  ensureScreenerSchema(db);
+  seedScreener(db);
   const latest = db
     .prepare(`SELECT name, applied_at FROM schema_migrations ORDER BY applied_at DESC LIMIT 1`)
     .get() as { name: string; applied_at: string } | undefined;

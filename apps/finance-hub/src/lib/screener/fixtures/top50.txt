@@ -1,0 +1,464 @@
+The 50 Largest U.S. Companies by Market Cap
+Figures as of the Nov 12, 2026 stock-market close (4:00 p.m. ET). Prepared Fri Nov 13, 2026, about 8:00 a.m. ET, before the U.S. open.
+U.S.-headquartered, U.S.-listed companies only. Foreign ADRs excluded. Linde (U.K.) excluded here. SpaceX included here; it is not in the S&P 500. Alphabet and Berkshire counted once, all share classes combined.
+Correlation is 1-year daily returns vs SPY and QQQ (Yahoo Finance), labeled H ≥ 0.50, M 0.25–0.49, L below 0.25. SpaceX uses 106 days from Jun 15, 2026. China/Taiwan ratings are from the latest 10-K or 10-Q; see the appendix.
+Rk
+Company
+Ticker
+Market cap
+Sector
+What they do
+SPY / QQQ corr
+China/Taiwan
+1
+Apple
+AAPL
+$5.157T
+Information Technology
+Makes the iPhone, Mac, and iPad, and runs the App Store and iCloud.
+0.34 M / 0.22 L
+High
+2
+NVIDIA
+NVDA
+$4.013T
+Information Technology
+Designs the chips that power AI data centers and many gaming PCs.
+0.63 H / 0.67 H
+High
+3
+Microsoft
+MSFT
+$3.884T
+Information Technology
+Sells Windows, Office, and Azure cloud computing to businesses and consumers.
+0.41 M / 0.35 M
+Medium
+4
+Alphabet
+GOOGL
+$3.67T
+Communication Services
+Owns Google Search, YouTube, Android, and Google Cloud.
+0.52 H / 0.47 M
+Low
+5
+Amazon
+AMZN
+$2.891T
+Consumer Discretionary
+Runs the main online store, Prime, and Amazon Web Services cloud.
+0.54 H / 0.47 M
+Low
+6
+SpaceX
+SPCX
+$1.900T
+Industrials
+Builds reusable rockets and the Starlink satellite internet network.
+0.45 M / 0.48 M
+Beneficiary
+7
+Broadcom
+AVGO
+$1.739T
+Information Technology
+Makes networking and smartphone chips, plus enterprise software (VMware).
+0.63 H / 0.71 H
+High
+8
+Meta Platforms
+META
+$1.594T
+Communication Services
+Runs Facebook, Instagram, WhatsApp, and the Quest headset business.
+0.45 M / 0.40 M
+Low
+9
+Tesla
+TSLA
+$1.571T
+Consumer Discretionary
+Builds electric cars, energy storage, and some solar products.
+0.63 H / 0.67 H
+High
+10
+Eli Lilly
+LLY
+$1.271T
+Health Care
+Makes prescription drugs, including widely used diabetes and weight-loss medicines.
+0.12 L / -0.02 L
+Low
+11
+Berkshire Hathaway
+BRK-B
+$1.253T
+Financials
+A holding company for insurance (GEICO), the BNSF railroad, utilities, and a large stock portfolio.
+0.05 L / -0.11 L
+Low
+12
+Walmart
+WMT
+$1.00T
+Consumer Staples
+The largest U.S. retailer, including Sam's Club and a growing online business.
+-0.03 L / -0.14 L
+Low
+13
+AMD
+AMD
+$959.94B
+Information Technology
+Designs PC, game-console, and data-center chips that compete with Intel and NVIDIA.
+0.64 H / 0.78 H
+High
+14
+JPMorgan Chase
+JPM
+$910.39B
+Financials
+The largest U.S. bank, with consumer banking, credit cards, and a global investment bank.
+0.48 M / 0.29 M
+Low
+15
+Micron Technology
+MU
+$903.37B
+Information Technology
+Makes memory chips used in phones, PCs, and AI servers.
+0.55 H / 0.72 H
+High
+16
+Visa
+V
+$784.21B
+Financials
+Runs the Visa card network that banks use to process payments worldwide.
+0.20 L / 0.03 L
+Low
+17
+Exxon Mobil
+XOM
+$692.57B
+Energy
+An integrated oil and gas company: it finds, produces, refines, and sells fuel.
+-0.30 M / -0.31 M
+Medium
+18
+Johnson & Johnson
+JNJ
+$682.52B
+Health Care
+Makes prescription drugs and medical devices (Band-Aid to surgical tools).
+-0.05 L / -0.20 L
+Medium
+19
+Mastercard
+MA
+$568.53B
+Financials
+Runs a global card-payment network, similar to Visa.
+0.18 L / -0.01 L
+Low
+20
+AbbVie
+ABBV
+$520.47B
+Health Care
+A drugmaker known for immunology and other specialty medicines.
+-0.01 L / -0.12 L
+Low
+21
+Costco
+COST
+$483.99B
+Consumer Staples
+A membership warehouse club selling food and household goods in bulk.
+-0.11 L / -0.23 L
+Low
+22
+Chevron
+CVX
+$422.15B
+Energy
+An integrated oil and gas company with large production and refining operations.
+-0.31 M / -0.34 M
+Medium
+23
+Coca-Cola
+KO
+$419.17B
+Consumer Staples
+Sells Coca-Cola and other drinks through bottlers around the world.
+-0.16 L / -0.31 M
+Medium
+24
+Palantir
+PLTR
+$413.42B
+Information Technology
+Sells data and AI software used by governments and large companies.
+0.43 M / 0.44 M
+Beneficiary
+25
+Cisco
+CSCO
+$402.18B
+Information Technology
+Makes the networking gear that companies and carriers use to move data.
+0.46 M / 0.48 M
+Medium
+26
+Oracle
+ORCL
+$396.29B
+Information Technology
+Sells business software and cloud databases used by large companies.
+0.51 H / 0.54 H
+Medium
+27
+Procter & Gamble
+PG
+$389.45B
+Consumer Staples
+Makes household brands such as Tide, Pampers, Gillette, and Crest.
+-0.02 L / -0.21 L
+Medium
+28
+UnitedHealth
+UNH
+$363.00B
+Health Care
+The largest U.S. health insurer; also owns the Optum care and pharmacy businesses.
+0.14 L / 0.06 L
+Low
+29
+Merck
+MRK
+$362.26B
+Health Care
+A drugmaker; Keytruda is its best-known cancer medicine.
+0.09 L / -0.04 L
+Medium
+30
+Bank of America
+BAC
+$348.52B
+Financials
+A major U.S. bank for consumers, companies, and wealth-management clients.
+0.49 M / 0.31 M
+Low
+31
+Home Depot
+HD
+$347.45B
+Consumer Discretionary
+The largest U.S. home-improvement retailer for contractors and do-it-yourself customers.
+0.34 M / 0.15 L
+Medium
+32
+GE Aerospace
+GE
+$341.89B
+Industrials
+Builds jet engines and provides maintenance for commercial and military aircraft.
+0.49 M / 0.38 M
+Medium
+33
+Intel
+INTC
+$325.27B
+Information Technology
+Designs and manufactures PC and server chips; is also trying to build chips for others.
+0.52 H / 0.67 H
+High
+34
+Philip Morris International
+PM
+$306.52B
+Consumer Staples
+Sells cigarettes and smoke-free products such as IQOS, mostly outside the U.S.
+-0.02 L / -0.17 L
+Low
+35
+Applied Materials
+AMAT
+$302.32B
+Information Technology
+Sells the machines chipmakers use to manufacture semiconductors.
+0.62 H / 0.75 H
+High
+36
+Morgan Stanley
+MS
+$295.68B
+Financials
+An investment bank and wealth manager (including E*TRADE and a large advisor force).
+0.68 H / 0.59 H
+Low
+37
+Lam Research
+LRCX
+$292.03B
+Information Technology
+Sells equipment that etches and cleans chips inside semiconductor factories.
+0.66 H / 0.79 H
+High
+38
+Texas Instruments
+TXN
+$285.53B
+Information Technology
+Makes analog chips that go into cars, factory equipment, and electronics.
+0.51 H / 0.56 H
+High
+39
+Caterpillar
+CAT
+$276.97B
+Industrials
+Makes construction, mining, and power-generation machines, plus the Cat dealer network.
+0.61 H / 0.64 H
+Medium
+40
+RTX
+RTX
+$267.67B
+Industrials
+A major defense and aerospace contractor (Raytheon, Pratt & Whitney, Collins).
+0.16 L / 0.03 L
+Beneficiary
+41
+Palo Alto Networks
+PANW
+$264.08B
+Information Technology
+Sells cybersecurity software and appliances to companies and governments.
+0.37 M / 0.41 M
+Medium
+42
+Goldman Sachs
+GS
+$263.51B
+Financials
+A global investment bank and asset manager serving companies, governments, and wealthy clients.
+0.70 H / 0.63 H
+Low
+43
+Arista Networks
+ANET
+$261.05B
+Information Technology
+Makes high-speed network switches used in large data centers.
+0.58 H / 0.64 H
+Medium
+44
+Thermo Fisher
+TMO
+$259.15B
+Health Care
+Sells lab equipment, scientific instruments, and research supplies to hospitals and drug companies.
+0.31 M / 0.21 L
+Medium
+45
+Wells Fargo
+WFC
+$257.43B
+Financials
+A large U.S. bank focused on consumers, small businesses, and commercial lending.
+0.37 M / 0.19 L
+Low
+46
+Netflix
+NFLX
+$257.42B
+Communication Services
+The leading subscription streaming service for TV shows and movies.
+0.09 L / 0.01 L
+Low
+47
+Amgen
+AMGN
+$252.63B
+Health Care
+A biotechnology company that makes medicines for cancer, inflammation, and other diseases.
+0.23 L / 0.09 L
+Low
+48
+Dell Technologies
+DELL
+$235.99B
+Information Technology
+Makes PCs, servers, and storage systems for businesses and consumers.
+0.45 M / 0.50 M
+Medium
+49
+CrowdStrike
+CRWD
+$235.37B
+Information Technology
+Sells cloud cybersecurity software (the Falcon platform) to companies worldwide.
+0.38 M / 0.43 M
+Low
+50
+IBM
+IBM
+$231.24B
+Information Technology
+Sells business software, consulting, and hybrid-cloud services, including watsonx AI.
+0.23 L / 0.13 L
+n/a
+
+Appendix: China / Taiwan rating notes
+High  Apple (AAPL). Greater China (mainland, Hong Kong, Taiwan) was $82.4B, or 17% of FY2026 sales ($478.8B). Substantially all hardware is made by partners primarily in mainland China, Taiwan, India, Japan, South Korea, and Vietnam.  https://www.sec.gov/Archives/edgar/data/320193/000032019326000026/aapl-20260926.htm
+High  NVIDIA (NVDA). Wafers come mainly from TSMC (and Samsung). FY2026 revenue: China incl. Hong Kong $19.7B (9%) and Taiwan-headquartered customers $42.3B (20%) of $215.9B.  https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm
+Medium  Microsoft (MSFT). FY2026 revenue was 51% U.S. ($170.8B) and 49% other countries ($161.0B); China is not broken out. Rating is Medium because nearly half of sales are abroad, not because a China share is disclosed.  https://www.sec.gov/Archives/edgar/data/789019/000119312526323660/msft-20260630.htm
+Low  Alphabet (GOOGL). FY2025 revenue was 48% U.S., 29% EMEA, 17% Asia-Pacific, 6% other Americas. China is not a disclosed market; core consumer services are largely unavailable there. All share classes counted once.  https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm
+Low  Amazon (AMZN). FY2025 sales: North America $426.3B (59%), International $161.9B (23%), AWS $128.7B (18%). China is not broken out.  https://www.sec.gov/Archives/edgar/data/1018724/000101872426000004/amzn-20251231.htm
+Beneficiary  SpaceX (SPCX). Q3 2026 10-Q: Starlink serves consumer, enterprise, and government customers. No 10-K yet (listed June 2026); China sales are not a disclosed line. Rating is qualitative, based on U.S. launch and government connectivity. Correlation uses 106 trading days from Jun 15, 2026.  https://www.sec.gov/Archives/edgar/data/1181412/000162828026066880/spcx-20260930.htm
+High  Broadcom (AVGO). Most front-end wafers are outsourced, including to TSMC. China incl. Hong Kong was $11.2B, or 17%, of FY2025 revenue ($63.9B).  https://www.sec.gov/Archives/edgar/data/1730168/000173016825000121/avgo-20251102.htm
+Low  Meta Platforms (META). FY2025 revenue: U.S. $74.8B of $201.0B; Asia-Pacific $53.8B (27%). China is not a disclosed segment; Facebook and Instagram are not generally available there.  https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm
+High  Tesla (TSLA). China was $21.0B, or 22%, of FY2025 revenue ($94.8B), and Tesla builds cars in Shanghai.  https://www.sec.gov/Archives/edgar/data/1318605/000162828026003952/tsla-20251231.htm
+Low  Eli Lilly (LLY). China was $1.95B, or 3%, of FY2025 revenue ($65.2B).  https://www.sec.gov/Archives/edgar/data/59478/000005947826000013/lly-20251231.htm
+Low  Berkshire Hathaway (BRK-B). FY2025 10-K has no material China revenue line. Operations are mainly U.S. insurance, rail, and energy. Portfolio holdings (including Apple) are indirect and are not treated as the company's own China sales. Combined Class A and B.  https://www.sec.gov/Archives/edgar/data/1067983/000119312526083899/brka-20251231.htm
+Low  Walmart (WMT). Walmart U.S. was 68% of FY2026 sales; International was $130.4B (19%) across 18 countries including China. China is not broken out as a material stand-alone line.  https://www.sec.gov/Archives/edgar/data/104169/000010416926000055/wmt-20260131.htm
+High  AMD (AMD). Leading-edge chips rely primarily on TSMC. China incl. Hong Kong was $7.8B (22%) and Taiwan $5.2B (15%) of FY2025 sales ($34.6B).  https://www.sec.gov/Archives/edgar/data/2488/000000248826000018/amd-20251227.htm
+Low  JPMorgan Chase (JPM). FY2025 10-K does not break out a material China revenue share. The only Taiwan mention in the extract is about fund share classes, not operations.  https://www.sec.gov/Archives/edgar/data/19617/000162828026008131/jpm-20251231.htm
+High  Micron Technology (MU). FY2026 (year ended Sep 3, 2026): Taiwan held $27.6B of $64.0B in long-lived assets (43%). China sales have also been limited by a 2023 CAC ban on critical-infrastructure purchases.  https://www.sec.gov/Archives/edgar/data/723125/000072312526000023/mu-20260903.htm
+Low  Visa (V). U.S. was about 38% of FY2026 net revenue; no other country was 10% or more. The 10-K names UnionPay as the leading network in China.  https://www.sec.gov/Archives/edgar/data/1403161/000140316126000134/v-20260930.htm
+Medium  Exxon Mobil (XOM). FY2025 10-K shows material Asia production (consolidated crude 445 kbd) and a global shipping/marketing system. The filing does not name the Strait of Hormuz.  https://www.sec.gov/Archives/edgar/data/34088/000003408826000045/xom-20251231.htm
+Medium  Johnson & Johnson (JNJ). About 43% of FY2025 sales were outside the U.S., including 15% in Asia-Pacific and Africa. China is not broken out.  https://www.sec.gov/Archives/edgar/data/200406/000020040626000016/jnj-20251228.htm
+Low  Mastercard (MA). U.S. was about 29% of FY2025 net revenue; no other country was more than 10%.  https://www.sec.gov/Archives/edgar/data/1141391/000114139126000013/ma-20251231.htm
+Low  AbbVie (ABBV). FY2025 10-K does not present China as a 10%+ market. Midgard's compiled 10-K table shows about 2% China; that percentage is unverified here (single compiled source).  https://www.sec.gov/Archives/edgar/data/1551152/000155115226000008/abbv-20251231.htm
+Low  Costco (COST). Operates warehouses in the U.S. and many other countries, including Taiwan and China, but the U.S. is the core of the business. China/Taiwan sales are not broken out.  https://www.sec.gov/Archives/edgar/data/909832/000090983226000093/cost-20260830.htm
+Medium  Chevron (CVX). FY2025 10-K reports substantial proved reserves and production in Asia and other international areas. The filing does not name the Strait of Hormuz.  https://www.sec.gov/Archives/edgar/data/93410/000009341026000078/cvx-20251231.htm
+Medium  Coca-Cola (KO). Swire Coca-Cola, a major bottler, operates in 11 mainland China provinces, Hong Kong, and Taiwan. Coca-Cola does not break out a China revenue percentage.  https://www.sec.gov/Archives/edgar/data/21344/000162828026010047/ko-20251231.htm
+Beneficiary  Palantir (PLTR). FY2025 10-K describes software platforms sold to government and commercial customers, including U.S. government work. China is not a disclosed revenue line.  https://www.sec.gov/Archives/edgar/data/1321655/000132165526000011/pltr-20251231.htm
+Medium  Cisco (CSCO). Business is managed in three regions, including Asia Pacific, Japan, and China (APJC). The 10-K cites China-Taiwan relations as a geopolitical risk and notes price-focused Asian competition.  https://www.sec.gov/Archives/edgar/data/858877/000085887726000132/csco-20260725.htm
+Medium  Oracle (ORCL). Asia Pacific was $7.6B, or 11%, of FY2026 revenue ($67.4B). The 10-K cites China-Taiwan tensions as a supply-chain risk.  https://www.sec.gov/Archives/edgar/data/1341439/000119312526277521/orcl-20260531.htm
+Medium  Procter & Gamble (PG). Operations outside the U.S. generate more than 50% of annual net sales. China is not broken out.  https://www.sec.gov/Archives/edgar/data/80424/000008042426000103/pg-20260630.htm
+Low  UnitedHealth (UNH). FY2025 10-K is focused on U.S. Medicare, Medicaid, and employer plans. China is not a disclosed market.  https://www.sec.gov/Archives/edgar/data/731766/000073176626000062/unh-20251231.htm
+Medium  Merck (MRK). Sales by subsidiaries outside the U.S. were 44% of FY2025 sales. China is discussed in the filing but not broken out as a percentage.  https://www.sec.gov/Archives/edgar/data/310158/000031015826000063/mrk-20251231.htm
+Low  Bank of America (BAC). FY2025 Asia revenue, net of interest expense, was $6.0B versus $97.7B in the U.S.  https://www.sec.gov/Archives/edgar/data/70858/000007085826000157/bac-20251231.htm
+Medium  Home Depot (HD). Only a small share of sales is international, but the 10-K says it kept sourcing offices in China, Taiwan, Vietnam, India, Mexico, and Canada in fiscal 2025.  https://www.sec.gov/Archives/edgar/data/354950/000162828026019436/hd-20260201.htm
+Medium  GE Aerospace (GE). Defense & Systems revenue was $6.57B in 2025, a minority of the company versus commercial engines and services. Global aviation supply and Asia sales are material, but this is not primarily a defense name.  https://www.sec.gov/Archives/edgar/data/40545/000004054526000008/ge-20251231.htm
+High  Intel (INTC). Billings to China were 24% of FY2025 revenue; 70% of revenue was outside the U.S. The 10-K also discusses TSMC and Samsung as the other firms investing in leading-edge manufacturing.  https://www.sec.gov/Archives/edgar/data/50863/000005086326000011/intc-20251227.htm
+Low  Philip Morris International (PM). The 10-K lists state-owned tobacco enterprises in China as competitors, not as a disclosed PMI revenue line. China remains largely a domestic state monopoly.  https://www.sec.gov/Archives/edgar/data/1413329/000162828026005939/pm-20251231.htm
+High  Applied Materials (AMAT). About 89% of FY2025 net revenue was to customers outside the U.S. Manufacturing and support are in Taiwan, China, Korea, and other Asia sites. A compiled 10-K table (Midgard/MetricsHour) puts China at about 30%; that exact share is unverified here.  https://www.sec.gov/Archives/edgar/data/6951/000162828025056742/amat-20251026.htm
+Low  Morgan Stanley (MS). FY2025 10-K describes a global firm but does not break out a material China revenue share in the extract used here.  https://www.sec.gov/Archives/edgar/data/895421/000089542126000086/ms-20251231.htm
+High  Lam Research (LRCX). FY2026 revenue mix by customer location: China 34%, Taiwan 22%, Korea 19%, Japan 9%, U.S. 7%.  https://www.sec.gov/Archives/edgar/data/707549/000070754926000037/lrcx-20260628.htm
+High  Texas Instruments (TXN). China was $3.78B, or 21%, of FY2025 revenue. TI also has a site in Taipei.  https://www.sec.gov/Archives/edgar/data/97476/000009747626000059/txn-20251231.htm
+Medium  Caterpillar (CAT). FY2025 external sales were $32.9B inside the U.S. and $34.7B outside (51% international). Asia/Pacific is a reported region; China is not broken out.  https://www.sec.gov/Archives/edgar/data/18230/000001823026000008/cat-20251231.htm
+Beneficiary  RTX (RTX). A U.S. defense prime. The 10-K discusses Chinese sanctions on the Raytheon business over foreign military sales to Taiwan.  https://www.sec.gov/Archives/edgar/data/101829/000010182926000006/rtx-20251231.htm
+Medium  Palo Alto Networks (PANW). Asia Pacific and Japan were $1.37B, or 12%, of FY2026 revenue ($11.5B). The 10-K says supply is concentrated in Asia and that it is monitoring China-Taiwan tensions.  https://www.sec.gov/Archives/edgar/data/1327567/000132756726000023/panw-20260731.htm
+Low  Goldman Sachs (GS). The 10-K warns that a China-Taiwan conflict could hit financial markets and clients. No material China revenue share is broken out.  https://www.sec.gov/Archives/edgar/data/886982/000088698226000091/gs-20251231.htm
+Medium  Arista Networks (ANET). Asia-Pacific was 9% of FY2025 revenue ($813M of $9.01B). The 10-K cites manufacturing in Malaysia and Vietnam and political tensions between China and Taiwan.  https://www.sec.gov/Archives/edgar/data/1596532/000159653226000013/anet-20251231.htm
+Medium  Thermo Fisher (TMO). Asia-Pacific was $8.1B, or 18%, of FY2025 revenue ($44.6B). China is not broken out.  https://www.sec.gov/Archives/edgar/data/97745/000009774526000018/tmo-20251231.htm
+Low  Wells Fargo (WFC). A primarily U.S. bank. The FY2025 10-K primary document available here was incomplete, so a China percentage could not be verified.  https://www.sec.gov/Archives/edgar/data/72971/000007297126000133/wfc-20251231_d2.htm
+Low  Netflix (NFLX). FY2025 streaming revenue: U.S. and Canada $20.0B, EMEA $14.5B, Latin America $5.4B, Asia-Pacific $5.4B (12%) of $45.2B. The service is not generally available in China.  https://www.sec.gov/Archives/edgar/data/1065280/000106528026000034/nflx-20251231.htm
+Low  Amgen (AMGN). FY2025 10-K discusses registration requirements in China and other Asian markets but does not break out a China revenue share.  https://www.sec.gov/Archives/edgar/data/318154/000031815426000010/amgn-20251231.htm
+Medium  Dell Technologies (DELL). FY2026 10-K says it sells in the Americas, Europe, the Middle East, Asia, and other regions and points to Note 18 for non-U.S. sales. A compiled table (Midgard) puts international sales at 44%; that exact share is unverified here. PC and server supply chains are concentrated in Asia.  https://www.sec.gov/Archives/edgar/data/1571996/000157199626000008/dell-20260130.htm
+Low  CrowdStrike (CRWD). FY2026 10-K says it sells worldwide; property and equipment are concentrated in the U.S. and Germany. China is not a disclosed revenue line.  https://www.sec.gov/Archives/edgar/data/1535527/000153552726000010/crwd-20260131.htm
+n/a  IBM (IBM). The FY2025 Form 10-K incorporates segment and geographic tables by reference to the Annual Report to Stockholders; a China or Asia percentage could not be extracted from the filing text available here. Rating omitted.  https://www.sec.gov/Archives/edgar/data/51143/000005114326000010/ibm-20251231.htm
