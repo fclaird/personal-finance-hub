@@ -1,13 +1,10 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
 import { logError } from "@/lib/log";
 import { yahooChartSymbol } from "@/lib/market/yahooChartFetch";
-
-const execFileAsync = promisify(execFile);
+import { curlDeadlineArgs, execFileWithTimeout } from "@/lib/net/upstream";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 type QuoteSummaryResult = {
@@ -23,7 +20,9 @@ const CRUMB_TTL_MS = 25 * 60 * 1000;
 
 async function curl(args: string[]): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("curl", args, { maxBuffer: 8 * 1024 * 1024 });
+    const { stdout } = await execFileWithTimeout("curl", ["-sS", ...curlDeadlineArgs(), ...args], {
+      maxBuffer: 8 * 1024 * 1024,
+    });
     const text = String(stdout ?? "").trim();
     if (!text || text.startsWith("Too Many")) return null;
     return text;

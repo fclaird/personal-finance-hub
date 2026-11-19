@@ -2,6 +2,7 @@ import fs from "node:fs";
 
 import Database from "better-sqlite3";
 
+import { applyRuntimePragmas } from "@/lib/dbPragmas";
 import { seedRealEstate } from "@/lib/realEstate/seed";
 import { seedScreener } from "@/lib/screener/seed";
 import { ensureScreenerSchema } from "@/lib/screener/store";
@@ -10,6 +11,35 @@ import { ensureDirSync } from "@/lib/fs";
 import { getAppDataDir, getDbPath } from "@/lib/paths";
 
 let _db: Database.Database | null = null;
+let cachedLatestMigration: { name: string; applied_at: string } | null = null;
+
+/** Last migration row captured when the database was opened. Health does not query SQLite. */
+export function readCachedLatestMigration(): { name: string; applied_at: string } | null {
+  return cachedLatestMigration;
+}
+
+declare global {
+  var __fhSqlite: Database.Database | undefined;
+}
+
+/**
+ * Hot reload evaluates this module again and would otherwise open another
+ * sqlite connection without closing the previous one. The process-wide handle
+ * stays on globalThis so a day of recompiles does not leak file descriptors.
+ */
+function processDb(): Database.Database | null {
+  return globalThis.__fhSqlite ?? _db;
+}
+
+const tuned = new WeakSet<Database.Database>();
+
+function tune(db: Database.Database): Database.Database {
+  if (!tuned.has(db)) {
+    applyRuntimePragmas(db);
+    tuned.add(db);
+  }
+  return db;
+}
 
 function readSchemaSql(): string {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -19,13 +49,19 @@ function readSchemaSql(): string {
 }
 
 export function getDb(): Database.Database {
-  if (_db) return _db;
+  const existing = processDb();
+  if (existing) {
+    _db = existing;
+    globalThis.__fhSqlite = existing;
+    return tune(existing);
+  }
   ensureDirSync(getAppDataDir());
   const dbPath = getDbPath();
   _db = new Database(dbPath);
   _db.pragma("foreign_keys = ON");
   migrate(_db);
-  return _db;
+  globalThis.__fhSqlite = _db;
+  return tune(_db);
 }
 
 function columnNames(db: Database.Database, table: string): Set<string> {
@@ -216,5 +252,9 @@ function migrate(db: Database.Database) {
   seedRealEstate(db);
   ensureScreenerSchema(db);
   seedScreener(db);
+  const latest = db
+    .prepare(`SELECT name, applied_at FROM schema_migrations ORDER BY applied_at DESC LIMIT 1`)
+    .get() as { name: string; applied_at: string } | undefined;
+  cachedLatestMigration = latest ?? null;
 }
 

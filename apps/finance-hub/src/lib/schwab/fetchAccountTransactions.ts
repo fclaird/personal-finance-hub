@@ -188,10 +188,14 @@ export async function persistSchwabAccountHashes(
     const hash = (n.hashValue ?? "").trim();
     if (!num || !hash) continue;
     const localId = `schwab_${num}`;
-    const acc = db.prepare(`SELECT 1 AS ok FROM accounts WHERE id = ?`).get(localId) as { ok: number } | undefined;
+    const acc = db.prepare(`SELECT schwab_account_hash AS hash FROM accounts WHERE id = ?`).get(localId) as
+      | { hash: string | null }
+      | undefined;
     if (!acc) continue;
-    updateHash.run({ hash, now, id: localId });
-    accountsUpdated++;
+    if (acc.hash !== hash) {
+      updateHash.run({ hash, now, id: localId });
+      accountsUpdated++;
+    }
     accountHashes.push({ accountId: localId, hash });
   }
 

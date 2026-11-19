@@ -1,5 +1,8 @@
+import type Database from "better-sqlite3";
+
 import { getDb } from "@/lib/db";
 import { logError } from "@/lib/log";
+import { numbersDiffer } from "@/lib/sqlite/valueEqual";
 import { isUsEquityOvernightDeadZone } from "@/lib/market/glanceExtendedHours";
 import { schwabMarketFetch } from "@/lib/schwab/client";
 import type { ChartCandleInterval } from "@/lib/terminal/candleChartConfig";
@@ -259,29 +262,88 @@ export async function ensureCandles(
 
   const candles = data.candles ?? [];
   if (candles.length === 0) return;
+  persistOhlcvCandles(
+    db,
+    sym,
+    storage,
+    candles.map((c) => ({
+      ts_ms: c.datetime,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volume,
+    })),
+  );
+}
 
+export type OhlcvWriteRow = {
+  ts_ms: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
+
+function candleUnchanged(prev: OhlcvWriteRow, next: OhlcvWriteRow): boolean {
+  return (
+    !numbersDiffer(prev.open, next.open) &&
+    !numbersDiffer(prev.high, next.high) &&
+    !numbersDiffer(prev.low, next.low) &&
+    !numbersDiffer(prev.close, next.close) &&
+    !numbersDiffer(prev.volume, next.volume)
+  );
+}
+
+/** Insert new bars and skip bars whose OHLC and volume are already stored. */
+export function persistOhlcvCandles(
+  db: Database.Database,
+  symbol: string,
+  interval: string,
+  candles: OhlcvWriteRow[],
+): { written: number; unchanged: number } {
+  if (candles.length === 0) return { written: 0, unchanged: 0 };
+  const existing = db
+    .prepare(
+      `
+      SELECT ts_ms, open, high, low, close, volume
+      FROM ohlcv_points
+      WHERE provider = 'schwab' AND symbol = ? AND interval = ?
+    `,
+    )
+    .all(symbol, interval) as OhlcvWriteRow[];
+  const byTs = new Map(existing.map((row) => [row.ts_ms, row]));
   const upsert = db.prepare(`
     INSERT INTO ohlcv_points (provider, symbol, interval, ts_ms, open, high, low, close, volume)
     VALUES ('schwab', @symbol, @interval, @ts_ms, @open, @high, @low, @close, @volume)
     ON CONFLICT(provider, symbol, interval, ts_ms)
     DO UPDATE SET open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume
   `);
-
+  let written = 0;
+  let unchanged = 0;
   const tx = db.transaction(() => {
     for (const c of candles) {
+      const prev = byTs.get(c.ts_ms);
+      if (prev && candleUnchanged(prev, c)) {
+        unchanged += 1;
+        continue;
+      }
       upsert.run({
-        symbol: sym,
-        interval: storage,
-        ts_ms: c.datetime,
+        symbol,
+        interval,
+        ts_ms: c.ts_ms,
         open: c.open,
         high: c.high,
         low: c.low,
         close: c.close,
         volume: c.volume,
       });
+      written += 1;
     }
   });
   tx();
+  return { written, unchanged };
 }
 
 export function getCachedCandles(

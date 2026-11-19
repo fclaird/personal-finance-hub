@@ -1,7 +1,4 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { curlDeadlineArgs, execFileWithTimeout } from "@/lib/net/upstream";
 
 const MIN_GAP_MS = 350;
 let lastFetchAt = 0;
@@ -57,9 +54,9 @@ export async function fetchStooqQuote(stooqSymbol: string): Promise<StooqQuote |
   await throttleStooq();
   const url = `https://stooq.com/q/l/?s=${encodeURIComponent(sym)}&f=sd2t2ohlc&h&e=csv`;
   try {
-    const { stdout } = await execFileAsync(
+    const { stdout } = await execFileWithTimeout(
       "curl",
-      ["-sS", "-H", "User-Agent: Mozilla/5.0", url],
+      ["-sS", ...curlDeadlineArgs(), "-H", "User-Agent: Mozilla/5.0", url],
       { maxBuffer: 64 * 1024 },
     );
     const parsed = parseStooqCsv(String(stdout ?? ""), sym);

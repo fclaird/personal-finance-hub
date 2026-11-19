@@ -1027,7 +1027,7 @@ function zoneColor(evaluation: LabEvaluation, zone: ExpiryZone): string {
 type LaneView = { x?: number; y?: number; width?: number; height?: number };
 
 function topLaneLabel(text: string, fill: string, lane: number) {
-  return ({ viewBox }: { viewBox?: LaneView }) => {
+  function TopLaneLabel({ viewBox }: { viewBox?: LaneView }) {
     const x = viewBox?.x ?? 0;
     const y = viewBox?.y ?? 0;
     return (
@@ -1035,11 +1035,12 @@ function topLaneLabel(text: string, fill: string, lane: number) {
         {text}
       </text>
     );
-  };
+  }
+  return TopLaneLabel;
 }
 
 function rightLaneLabel(text: string, fill: string, lane: number) {
-  return ({ viewBox }: { viewBox?: LaneView }) => {
+  function RightLaneLabel({ viewBox }: { viewBox?: LaneView }) {
     const x = (viewBox?.x ?? 0) + (viewBox?.width ?? 0);
     const y = (viewBox?.y ?? 0) + 14 + lane * 16;
     return (
@@ -1047,11 +1048,12 @@ function rightLaneLabel(text: string, fill: string, lane: number) {
         {text}
       </text>
     );
-  };
+  }
+  return RightLaneLabel;
 }
 
 function calloutLaneLabel(text: string, fill: string, lane: number) {
-  return ({ viewBox }: { viewBox?: LaneView }) => {
+  function CalloutLaneLabel({ viewBox }: { viewBox?: LaneView }) {
     const x = (viewBox?.x ?? 0) + (viewBox?.width ?? 0) / 2;
     const y = viewBox?.y ?? 0;
     const height = viewBox?.height ?? 0;
@@ -1067,5 +1069,6 @@ function calloutLaneLabel(text: string, fill: string, lane: number) {
         {text}
       </text>
     );
-  };
+  }
+  return CalloutLaneLabel;
 }

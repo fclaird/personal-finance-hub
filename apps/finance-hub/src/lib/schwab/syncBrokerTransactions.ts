@@ -1,6 +1,8 @@
 import type Database from "better-sqlite3";
 
+import { prepareCached } from "@/lib/dbPragmas";
 import { getDb } from "@/lib/db";
+import { createSlicePacer, yieldEventLoop } from "@/lib/eventLoopDiag";
 import { newId } from "@/lib/id";
 import { DEFAULT_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
 import {
@@ -12,7 +14,7 @@ import {
 } from "@/lib/schwab/fetchAccountTransactions";
 import { normalizeSchwabTransaction, type SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
 import { recordSituationsLinkFingerprint } from "@/lib/situations/ensureSituationsFresh";
-import { rebuildAutoSituations } from "@/lib/situations/persistSituations";
+import { rebuildAutoSituationsCooperative } from "@/lib/situations/persistSituations";
 import { reclassifyBrokerTransactionRow } from "@/lib/strategy/classifyTransaction";
 
 export type SyncBrokerTransactionsResult = {
@@ -47,19 +49,23 @@ function upsertTransaction(
     leg_count: number;
     now: string;
   },
-): string {
-  const existing = db
-    .prepare(
-      `SELECT id FROM broker_transactions WHERE account_id = @account_id AND external_activity_id = @external_activity_id`,
-    )
-    .get({
+): string | null {
+  const existing = prepareCached(
+    db,
+    "broker_tx_by_activity",
+    `SELECT id, raw_json FROM broker_transactions WHERE account_id = @account_id AND external_activity_id = @external_activity_id`,
+  ).get({
       account_id: params.account_id,
       external_activity_id: params.external_activity_id,
-    }) as { id: string } | undefined;
+    }) as { id: string; raw_json: string } | undefined;
+
+  if (existing && existing.raw_json === params.raw_json) return null;
 
   const id = existing?.id ?? params.id;
 
-  db.prepare(
+  prepareCached(
+    db,
+    "broker_tx_upsert",
     `
     INSERT INTO broker_transactions (
       id, account_id, external_activity_id, trade_date, transaction_type, description, net_amount,
@@ -91,15 +97,7 @@ function upsertTransaction(
   `,
   ).run({ ...params, id });
 
-  const row = db
-    .prepare(
-      `SELECT id FROM broker_transactions WHERE account_id = @account_id AND external_activity_id = @external_activity_id`,
-    )
-    .get({
-      account_id: params.account_id,
-      external_activity_id: params.external_activity_id,
-    }) as { id: string };
-  return row.id;
+  return id;
 }
 
 /**
@@ -131,11 +129,15 @@ export async function syncSchwabBrokerTransactions(options?: {
 
   for (const { accountId, hash } of accountHashes) {
     await fetchTransactionsChunked(hash, lookbackDays, async (txs) => {
+      const pace = createSlicePacer();
+      let seen = 0;
       for (const tx of txs) {
         const norm = normalizeSchwabTransaction(tx);
         if (!norm) continue;
+        seen += 1;
+        if (seen % 25 === 0) await yieldEventLoop();
         const rowId = newId("btx");
-        const id = upsertTransaction(db, {
+        const wrote = upsertTransaction(db, {
           id: rowId,
           account_id: accountId,
           external_activity_id: norm.external_activity_id,
@@ -157,23 +159,33 @@ export async function syncSchwabBrokerTransactions(options?: {
           leg_count: norm.leg_count,
           now,
         });
+        if (wrote == null) {
+          await pace();
+          continue;
+        }
         transactionsUpserted++;
-        touchedIds.add(id);
+        touchedIds.add(wrote);
+        await pace();
       }
     });
   }
 
   let classified = 0;
-  for (const id of touchedIds) {
-    reclassifyBrokerTransactionRow(db, id);
-    classified++;
-  }
+  if (touchedIds.size > 0) {
+    let classifiedBatch = 0;
+    for (const id of touchedIds) {
+      reclassifyBrokerTransactionRow(db, id);
+      classified++;
+      classifiedBatch += 1;
+      if (classifiedBatch % 25 === 0) await yieldEventLoop();
+    }
 
-  try {
-    rebuildAutoSituations(db);
-    recordSituationsLinkFingerprint(db);
-  } catch {
-    // Situations are best-effort; TRADE sync should still succeed.
+    try {
+      await rebuildAutoSituationsCooperative(db);
+      recordSituationsLinkFingerprint(db);
+    } catch {
+      // Situations are best-effort; TRADE sync should still succeed.
+    }
   }
 
   return { ok: true, lookbackDays, accountsUpdated, transactionsUpserted, classified };

@@ -1,9 +1,12 @@
+import { boundCacheSet } from "@/lib/cacheBound";
 import { schwabMarketFetch } from "@/lib/schwab/client";
 
 export type SchwabQuotesResponse = Record<string, unknown>;
 
 const QUOTE_TTL_MS = 15_000;
 const BATCH_SIZE = 50;
+/** Quote payloads are kept for the life of the process. Cap them so a day of symbols cannot grow without bound. */
+export const QUOTE_CACHE_MAX = 1_000;
 
 type CacheRow = { at: number; entry: unknown };
 
@@ -12,6 +15,21 @@ const inflightByKey = new Map<string, Promise<SchwabQuotesResponse>>();
 
 function normSym(s: string) {
   return (s ?? "").trim().toUpperCase();
+}
+
+function rememberQuote(sym: string, now: number, entry: unknown) {
+  boundCacheSet(quoteCache, sym, { at: now, entry }, QUOTE_CACHE_MAX);
+}
+
+export function quoteCacheSize(): number {
+  return quoteCache.size;
+}
+
+/** Test helper: fill the process quote cache and return its size. */
+export function primeQuoteCacheForTests(count: number): number {
+  quoteCache.clear();
+  for (let i = 0; i < count; i++) rememberQuote(`T${i}`, Date.now(), { i });
+  return quoteCache.size;
 }
 
 async function fetchMissingQuoteBatches(missing: string[], now: number): Promise<SchwabQuotesResponse> {
@@ -24,7 +42,7 @@ async function fetchMissingQuoteBatches(missing: string[], now: number): Promise
     for (const sym of batch) {
       const entry = resp[sym] ?? resp[sym.toUpperCase()];
       if (entry !== undefined) {
-        quoteCache.set(sym, { at: now, entry });
+        rememberQuote(sym, now, entry);
         fetched[sym] = entry;
       }
     }
@@ -48,6 +66,7 @@ export async function fetchSchwabQuotesResponse(symbols: string[]): Promise<Schw
     if (hit && now - hit.at < QUOTE_TTL_MS) {
       merged[sym] = hit.entry;
     } else {
+      if (hit) quoteCache.delete(sym);
       missing.push(sym);
     }
   }

@@ -1,9 +1,9 @@
 import type Database from "better-sqlite3";
 
+import { fetchFhfaOffThread } from "@/lib/eventLoopDiag";
 import { nyYmd } from "@/lib/market/usEquitySession";
 import { getDb } from "@/lib/db";
 import { logError, logLine } from "@/lib/log";
-import { fetchFhfaMasterCsv, parseFhfaMasterCsv } from "@/lib/realEstate/hpi";
 import { readSyncStamp, recordSyncStamp } from "@/lib/syncStamp";
 import { priorNySessionYmd, resolvePortfolioAccountTotals } from "@/lib/terminal/portfolioAccountTotals";
 import type { FlavorId } from "@/lib/flavor";
@@ -72,8 +72,7 @@ export async function runRealEstateMonthly(opts?: { force?: boolean; now?: Date 
       }
     }
     recordSyncStamp(db, ATTEMPT_KEY, now.toISOString());
-    const csv = await fetchFhfaMasterCsv();
-    const rows = parseFhfaMasterCsv(csv, listHpiPlaceIds(db));
+    const rows = await fetchFhfaOffThread(listHpiPlaceIds(db));
     if (rows.length === 0) throw new Error("FHFA file had no quarterly MSA rows for the tracked places");
     const fetchedAt = now.toISOString();
     replaceHpiObservations(db, rows, fetchedAt);

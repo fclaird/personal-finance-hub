@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 
 import { getDb } from "@/lib/db";
+import { yieldEventLoop } from "@/lib/eventLoopDiag";
 import { newId } from "@/lib/id";
 import { logError, logLine } from "@/lib/log";
 import type { DataMode } from "@/lib/dataMode";
@@ -129,7 +130,16 @@ export async function runSchwabHoldingsSync(
     const insertSecurity = db.prepare(`
     INSERT INTO securities (id, symbol, name, security_type, underlying_security_id, updated_at)
     VALUES (@id, @symbol, @name, @security_type, @underlying_security_id, @now)
-    ON CONFLICT(id) DO UPDATE SET symbol = excluded.symbol, name = excluded.name, updated_at = excluded.updated_at
+    ON CONFLICT(id) DO UPDATE SET
+      symbol = excluded.symbol,
+      name = excluded.name,
+      security_type = excluded.security_type,
+      underlying_security_id = excluded.underlying_security_id,
+      updated_at = excluded.updated_at
+    WHERE securities.symbol IS NOT excluded.symbol
+       OR securities.name IS NOT excluded.name
+       OR securities.security_type IS NOT excluded.security_type
+       OR IFNULL(securities.underlying_security_id, '') IS NOT IFNULL(excluded.underlying_security_id, '')
   `);
 
     const insertSnapshot = db.prepare(`
@@ -151,7 +161,7 @@ export async function runSchwabHoldingsSync(
       prior_equity_value = excluded.prior_equity_value
   `);
 
-    const tx = db.transaction(() => {
+    const writeCash = db.transaction(() => {
       insertSecurity.run({
         id: "sec_CASH",
         symbol: "CASH",
@@ -160,8 +170,10 @@ export async function runSchwabHoldingsSync(
         underlying_security_id: null,
         now: nowIso,
       });
+    });
+    writeCash();
 
-      for (const a of accounts) {
+    const writeAccount = db.transaction((a: (typeof accounts)[number]) => {
         const sa = a.securitiesAccount;
         const acctIdPart =
           (sa.accountId != null && String(sa.accountId).trim() !== "" ? String(sa.accountId) : null) ??
@@ -274,10 +286,12 @@ export async function runSchwabHoldingsSync(
             });
           }
         }
-      }
     });
 
-    tx();
+    for (const a of accounts) {
+      writeAccount(a);
+      await yieldEventLoop();
+    }
 
     try {
       await persistSchwabAccountHashes(db);

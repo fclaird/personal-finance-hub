@@ -430,6 +430,15 @@ CREATE TABLE IF NOT EXISTS glance_cache (
   PRIMARY KEY (cache_key, session_ymd)
 );
 
+-- Chart series for a glance payload. Kept off the shell row so a last-price
+-- tick does not rewrite the series blob.
+CREATE TABLE IF NOT EXISTS glance_cache_series (
+  cache_key TEXT NOT NULL,
+  session_ymd TEXT NOT NULL,
+  series_json TEXT NOT NULL,
+  PRIMARY KEY (cache_key, session_ymd)
+);
+
 -- Schwab (and future brokers) transaction history for strategy views.
 -- One row per API activity; `raw_json` holds full payload including all legs.
 CREATE TABLE IF NOT EXISTS broker_transactions (

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 
+import { fetchWithTimeout } from "@/lib/net/upstream";
 import { SCHWAB_OAUTH_AUTHORIZE_URL, SCHWAB_OAUTH_TOKEN_URL, getSchwabConfig } from "@/lib/schwab/config";
 import { schwabHttpError } from "@/lib/schwab/httpError";
 import type { SchwabToken } from "@/lib/schwab/token";
@@ -62,7 +63,7 @@ export async function exchangeCodeForToken(code: string): Promise<Omit<SchwabTok
   body.set("code", code);
   body.set("redirect_uri", redirectUri);
 
-  const resp = await fetch(SCHWAB_OAUTH_TOKEN_URL, {
+  const resp = await fetchWithTimeout(SCHWAB_OAUTH_TOKEN_URL, {
     method: "POST",
     headers: {
       Authorization: basicAuthHeader(clientId, clientSecret),
@@ -93,7 +94,7 @@ export async function refreshToken(refresh_token: string): Promise<Omit<SchwabTo
   body.set("grant_type", "refresh_token");
   body.set("refresh_token", refresh_token);
 
-  const resp = await fetch(SCHWAB_OAUTH_TOKEN_URL, {
+  const resp = await fetchWithTimeout(SCHWAB_OAUTH_TOKEN_URL, {
     method: "POST",
     headers: {
       Authorization: basicAuthHeader(clientId, clientSecret),

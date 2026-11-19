@@ -1,7 +1,9 @@
 import type Database from "better-sqlite3";
 
+import { createSlicePacer, yieldEventLoop } from "@/lib/eventLoopDiag";
 import type { SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
 import { securityLegsOf } from "@/lib/schwab/transactionNormalize";
+import type { LinkableLeg, LinkableTxn } from "@/lib/situations/types";
 import { instructionKind, parseOptionFromSchwabSymbol, positionIsOpening } from "@/lib/strategy/optionParse";
 
 /** Infer buy/sell open/close when Schwab omits instruction but has positionEffect + signed qty. */
@@ -21,8 +23,6 @@ export function inferInstructionKind(input: {
   // No effect: treat signed qty as open (common on sparse exports).
   return sold ? "sell_open" : "buy_open";
 }
-
-import type { LinkableLeg, LinkableTxn } from "@/lib/situations/types";
 
 export function legsFromRawJson(rawJson: string, fallback?: {
   symbol?: string | null;
@@ -115,62 +115,113 @@ function tradeTimeFromRaw(rawJson: string): string | null {
   }
 }
 
+const LINKABLE_TX_COLUMNS = `
+  id, account_id, trade_date, net_amount, raw_json, symbol, underlying_symbol,
+  option_expiration, option_right, option_strike, instruction, position_effect,
+  quantity, asset_type, price
+`;
+
+type LinkableRow = {
+  id: string;
+  account_id: string;
+  trade_date: string;
+  net_amount: number | null;
+  raw_json: string;
+  symbol: string | null;
+  underlying_symbol: string | null;
+  option_expiration: string | null;
+  option_right: string | null;
+  option_strike: number | null;
+  instruction: string | null;
+  position_effect: string | null;
+  quantity: number | null;
+  asset_type: string | null;
+  price: number | null;
+};
+
+function linkableTxnFromRow(row: LinkableRow): LinkableTxn | null {
+  const legs = legsFromRawJson(row.raw_json, {
+    symbol: row.symbol,
+    underlying: row.underlying_symbol,
+    expiration: row.option_expiration,
+    right: row.option_right,
+    strike: row.option_strike,
+    instruction: row.instruction,
+    positionEffect: row.position_effect,
+    quantity: row.quantity,
+  });
+  if (!legs.length) return null;
+  if ((row.asset_type ?? "").toUpperCase() === "EQUITY" && legs.every((leg) => !leg.right && !leg.expiration)) {
+    return null;
+  }
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    tradeDate: row.trade_date,
+    netAmount: row.net_amount,
+    legs,
+    orderId: orderIdFromRaw(row.raw_json),
+    tradeTime: tradeTimeFromRaw(row.raw_json),
+    price: row.price,
+    sourceTransactionIds: [row.id],
+  };
+}
+
 export function loadLinkableBrokerTransactions(db: Database.Database): LinkableTxn[] {
   const rows = db
     .prepare(
       `
-      SELECT
-        id, account_id, trade_date, net_amount, raw_json, symbol, underlying_symbol,
-        option_expiration, option_right, option_strike, instruction, position_effect,
-        quantity, asset_type, price
+      SELECT ${LINKABLE_TX_COLUMNS}
       FROM broker_transactions
       WHERE UPPER(COALESCE(transaction_type, 'TRADE')) = 'TRADE'
       ORDER BY trade_date ASC, id ASC
     `,
     )
-    .all() as Array<{
-    id: string;
-    account_id: string;
-    trade_date: string;
-    net_amount: number | null;
-    raw_json: string;
-    symbol: string | null;
-    underlying_symbol: string | null;
-    option_expiration: string | null;
-    option_right: string | null;
-    option_strike: number | null;
-    instruction: string | null;
-    position_effect: string | null;
-    quantity: number | null;
-    asset_type: string | null;
-    price: number | null;
-  }>;
+    .all() as LinkableRow[];
 
   const out: LinkableTxn[] = [];
-  for (const r of rows) {
-    const legs = legsFromRawJson(r.raw_json, {
-      symbol: r.symbol,
-      underlying: r.underlying_symbol,
-      expiration: r.option_expiration,
-      right: r.option_right,
-      strike: r.option_strike,
-      instruction: r.instruction,
-      positionEffect: r.position_effect,
-      quantity: r.quantity,
-    });
-    if (!legs.length) continue;
-    if ((r.asset_type ?? "").toUpperCase() === "EQUITY" && legs.every((l) => !l.right && !l.expiration)) continue;
-    out.push({
-      id: r.id,
-      accountId: r.account_id,
-      tradeDate: r.trade_date,
-      netAmount: r.net_amount,
-      legs,
-      orderId: orderIdFromRaw(r.raw_json),
-      tradeTime: tradeTimeFromRaw(r.raw_json),
-      price: r.price,
-      sourceTransactionIds: [r.id],
-    });
+  for (const row of rows) {
+    const txn = linkableTxnFromRow(row);
+    if (txn) out.push(txn);
+  }
+  return out;
+}
+
+/**
+ * Page the raw_json scan. One `.all()` of the whole book parses every blob
+ * before the event loop can answer /api/health.
+ */
+export async function loadLinkableBrokerTransactionsCooperative(
+  db: Database.Database,
+  pageSize = 100,
+): Promise<LinkableTxn[]> {
+  const page = db.prepare(
+    `
+    SELECT ${LINKABLE_TX_COLUMNS}
+    FROM broker_transactions
+    WHERE UPPER(COALESCE(transaction_type, 'TRADE')) = 'TRADE'
+      AND (trade_date > @trade_date OR (trade_date = @trade_date AND id > @id))
+    ORDER BY trade_date ASC, id ASC
+    LIMIT @limit
+  `,
+  );
+  const out: LinkableTxn[] = [];
+  const pace = createSlicePacer();
+  let tradeDate = "";
+  let id = "";
+  for (;;) {
+    const rows = page.all({ trade_date: tradeDate, id, limit: pageSize }) as LinkableRow[];
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      const txn = linkableTxnFromRow(row);
+      if (txn) out.push(txn);
+      await pace();
+    }
+    const last = rows[rows.length - 1]!;
+    tradeDate = last.trade_date;
+    id = last.id;
+    await yieldEventLoop();
+    if (rows.length < pageSize) break;
   }
   return out;
 }

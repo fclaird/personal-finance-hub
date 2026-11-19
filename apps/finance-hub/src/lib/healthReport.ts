@@ -1,0 +1,84 @@
+export type HealthSchedulerSnapshot = {
+  started: boolean;
+  inFlight: boolean;
+  overlapSkips: number;
+  ticksStarted: number;
+  lastTickAt: number;
+  lastSlowRunAt: number;
+  lastAccountValueRunAt: number;
+};
+
+export type HealthReport = {
+  ok: true;
+  pid: number;
+  uptimeSec: number;
+  memory: {
+    rss: number;
+    heapUsed: number;
+    heapTotal: number;
+    external: number;
+  };
+  handles: {
+    active: number;
+    requests: number;
+  };
+  scheduler: HealthSchedulerSnapshot;
+  latestMigration: { name: string; applied_at: string } | null;
+  /** Bytes in the SQLite WAL. Null when the file is absent. */
+  walBytes: number | null;
+  /** App-level quote cache entries. The multi-GB dev heap is not this map. */
+  quoteCacheEntries: number;
+  /** `production` when the login launcher is serving `next start`. */
+  runtime: "production" | "development";
+  dbPath?: string;
+};
+
+type ProcWithHandles = NodeJS.Process & {
+  _getActiveHandles?: () => unknown[];
+  _getActiveRequests?: () => unknown[];
+};
+
+export function countOpenHandles(proc: ProcWithHandles = process): { active: number; requests: number } {
+  return {
+    active: proc._getActiveHandles?.().length ?? 0,
+    requests: proc._getActiveRequests?.().length ?? 0,
+  };
+}
+
+export function readProcessVitals(nowUptimeSec = Math.round(process.uptime())) {
+  const mem = process.memoryUsage();
+  return {
+    pid: process.pid,
+    uptimeSec: nowUptimeSec,
+    memory: {
+      rss: mem.rss,
+      heapUsed: mem.heapUsed,
+      heapTotal: mem.heapTotal,
+      external: mem.external,
+    },
+    handles: countOpenHandles(),
+  };
+}
+
+export function buildHealthReport(input: {
+  vitals?: ReturnType<typeof readProcessVitals>;
+  scheduler: HealthSchedulerSnapshot;
+  latestMigration: { name: string; applied_at: string } | null;
+  walBytes?: number | null;
+  quoteCacheEntries?: number;
+  runtime?: "production" | "development";
+  dbPath?: string | null;
+}): HealthReport {
+  const vitals = input.vitals ?? readProcessVitals();
+  const report: HealthReport = {
+    ok: true,
+    ...vitals,
+    scheduler: input.scheduler,
+    latestMigration: input.latestMigration,
+    walBytes: input.walBytes ?? null,
+    quoteCacheEntries: input.quoteCacheEntries ?? 0,
+    runtime: input.runtime ?? (process.env.NODE_ENV === "production" ? "production" : "development"),
+  };
+  if (input.dbPath) report.dbPath = input.dbPath;
+  return report;
+}
