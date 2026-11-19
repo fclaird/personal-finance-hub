@@ -24,6 +24,8 @@ describe("sqlite wal pragmas", () => {
       assert.equal(db.pragma("wal_autocheckpoint", { simple: true }), WAL_AUTOCHECKPOINT_PAGES);
       assert.equal(db.pragma("synchronous", { simple: true }), 1);
       assert.equal(db.pragma("journal_size_limit", { simple: true }), JOURNAL_SIZE_LIMIT_BYTES);
+      assert.equal(db.pragma("cache_size", { simple: true }), -2048);
+      assert.equal(db.pragma("mmap_size", { simple: true }), 0);
 
       db.exec("CREATE TABLE ticks (id INTEGER PRIMARY KEY, body TEXT)");
       const insert = db.prepare("INSERT INTO ticks (body) VALUES (?)");

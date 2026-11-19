@@ -1,7 +1,8 @@
 import type Database from "better-sqlite3";
 
 import { getDb } from "@/lib/db";
-import { bridgeLog } from "@/lib/eventLoopDiag";
+import { bridgeLog, yieldEventLoop } from "@/lib/eventLoopDiag";
+import { prepareCached } from "@/lib/dbPragmas";
 import { FLAVOR_IDS, type FlavorId } from "@/lib/flavor";
 import { logError } from "@/lib/log";
 import type { UsMarketGlanceItem } from "@/app/components/terminal/MarketGlanceCard";
@@ -188,7 +189,9 @@ export function persistGlancePayload(
   if (wroteShell || wroteSeries) {
     const tx = db.transaction(() => {
       if (wroteSeries) {
-        db.prepare(
+        prepareCached(
+          db,
+          "glance_series_upsert",
           `
           INSERT INTO glance_cache_series (cache_key, session_ymd, series_json)
           VALUES (@cache_key, @session_ymd, @series_json)
@@ -199,7 +202,9 @@ export function persistGlancePayload(
         ).run({ cache_key: cacheKey, session_ymd: sessionYmd, series_json: seriesJson });
       }
       if (wroteShell || wroteSeries) {
-        db.prepare(
+        prepareCached(
+          db,
+          "glance_shell_upsert",
           `
           INSERT INTO glance_cache (cache_key, session_ymd, payload_json, updated_at)
           VALUES (@cache_key, @session_ymd, @payload_json, @updated_at)
@@ -267,8 +272,10 @@ async function rebuildAndStore(now: Date, sessionYmd: string, flavor: FlavorId):
   if (existing) return existing;
   const p = (async () => {
     const payload = await buildGlancePayload(now, flavor);
+    await yieldEventLoop();
     try {
       writeCacheRow(getDb(), glanceCacheKey(flavor), sessionYmd, payload);
+      await yieldEventLoop();
     } catch (e) {
       logError("glance_cache_write", e);
     }
@@ -306,6 +313,7 @@ export async function warmGlanceCache(now: Date = new Date()): Promise<void> {
       if (ageMs > FRESH_MS_OPEN) {
         await rebuildAndStore(now, sessionYmd, flavor);
       }
+      await yieldEventLoop();
     } catch (e) {
       logError("glance_cache_warm", e);
     }

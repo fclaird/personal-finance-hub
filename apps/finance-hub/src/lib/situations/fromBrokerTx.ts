@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-import { yieldEventLoop } from "@/lib/eventLoopDiag";
+import { createSlicePacer, yieldEventLoop } from "@/lib/eventLoopDiag";
 import type { SchwabTxnRaw } from "@/lib/schwab/transactionNormalize";
 import { securityLegsOf } from "@/lib/schwab/transactionNormalize";
 import type { LinkableLeg, LinkableTxn } from "@/lib/situations/types";
@@ -206,6 +206,7 @@ export async function loadLinkableBrokerTransactionsCooperative(
   `,
   );
   const out: LinkableTxn[] = [];
+  const pace = createSlicePacer();
   let tradeDate = "";
   let id = "";
   for (;;) {
@@ -214,6 +215,7 @@ export async function loadLinkableBrokerTransactionsCooperative(
     for (const row of rows) {
       const txn = linkableTxnFromRow(row);
       if (txn) out.push(txn);
+      await pace();
     }
     const last = rows[rows.length - 1]!;
     tradeDate = last.trade_date;

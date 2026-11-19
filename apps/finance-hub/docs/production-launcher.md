@@ -43,7 +43,15 @@ tail -n 50 ~/Library/Logs/finance-hub/bridge.log
 
 Look for `build_skipped` or `build_ok`, then `serve pid=… runtime=production`. Watchdog lines in the same file look like `health_unresponsive` and `restarting next-server`.
 
-Event-loop lines in the same file are prefixed `[event-loop]`. Once a minute: `vitals heap_mb=… rss_mb=… lag_p99_ms=…`. When the 10-second p99 exceeds 500ms: `event_loop_lag` plus `inflight=`, each job as `name start=<ISO> age_ms=<n>`. Every scheduled job also logs `job_start` and `job_end` with `name`, `start`, `end`, and `ms`. A stall that ends in `health_unresponsive` should have a `job_start` with no `job_end` yet, usually `wal_checkpoint`, `schwab_holdings`, `schwab_transactions`, or `glance_warm`.
+Event-loop lines in the same file are prefixed `[event-loop]`. Once a minute: `vitals heap_mb=… rss_mb=… lag_p99_ms=…`. When the 10-second p99 exceeds 500ms: `event_loop_lag` plus `inflight=`, each job as `name start=<ISO> age_ms=<n>`. Every scheduled job also logs `job_start` and `job_end` with `name`, `start`, `end`, and `ms`. A stall that ends in `health_unresponsive` should have a `job_start` with no `job_end` yet, usually `wal_checkpoint`, `schwab_holdings`, `schwab_transactions`, or `glance_warm`. `event_loop_lag` also names `gc=` and `stacks=` (V8 samples from the same 10s window). `vitals` includes `external_mb` and `array_buffers_mb`.
+
+Soak the production server without touching the live database:
+
+```bash
+cd ~/Projects/personal-finance-hub/apps/finance-hub && ./scripts/install-financial-bridge.sh && /usr/local/bin/node scripts/soak-production.mjs --minutes 30
+```
+
+The last line is `SOAK PASS` or `SOAK FAIL`.
 
 `lsof -nP -iTCP:3000 -sTCP:LISTEN` should show a `node` process running `scripts/start.mjs`, not `next dev`.
 

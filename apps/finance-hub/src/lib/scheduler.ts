@@ -1,6 +1,6 @@
 import { scheduleColdStartupDataPullOnce } from "@/lib/coldStartupDataPull";
 import { getDbPath } from "@/lib/paths";
-import { checkpointWalOffThread, runTracked, startEventLoopMonitor } from "@/lib/eventLoopDiag";
+import { checkpointWalOffThread, runTracked, startEventLoopMonitor, yieldEventLoop } from "@/lib/eventLoopDiag";
 import { logError, logLine } from "@/lib/log";
 import { isUsEquityRegularSessionOpen } from "@/lib/market/usEquitySession";
 import { runSchwabRefreshSchedulerTick } from "@/lib/schwab/refreshOrchestrator";
@@ -135,6 +135,7 @@ export function createHubScheduler(
 }
 
 async function productionTick(s: SchedulerState): Promise<void> {
+  await yieldEventLoop();
   await runTracked("scheduler_tick", async () => {
     try {
       s.lastTickAt = Date.now();

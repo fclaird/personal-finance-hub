@@ -9,8 +9,10 @@ import Database from "better-sqlite3";
 import { applyRuntimePragmas } from "@/lib/dbPragmas";
 import {
   checkpointWalOffThread,
+  createSlicePacer,
   formatInflight,
   inflightJobs,
+  parseYahooChartOffThread,
   runTracked,
   shouldLogEventLoopLag,
   stopEventLoopMonitorForTests,
@@ -49,11 +51,38 @@ describe("event loop diagnostics", () => {
 
   it("lets a timer run while a sync loop yields", async () => {
     let ran = false;
-    setTimeout(() => {
+    setImmediate(() => {
       ran = true;
-    }, 0);
+    });
     await yieldEventLoop();
     assert.equal(ran, true);
+    const pace = createSlicePacer(0);
+    ran = false;
+    setImmediate(() => {
+      ran = true;
+    });
+    await pace();
+    assert.equal(ran, true);
+  });
+
+  it("parses a Yahoo chart off the request thread and drops the raw document", async () => {
+    const body = JSON.stringify({
+      chart: {
+        result: [
+          {
+            meta: { symbol: "SPY", regularMarketPrice: 500 },
+            timestamp: [1, 2],
+            indicators: { quote: [{ close: [10, 11], open: [9, 10] }] },
+            events: { dividends: { "1": { amount: 1 } } },
+          },
+        ],
+      },
+    });
+    const slim = await parseYahooChartOffThread(Buffer.from(body));
+    assert.equal(slim?.meta?.symbol, "SPY");
+    assert.deepEqual(slim?.timestamp, [1, 2]);
+    assert.deepEqual(slim?.close, [10, 11]);
+    assert.equal((slim?.events as { dividends?: unknown }).dividends != null, true);
   });
 
   it("checkpoints the WAL off the request thread", async () => {

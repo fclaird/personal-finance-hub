@@ -1,7 +1,8 @@
 import type Database from "better-sqlite3";
 
+import { prepareCached } from "@/lib/dbPragmas";
 import { getDb } from "@/lib/db";
-import { yieldEventLoop } from "@/lib/eventLoopDiag";
+import { createSlicePacer, yieldEventLoop } from "@/lib/eventLoopDiag";
 import { newId } from "@/lib/id";
 import { DEFAULT_TRANSACTION_LOOKBACK_DAYS } from "@/lib/schwab/config";
 import {
@@ -49,11 +50,11 @@ function upsertTransaction(
     now: string;
   },
 ): string | null {
-  const existing = db
-    .prepare(
-      `SELECT id, raw_json FROM broker_transactions WHERE account_id = @account_id AND external_activity_id = @external_activity_id`,
-    )
-    .get({
+  const existing = prepareCached(
+    db,
+    "broker_tx_by_activity",
+    `SELECT id, raw_json FROM broker_transactions WHERE account_id = @account_id AND external_activity_id = @external_activity_id`,
+  ).get({
       account_id: params.account_id,
       external_activity_id: params.external_activity_id,
     }) as { id: string; raw_json: string } | undefined;
@@ -62,7 +63,9 @@ function upsertTransaction(
 
   const id = existing?.id ?? params.id;
 
-  db.prepare(
+  prepareCached(
+    db,
+    "broker_tx_upsert",
     `
     INSERT INTO broker_transactions (
       id, account_id, external_activity_id, trade_date, transaction_type, description, net_amount,
@@ -94,15 +97,7 @@ function upsertTransaction(
   `,
   ).run({ ...params, id });
 
-  const row = db
-    .prepare(
-      `SELECT id FROM broker_transactions WHERE account_id = @account_id AND external_activity_id = @external_activity_id`,
-    )
-    .get({
-      account_id: params.account_id,
-      external_activity_id: params.external_activity_id,
-    }) as { id: string };
-  return row.id;
+  return id;
 }
 
 /**
@@ -134,6 +129,7 @@ export async function syncSchwabBrokerTransactions(options?: {
 
   for (const { accountId, hash } of accountHashes) {
     await fetchTransactionsChunked(hash, lookbackDays, async (txs) => {
+      const pace = createSlicePacer();
       let seen = 0;
       for (const tx of txs) {
         const norm = normalizeSchwabTransaction(tx);
@@ -163,9 +159,13 @@ export async function syncSchwabBrokerTransactions(options?: {
           leg_count: norm.leg_count,
           now,
         });
-        if (wrote == null) continue;
+        if (wrote == null) {
+          await pace();
+          continue;
+        }
         transactionsUpserted++;
         touchedIds.add(wrote);
+        await pace();
       }
     });
   }

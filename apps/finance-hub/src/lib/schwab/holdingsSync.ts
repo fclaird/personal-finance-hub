@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 
 import { getDb } from "@/lib/db";
+import { yieldEventLoop } from "@/lib/eventLoopDiag";
 import { newId } from "@/lib/id";
 import { logError, logLine } from "@/lib/log";
 import type { DataMode } from "@/lib/dataMode";
@@ -160,7 +161,7 @@ export async function runSchwabHoldingsSync(
       prior_equity_value = excluded.prior_equity_value
   `);
 
-    const tx = db.transaction(() => {
+    const writeCash = db.transaction(() => {
       insertSecurity.run({
         id: "sec_CASH",
         symbol: "CASH",
@@ -169,8 +170,10 @@ export async function runSchwabHoldingsSync(
         underlying_security_id: null,
         now: nowIso,
       });
+    });
+    writeCash();
 
-      for (const a of accounts) {
+    const writeAccount = db.transaction((a: (typeof accounts)[number]) => {
         const sa = a.securitiesAccount;
         const acctIdPart =
           (sa.accountId != null && String(sa.accountId).trim() !== "" ? String(sa.accountId) : null) ??
@@ -283,10 +286,12 @@ export async function runSchwabHoldingsSync(
             });
           }
         }
-      }
     });
 
-    tx();
+    for (const a of accounts) {
+      writeAccount(a);
+      await yieldEventLoop();
+    }
 
     try {
       await persistSchwabAccountHashes(db);

@@ -21,16 +21,22 @@ export function curlDeadlineArgs(seconds = UPSTREAM_TIMEOUT_MS / 1000): string[]
 export function execFileWithTimeout(
   command: string,
   args: string[],
-  opts?: { maxBuffer?: number; timeoutMs?: number },
-): Promise<{ stdout: string }> {
+  opts?: { maxBuffer?: number; timeoutMs?: number; binary?: boolean },
+): Promise<{ stdout: string | Buffer }> {
   const timeoutMs = opts?.timeoutMs ?? UPSTREAM_KILL_MS;
   return new Promise((resolve, reject) => {
     execFile(
       command,
       args,
-      { maxBuffer: opts?.maxBuffer, timeout: timeoutMs, killSignal: "SIGKILL" },
+      {
+        maxBuffer: opts?.maxBuffer,
+        timeout: timeoutMs,
+        killSignal: "SIGKILL",
+        encoding: opts?.binary ? "buffer" : "utf8",
+      },
       (err, stdout) => {
         if (err) reject(err);
+        else if (opts?.binary) resolve({ stdout: Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout ?? "") });
         else resolve({ stdout: String(stdout ?? "") });
       },
     );

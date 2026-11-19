@@ -15,6 +15,9 @@ try {
   try {
     db.pragma("busy_timeout = 2000");
     db.pragma(`journal_size_limit = ${JOURNAL_SIZE_LIMIT_BYTES}`);
+    db.pragma("cache_size = -2048");
+    db.pragma("mmap_size = 0");
+    db.pragma("soft_heap_limit = 8388608");
     const rows = db.pragma("wal_checkpoint(PASSIVE)", { simple: false });
     const row = Array.isArray(rows) ? rows[0] : undefined;
     parentPort?.postMessage({

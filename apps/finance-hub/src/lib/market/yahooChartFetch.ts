@@ -3,12 +3,13 @@
  * Shared by dividend payment history and trailing yield helpers.
  */
 
+import { parseYahooChartOffThread, yahooChartFromSlim, yieldEventLoop } from "@/lib/eventLoopDiag";
 import { curlDeadlineArgs, execFileWithTimeout, fetchWithTimeout } from "@/lib/net/upstream";
 
 const MIN_GAP_MS = 450;
 const MAX_ATTEMPTS = 4;
 
-let lastFetchAt = 0;
+let nextYahooSlot = 0;
 
 export function yahooChartSymbol(symbol: string): string {
   return symbol.trim().toUpperCase().replace(/\./g, "-");
@@ -18,34 +19,47 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Reserve the next slot before awaiting, so parallel callers do not spawn every curl in one turn. */
 async function throttleYahoo(): Promise<void> {
   const now = Date.now();
-  const wait = MIN_GAP_MS - (now - lastFetchAt);
+  const slot = Math.max(now, nextYahooSlot);
+  nextYahooSlot = slot + MIN_GAP_MS;
+  const wait = slot - now;
   if (wait > 0) await sleep(wait);
-  lastFetchAt = Date.now();
 }
 
-async function fetchYahooChartViaCurl(url: string): Promise<string | null> {
+const CHART_MAX_BYTES = 4 * 1024 * 1024;
+
+async function chartFromBytes(bytes: Uint8Array): Promise<Record<string, unknown> | null> {
+  const head = Buffer.from(bytes.subarray(0, Math.min(bytes.byteLength, 16))).toString("utf8");
+  if (!head || head.startsWith("Too Many")) return null;
+  if (bytes.byteLength >= 64 * 1024) {
+    const slim = await parseYahooChartOffThread(bytes);
+    await yieldEventLoop();
+    return yahooChartFromSlim(slim);
+  }
+  const text = Buffer.from(bytes).toString("utf8");
+  await yieldEventLoop();
   try {
-    const { stdout } = await execFileWithTimeout(
-      "curl",
-      ["-sS", ...curlDeadlineArgs(), "-H", "User-Agent: Mozilla/5.0", "-H", "Accept: application/json", url],
-      { maxBuffer: 12 * 1024 * 1024 },
-    );
-    const text = String(stdout ?? "").trim();
-    if (!text || text.startsWith("Too Many")) return null;
-    return text;
+    const json = JSON.parse(text) as Record<string, unknown>;
+    const chart = json.chart as Record<string, unknown> | undefined;
+    const result = Array.isArray(chart?.result) ? (chart.result[0] as Record<string, unknown>) : null;
+    await yieldEventLoop();
+    return result;
   } catch {
     return null;
   }
 }
 
-function parseChartJson(text: string): Record<string, unknown> | null {
+async function fetchYahooChartViaCurl(url: string): Promise<Record<string, unknown> | null> {
   try {
-    const json = JSON.parse(text) as Record<string, unknown>;
-    const chart = json.chart as Record<string, unknown> | undefined;
-    const result = Array.isArray(chart?.result) ? (chart!.result as Record<string, unknown>[])[0] : null;
-    return result ?? null;
+    const { stdout } = await execFileWithTimeout(
+      "curl",
+      ["-sS", ...curlDeadlineArgs(), "-H", "User-Agent: Mozilla/5.0", "-H", "Accept: application/json", url],
+      { maxBuffer: CHART_MAX_BYTES, binary: true },
+    );
+    const bytes = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout);
+    return chartFromBytes(bytes);
   } catch {
     return null;
   }
@@ -81,13 +95,11 @@ async function fetchYahooChartUrl(
   if (query.includePrePost) params.set("includePrePost", "true");
   const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?${params.toString()}`;
 
+  await yieldEventLoop();
   await throttleYahoo();
-  const curlText = await fetchYahooChartViaCurl(url);
-  if (curlText) {
-    const curlResult = parseChartJson(curlText);
-    if (isValidChartResult(curlResult)) {
-      return { result: curlResult, meta: { symbol: sym, status: 200, attempts: 0, rateLimited: false } };
-    }
+  const curlResult = await fetchYahooChartViaCurl(url);
+  if (isValidChartResult(curlResult)) {
+    return { result: curlResult, meta: { symbol: sym, status: 200, attempts: 0, rateLimited: false } };
   }
 
   let rateLimited = false;
@@ -110,22 +122,9 @@ async function fetchYahooChartUrl(
       continue;
     }
 
-    const text = await resp.text();
-    if (text.startsWith("Too Many")) {
-      rateLimited = true;
-      await sleep(800 * attempt);
-      continue;
-    }
-
-    let json: Record<string, unknown>;
-    try {
-      json = JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-
-    const chart = json.chart as Record<string, unknown> | undefined;
-    const result = Array.isArray(chart?.result) ? (chart!.result as Record<string, unknown>[])[0] : null;
+    const bytes = Buffer.from(await resp.arrayBuffer());
+    if (bytes.byteLength > CHART_MAX_BYTES) return null;
+    const result = await chartFromBytes(bytes);
     if (isValidChartResult(result)) {
       return { result, meta: { symbol: sym, status: resp.status, attempts: attempt, rateLimited } };
     }
