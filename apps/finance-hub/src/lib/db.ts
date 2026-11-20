@@ -2,6 +2,7 @@ import fs from "node:fs";
 
 import Database from "better-sqlite3";
 
+import { ensureWatchTables } from "@/lib/alerts/watchAlertStore";
 import { seedRealEstate } from "@/lib/realEstate/seed";
 import { seedScreener } from "@/lib/screener/seed";
 import { ensureScreenerSchema } from "@/lib/screener/store";
@@ -213,6 +214,7 @@ function migrate(db: Database.Database) {
     ensureColumn(db, "real_estate_loans", "monthly_escrow", "monthly_escrow REAL");
     ensureColumn(db, "real_estate_loans", "extra_principal", "extra_principal REAL NOT NULL DEFAULT 0");
   }
+  ensureWatchTables(db);
   seedRealEstate(db);
   ensureScreenerSchema(db);
   seedScreener(db);
