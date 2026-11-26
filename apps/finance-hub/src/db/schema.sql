@@ -757,3 +757,20 @@ CREATE TABLE IF NOT EXISTS adjusted_return_meta (
   status TEXT NOT NULL,
   PRIMARY KEY (provider, symbol, version)
 );
+
+-- Yahoo OHLCV cache metadata for the chart page. Bars live in ohlcv_points (provider yahoo-chart).
+CREATE TABLE IF NOT EXISTS chart_candle_cache (
+  provider TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  interval TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  meta_json TEXT,
+  PRIMARY KEY (provider, symbol, interval)
+);
+
+-- Per-ticker drawing documents. Local only; nothing here is sent to a broker.
+CREATE TABLE IF NOT EXISTS chart_drawings (
+  symbol TEXT PRIMARY KEY,
+  document_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

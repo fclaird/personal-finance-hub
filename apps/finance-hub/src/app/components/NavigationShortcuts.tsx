@@ -19,6 +19,7 @@ export function NavigationShortcuts() {
     function onKeyDown(e: KeyboardEvent) {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (isEditableTarget(e.target)) return;
+      if (pathname === "/charts" || pathname.startsWith("/charts/")) return;
 
       switch (e.key) {
         case "ArrowDown": {

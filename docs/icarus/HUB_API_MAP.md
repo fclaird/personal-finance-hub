@@ -28,6 +28,9 @@ Base: `https://127.0.0.1:3000` (or Electron `3049`). When `FINANCE_HUB_API_KEY` 
 | `/api/strategy-lab/snapshots` | List saved lab snapshots for a symbol (`?symbol=`). One row (`?id=`) includes the scenario, compact quotes, and provenance. The id is stable so a future journal entry can cite it. Local SQLite only. Not on the MCP allowlist |
 | `/api/strategy-lab/book` | Open equity and option legs for the Strategy Lab picker, with cost basis and fill dates reconstructed from local positions and `broker_transactions`. Local SQLite only. Not on the MCP allowlist |
 | `/api/screener` | Screener rows with a source and as-of on every figure. `?format=csv&window=1y` exports stored rows. Read only. Not on the MCP allowlist |
+| `/api/charts/candles` | Daily or intraday OHLCV for one ticker (`?symbol=&interval=1d\|1wk\|1mo\|5m\|15m\|60m`). Yahoo chart, cached in SQLite. Read only. Not on the MCP allowlist |
+| `/api/charts/overlay` | Open option strikes and expiries for one underlying (`?symbol=`). Read only. Not on the MCP allowlist |
+| `/api/charts/drawings` | Saved chart drawings for one ticker (`?symbol=`). Local SQLite only. Not on the MCP allowlist |
 
 Other `GET /api/*` pages (terminal, dividends, earnings, taxonomy, …) are also read-only.
 
@@ -54,6 +57,7 @@ These change **local** data or pull **reads** from Schwab. They do **not** place
 | `POST /api/strategy-lab/snapshots` | Save a Strategy Lab scenario after the localStorage parser accepts it, plus compact quotes and provenance. Local SQLite only. Not on the MCP allowlist |
 | `DELETE /api/strategy-lab/snapshots?id=` | Delete one snapshot by its stable id |
 | `POST /api/screener` | Local Screener writes only: refresh cited figures, add a ticker, save a screen, or edit a war-exposure rating and its source URL. No broker orders |
+| `PUT /api/charts/drawings` | Replace the drawing document for one ticker. Local SQLite only. No broker orders |
 
 `POST /api/real-estate/valuations` accepts one reading or a batch. Auth matches other hub routes: open on localhost, or `Authorization: Bearer <FINANCE_HUB_API_KEY>` / `x-finance-hub-key` when that key is set. No flavor cookie is required (the route defaults to Main). A `fh_flavor` cookie of `rorie` or `peyton` returns 404. These POSTs are local SQLite writes. They are not on the read-only MCP allowlist.
 

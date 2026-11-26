@@ -43,6 +43,7 @@ export type FlavorConfig = {
 
 const MAIN_NAV: SidebarNavItem[] = [
   { href: "/terminal", label: "Terminal" },
+  { href: "/charts", label: "Charts" },
   { href: "/positions", label: "Positions" },
   { href: "/strategies/situations", label: "Option Strategies", prefix: "/strategies" },
   { href: "/strategy-lab", label: "Strategy Lab" },
@@ -62,6 +63,7 @@ const MAIN_NAV: SidebarNavItem[] = [
 /** Reduced Aurora-style sidebar shared by dedicated single-account flavors. */
 const DEDICATED_NAV: SidebarNavItem[] = [
   { href: "/terminal", label: "Terminal" },
+  { href: "/charts", label: "Charts" },
   { href: "/positions", label: "Positions" },
   { href: "/allocation", label: "Allocation" },
   { href: "/diversification", label: "Diversification" },

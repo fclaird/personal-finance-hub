@@ -104,7 +104,7 @@ export function SymbolPositionsTable({
       case "symbol":
         return (
           <td key={colId} className="whitespace-nowrap py-1 pr-4 text-left font-medium">
-            <SymbolLink symbol={symbolPageTargetFromInstrument(r)} className="font-mono text-[13px]">
+            <SymbolLink to="chart" symbol={symbolPageTargetFromInstrument(r)} className="font-mono text-[13px]">
               {r.securityType === "option" ? (
                 <span className={r.quantity < 0 ? "text-red-400" : "text-emerald-400"}>
                   {formatOptionSymbolDisplay(r)}

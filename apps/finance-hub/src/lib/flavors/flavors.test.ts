@@ -52,6 +52,7 @@ describe("nav and route guards", () => {
     const hrefs = navForFlavor("rorie").map((n) => n.href);
     assert.deepEqual(hrefs, [
       "/terminal",
+      "/charts",
       "/positions",
       "/allocation",
       "/diversification",
