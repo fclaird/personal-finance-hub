@@ -1,12 +1,13 @@
 "use client";
 
 import { Fragment, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { DraggableColumnHeader, DRAGGABLE_COLUMN_HEADER_GRAB_CLASS } from "@/app/components/DraggableColumnHeader";
 import { ColumnLabel } from "@/app/components/ColumnLabel";
 import { SymbolLink } from "@/app/components/SymbolLink";
 import { formatInt, formatNum, formatOptionIntExtPerShare, formatUsd2 } from "@/lib/format";
 import { formatOptionSymbolDisplay } from "@/lib/formatOptionDisplay";
-import { symbolPageTargetFromInstrument } from "@/lib/symbolPage";
+import { chartPageHref, symbolPageTargetFromInstrument } from "@/lib/symbolPage";
 import { usePositionsColumnOrder } from "@/lib/positions/usePositionsColumnOrder";
 import {
   POSITIONS_COLUMN_LABEL,
@@ -184,6 +185,8 @@ export function GroupedTable({
   onEditManualPosition?: (row: Row) => void;
   onDeleteManualPosition?: (row: Row) => void;
 }) {
+  const router = useRouter();
+
   function isCollapsed(underlying: string) {
     return collapsed.has(`${viewMode}:${accountId}:${underlying}`);
   }
@@ -260,7 +263,7 @@ export function GroupedTable({
           <td key={colId} className="whitespace-nowrap py-2 pr-6 font-semibold">
             <span className="inline-flex items-center gap-2">
               <span className="w-4 text-zinc-500 dark:text-zinc-400">{caret}</span>
-              <SymbolLink symbol={g.underlying} className="font-semibold text-zinc-900 dark:text-zinc-100">
+              <SymbolLink to="chart" symbol={g.underlying} className="font-semibold text-zinc-900 dark:text-zinc-100">
                 {g.underlying}
               </SymbolLink>
             </span>
@@ -324,7 +327,7 @@ export function GroupedTable({
         return (
           <td key={colId} className="whitespace-nowrap py-2 pr-6 font-medium">
             <span className="inline-flex items-center gap-2 pl-6">
-              <SymbolLink symbol={symbolPageTargetFromInstrument(r)} className="inline-block">
+              <SymbolLink to="chart" symbol={symbolPageTargetFromInstrument(r)} className="inline-block">
                 {r.securityType === "option" ? (
                   <span className={r.quantity < 0 ? "text-red-400" : "text-emerald-400"}>{formatOptionSymbol(r)}</span>
                 ) : (
@@ -495,7 +498,14 @@ export function GroupedTable({
                 {collapsedNow
                   ? null
                   : g.rows.map((r) => (
-                      <tr key={r.positionId} className="border-b border-zinc-200 dark:border-white/20">
+                      <tr
+                        key={r.positionId}
+                        className="cursor-pointer border-b border-zinc-200 hover:bg-zinc-50 dark:border-white/20 dark:hover:bg-white/5"
+                        onClick={() => {
+                          const href = chartPageHref(symbolPageTargetFromInstrument(r));
+                          if (href) router.push(href);
+                        }}
+                      >
                         {columnOrder.map((colId) => dataRowCell(colId, r))}
                       </tr>
                     ))}

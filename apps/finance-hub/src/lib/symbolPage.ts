@@ -10,6 +10,13 @@ export function symbolPageHref(symbol: string): string | null {
   return `/terminal/symbol/${encodeURIComponent(s)}`;
 }
 
+/** Chart page for an equity, or for an option's underlying. */
+export function chartPageHref(symbol: string): string | null {
+  const s = normTickerSymbol(symbol);
+  if (!s) return null;
+  return `/charts/${encodeURIComponent(s)}`;
+}
+
 type InstrumentLike = {
   securityType?: string | null;
   symbol?: string | null;
